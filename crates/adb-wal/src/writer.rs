@@ -1,3 +1,5 @@
+//! Writer module for the adb-wal crate.
+//!
 use std::{
     fs::{File, OpenOptions},
     io::{Seek, SeekFrom, Write},
@@ -14,12 +16,15 @@ use crate::{
     reader::WalReader,
 };
 
+/// Appends framed write-ahead log records and provides the durability synchronization point.
 pub struct WalWriter {
     file: File,
     next_lsn: u64,
 }
 
+/// Implements behavior for `WalWriter`.
 impl WalWriter {
+    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WalError> {
         let path = path.as_ref();
         let mut file = OpenOptions::new()
@@ -41,6 +46,8 @@ impl WalWriter {
             next_lsn: valid_end,
         })
     }
+
+    /// Serializes and appends one WAL record frame and returns its starting LSN.
     pub fn append(&mut self, record: &WalRecord) -> Result<Lsn, WalError> {
         let payload = bincode::serialize(record)?;
         if payload.len() > MAX_WAL_RECORD_BYTES {
@@ -66,11 +73,15 @@ impl WalWriter {
 
         Ok(lsn)
     }
+
+    /// Flushes buffered WAL bytes and asks the operating system to synchronize file data.
     pub fn sync(&mut self) -> Result<(), WalError> {
         self.file.flush()?;
         self.file.sync_data()?;
         Ok(())
     }
+
+    /// Returns the LSN at which the next WAL record would be appended.
     pub fn position(&self) -> Lsn {
         Lsn(self.next_lsn)
     }

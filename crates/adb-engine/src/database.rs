@@ -1,3 +1,5 @@
+//! Database module for the adb-engine crate.
+//!
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -15,12 +17,15 @@ use crate::{
     recovery::{recover, RecoveryResult},
 };
 
+/// Defines the `WAL_FILE` constant used by this subsystem.
 const WAL_FILE: &str = "wal.log";
 
+/// Represents an Adaptive DB database handle and coordinates transactions, WAL, storage, and recovery.
 pub struct Database {
     inner: Arc<DatabaseInner>,
 }
 
+/// Represents `DatabaseInner` state used by the src subsystem.
 struct DatabaseInner {
     stores: RwLock<Stores>,
     wal: Mutex<WalWriter>,
@@ -29,7 +34,9 @@ struct DatabaseInner {
     wal_path: PathBuf,
 }
 
+/// Implements behavior for `Database`.
 impl Database {
+    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let dir = path.as_ref();
         fs::create_dir_all(dir)?;
@@ -67,19 +74,23 @@ impl Database {
         })
     }
 
+    /// Starts a new transaction at the latest published MVCC snapshot.
     pub fn begin(&self) -> Transaction {
         self.inner.tx_manager.lock().begin()
     }
 
+    /// Returns the value visible for the requested key or row at the operation's default snapshot.
     pub fn get(&self, row_id: RowId) -> Option<Row> {
         let ts = self.inner.tx_manager.lock().latest_committed_ts();
         self.inner.stores.read().read_at(row_id, ts)
     }
 
+    /// Returns the row version visible at the supplied historical commit timestamp.
     pub fn get_at(&self, row_id: RowId, ts: CommitTs) -> Option<Row> {
         self.inner.stores.read().read_at(row_id, ts)
     }
 
+    /// Returns the row visible inside the supplied transaction, including transaction-local writes.
     pub fn get_in_tx(
         &self,
         tx: &Transaction,
@@ -100,6 +111,7 @@ impl Database {
             .read_at(row_id, tx.snapshot_ts()))
     }
 
+    /// Validates and durably commits a transaction before publishing its commit timestamp.
     pub fn commit(&self, mut tx: Transaction) -> Result<CommitTs, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
@@ -184,6 +196,7 @@ impl Database {
         Ok(commit_ts)
     }
 
+    /// Closes a transaction without applying its local mutations.
     pub fn rollback(&self, mut tx: Transaction) -> Result<(), DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
@@ -194,6 +207,7 @@ impl Database {
         Ok(())
     }
 
+    /// Implements the `wal_path` operation used by this subsystem.
     pub fn wal_path(&self) -> &Path {
         &self.inner.wal_path
     }

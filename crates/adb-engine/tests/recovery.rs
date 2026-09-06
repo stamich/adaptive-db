@@ -1,3 +1,5 @@
+//! Recovery module for the adb-engine crate.
+//!
 mod common;
 
 use std::{
@@ -11,6 +13,7 @@ use tempfile::tempdir;
 
 use common::{read_i64, row_with_i64};
 
+/// Implements the `committed_transaction_survives_restart` operation used by this subsystem.
 #[test]
 fn committed_transaction_survives_restart() {
     let dir = tempdir().unwrap();
@@ -30,6 +33,7 @@ fn committed_transaction_survives_restart() {
     }
 }
 
+/// Implements the `multiple_versions_survive_restart` operation used by this subsystem.
 #[test]
 fn multiple_versions_survive_restart() {
     let dir = tempdir().unwrap();
@@ -62,6 +66,7 @@ fn multiple_versions_survive_restart() {
     }
 }
 
+/// Implements the `truncated_wal_tail_is_ignored` operation used by this subsystem.
 #[test]
 fn truncated_wal_tail_is_ignored() {
     let dir = tempdir().unwrap();

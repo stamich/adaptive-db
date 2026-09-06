@@ -1,7 +1,10 @@
+//! Error module for the adb-engine crate.
+//!
 use thiserror::Error;
 
 use adb_wal::WalError;
 
+/// Enumerates the supported `DbError` variants used by this subsystem.
 #[derive(Debug, Error)]
 pub enum DbError {
     #[error("WAL error: {0}")]

@@ -1,7 +1,10 @@
+//! Error module for the adb-wal crate.
+//!
 use std::io;
 
 use thiserror::Error;
 
+/// Enumerates the supported `WalError` variants used by this subsystem.
 #[derive(Debug, Error)]
 pub enum WalError {
     #[error("I/O error: {0}")]

@@ -1,6 +1,9 @@
+//! Record module for the adb-wal crate.
+//!
 use adb_core::{CommitTs, Row, RowId, TxId};
 use serde::{Deserialize, Serialize};
 
+/// Enumerates the supported `WalRecord` variants used by this subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WalRecord {
     Begin {
