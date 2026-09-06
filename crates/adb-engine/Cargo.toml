@@ -1,0 +1,16 @@
+[package]
+name = "adb-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+adb-storage = { path = "../adb-storage" }
+adb-tx = { path = "../adb-tx" }
+adb-wal = { path = "../adb-wal" }
+parking_lot.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
