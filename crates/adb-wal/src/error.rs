@@ -12,4 +12,8 @@ pub enum WalError {
 
     #[error("corrupt WAL: {0}")]
     Corrupt(String),
+
+    /// Serialized WAL record exceeds the hardened per-record limit.
+    #[error("WAL record too large: {0} bytes")]
+    RecordTooLarge(usize),
 }

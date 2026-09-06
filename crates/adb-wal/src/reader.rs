@@ -9,7 +9,7 @@ use crc32fast::Hasher;
 
 use crate::{
     error::WalError,
-    format::{WAL_MAGIC, WAL_VERSION},
+    format::{HEADER_LEN, MAX_WAL_RECORD_BYTES, WAL_MAGIC, WAL_VERSION},
     record::WalRecord,
 };
 
@@ -23,7 +23,7 @@ impl WalReader {
         let file = File::open(path)?;
         Ok(Self { file, offset: 0 })
     }
-
+    
     pub fn read_all(mut self) -> Result<Vec<(Lsn, WalRecord)>, WalError> {
         let mut out = Vec::new();
 
@@ -34,7 +34,12 @@ impl WalReader {
             }
         }
     }
-
+    
+    pub fn valid_end(mut self) -> Result<u64, WalError> {
+        while self.next_record()?.is_some() {}
+        Ok(self.offset)
+    }
+    
     pub fn next_record(&mut self) -> Result<Option<(Lsn, WalRecord)>, WalError> {
         self.file.seek(SeekFrom::Start(self.offset))?;
 
@@ -76,6 +81,12 @@ impl WalReader {
             return Err(e.into());
         }
         let payload_len = u32::from_le_bytes(len) as usize;
+        if payload_len > MAX_WAL_RECORD_BYTES {
+            return Err(WalError::Corrupt(format!(
+                "payload length {payload_len} exceeds hardened limit at offset {}",
+                self.offset
+            )));
+        }
 
         let mut crc = [0u8; 4];
         if let Err(e) = self.file.read_exact(&mut crc) {
@@ -109,7 +120,7 @@ impl WalReader {
         let record: WalRecord = bincode::deserialize(&payload)?;
         let lsn = Lsn(self.offset);
 
-        self.offset += (4 + 2 + 4 + 4 + payload_len) as u64;
+        self.offset += (HEADER_LEN + payload_len) as u64;
 
         Ok(Some((lsn, record)))
     }
