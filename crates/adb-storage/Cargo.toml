@@ -1,0 +1,9 @@
+[package]
+name = "adb-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+serde.workspace = true
