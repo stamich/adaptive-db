@@ -4,7 +4,7 @@ members = [
     "crates/adb-wal",
     "crates/adb-storage",
     "crates/adb-tx",
-#    "crates/adb-engine",
+    "crates/adb-engine",
 ]
 resolver = "2"
 
