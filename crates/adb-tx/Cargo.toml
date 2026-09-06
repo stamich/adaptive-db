@@ -1,0 +1,10 @@
+[package]
+name = "adb-tx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+adb-storage = { path = "../adb-storage" }
+thiserror.workspace = true
