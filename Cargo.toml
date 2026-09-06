@@ -3,7 +3,7 @@ members = [
     "crates/adb-core",
 #    "crates/adb-wal",
     "crates/adb-storage",
-#    "crates/adb-tx",
+    "crates/adb-tx",
 #    "crates/adb-engine",
 ]
 resolver = "2"
