@@ -1,0 +1,12 @@
+[package]
+name = "adb-wal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+serde.workspace = true
+bincode.workspace = true
+crc32fast.workspace = true
+thiserror.workspace = true
