@@ -1,3 +1,5 @@
+//! Recovery module for the adb-engine crate.
+//!
 use std::collections::HashMap;
 
 use adb_core::{CommitTs, RowId, TxId};
@@ -5,11 +7,13 @@ use adb_storage::Stores;
 use adb_tx::Mutation;
 use adb_wal::WalRecord;
 
+/// Represents `PendingTx` state used by the src subsystem.
 #[derive(Debug, Default)]
 struct PendingTx {
     mutations: Vec<(RowId, Mutation)>,
 }
 
+/// Represents `RecoveryResult` state used by the src subsystem.
 #[derive(Debug, Default)]
 pub struct RecoveryResult {
     pub stores: Stores,
@@ -17,6 +21,7 @@ pub struct RecoveryResult {
     pub max_commit_ts: u64,
 }
 
+/// Replays committed WAL transactions into reconstructed in-memory stores.
 pub fn recover(records: impl IntoIterator<Item = WalRecord>) -> RecoveryResult {
     let mut pending: HashMap<TxId, PendingTx> = HashMap::new();
     let mut result = RecoveryResult::default();
@@ -76,6 +81,7 @@ pub fn recover(records: impl IntoIterator<Item = WalRecord>) -> RecoveryResult {
     result
 }
 
+/// Applies a committed transaction's mutations to the reconstructed stores.
 fn apply_mutations(
     stores: &mut Stores,
     mutations: Vec<(RowId, Mutation)>,

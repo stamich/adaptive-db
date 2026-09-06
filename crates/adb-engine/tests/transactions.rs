@@ -1,3 +1,5 @@
+//! Transactions module for the adb-engine crate.
+//!
 mod common;
 
 use adb_core::RowId;
@@ -6,6 +8,7 @@ use tempfile::tempdir;
 
 use common::{read_i64, row_with_i64};
 
+/// Implements the `put_and_get` operation used by this subsystem.
 #[test]
 fn put_and_get() {
     let dir = tempdir().unwrap();
@@ -19,6 +22,7 @@ fn put_and_get() {
     assert_eq!(read_i64(&row), 100);
 }
 
+/// Implements the `transaction_reads_its_own_writes` operation used by this subsystem.
 #[test]
 fn transaction_reads_its_own_writes() {
     let dir = tempdir().unwrap();
@@ -35,6 +39,7 @@ fn transaction_reads_its_own_writes() {
     assert!(db.get(RowId(1)).is_none());
 }
 
+/// Implements the `delete_removes_current_value` operation used by this subsystem.
 #[test]
 fn delete_removes_current_value() {
     let dir = tempdir().unwrap();
@@ -51,6 +56,7 @@ fn delete_removes_current_value() {
     assert!(db.get(RowId(1)).is_none());
 }
 
+/// Writes the `write conflict is detected` value into the binary representation.
 #[test]
 fn write_write_conflict_is_detected() {
     let dir = tempdir().unwrap();
@@ -73,6 +79,7 @@ fn write_write_conflict_is_detected() {
 }
 
 
+/// Implements the `new_snapshot_observes_only_published_commits` operation used by this subsystem.
 #[test]
 fn new_snapshot_observes_only_published_commits() {
     use adb_tx::TransactionManager;

@@ -1,3 +1,5 @@
+//! Reader module for the adb-wal crate.
+//!
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -13,17 +15,21 @@ use crate::{
     record::WalRecord,
 };
 
+/// Reads and validates framed write-ahead log records in LSN order.
 pub struct WalReader {
     file: File,
     offset: u64,
 }
 
+/// Implements behavior for `WalReader`.
 impl WalReader {
+    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WalError> {
         let file = File::open(path)?;
         Ok(Self { file, offset: 0 })
     }
-    
+
+    /// Reads all complete valid WAL records until EOF or an incomplete crash tail.
     pub fn read_all(mut self) -> Result<Vec<(Lsn, WalRecord)>, WalError> {
         let mut out = Vec::new();
 
@@ -34,12 +40,17 @@ impl WalReader {
             }
         }
     }
-    
+
+    /// Scans complete records and returns the byte offset immediately after the last valid frame.
+    ///
+    /// An incomplete crash tail is treated as a recoverable suffix. Fully framed corruption,
+    /// such as bad magic or CRC, remains an error and is never silently truncated.
     pub fn valid_end(mut self) -> Result<u64, WalError> {
         while self.next_record()?.is_some() {}
         Ok(self.offset)
     }
-    
+
+    /// Reads and validates the next WAL record from the current reader offset.
     pub fn next_record(&mut self) -> Result<Option<(Lsn, WalRecord)>, WalError> {
         self.file.seek(SeekFrom::Start(self.offset))?;
 

@@ -1,3 +1,5 @@
+//! Mvcc module for the adb-engine crate.
+//!
 mod common;
 
 use adb_core::RowId;
@@ -6,6 +8,7 @@ use tempfile::tempdir;
 
 use common::{read_i64, row_with_i64};
 
+/// Implements the `snapshot_read_is_repeatable` operation used by this subsystem.
 #[test]
 fn snapshot_read_is_repeatable() {
     let dir = tempdir().unwrap();
@@ -28,6 +31,7 @@ fn snapshot_read_is_repeatable() {
     assert_eq!(read_i64(&current), 200);
 }
 
+/// Implements the `historical_versions_are_queryable` operation used by this subsystem.
 #[test]
 fn historical_versions_are_queryable() {
     let dir = tempdir().unwrap();

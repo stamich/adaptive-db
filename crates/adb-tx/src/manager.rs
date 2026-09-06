@@ -1,7 +1,10 @@
+//! Manager module for the adb-tx crate.
+//!
 use adb_core::{CommitTs, TxId};
 
 use crate::Transaction;
 
+/// Allocates transaction identifiers and commit timestamps and tracks the latest published commit.
 #[derive(Debug)]
 pub struct TransactionManager {
     next_tx_id: u64,
@@ -9,7 +12,9 @@ pub struct TransactionManager {
     last_committed_ts: u64,
 }
 
+/// Implements behavior for `TransactionManager`.
 impl TransactionManager {
+    /// Creates a new instance initialized with the supplied state.
     pub fn new(
         next_tx_id: u64,
         next_commit_ts: u64,
@@ -22,6 +27,7 @@ impl TransactionManager {
         }
     }
 
+    /// Starts a new transaction at the latest published MVCC snapshot.
     pub fn begin(&mut self) -> Transaction {
         let id = TxId(self.next_tx_id);
         self.next_tx_id += 1;
@@ -47,10 +53,12 @@ impl TransactionManager {
         self.last_committed_ts = commit_ts.0;
     }
 
+    /// Implements the `latest_committed_ts` operation used by this subsystem.
     pub fn latest_committed_ts(&self) -> CommitTs {
         CommitTs(self.last_committed_ts)
     }
 
+    /// Implements the `advance_after_recovery` operation used by this subsystem.
     pub fn advance_after_recovery(&mut self, max_tx_id: u64, max_commit_ts: u64) {
         self.next_tx_id = self.next_tx_id.max(max_tx_id.saturating_add(1));
         self.next_commit_ts = self
@@ -60,7 +68,9 @@ impl TransactionManager {
     }
 }
 
+/// Implements behavior for `Default for TransactionManager`.
 impl Default for TransactionManager {
+    /// Implements the `default` operation used by this subsystem.
     fn default() -> Self {
         Self::new(1, 1, 0)
     }
