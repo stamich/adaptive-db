@@ -1,0 +1,10 @@
+[package]
+name = "adb-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+adb-core = { path = "../../crates/adb-core" }
+adb-engine = { path = "../../crates/adb-engine" }
