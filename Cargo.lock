@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "adb-buffer"
+version = "0.1.0"
+dependencies = [
+ "adb-core",
+ "adb-page",
+ "parking_lot",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-core"
 version = "0.1.0"
 dependencies = [
