@@ -1,12 +1,13 @@
 [workspace]
 members = [
     "crates/adb-core",
+    "crates/adb-page",
+    "crates/adb-buffer",
+    "crates/adb-btree",
     "crates/adb-wal",
     "crates/adb-storage",
     "crates/adb-tx",
     "crates/adb-engine",
-    "crates/adb-page",
-    "crates/adb-buffer"
 ]
 resolver = "2"
 

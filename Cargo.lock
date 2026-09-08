@@ -3,6 +3,21 @@
 version = 4
 
 [[package]]
+name = "adb-btree"
+version = "0.1.0"
+dependencies = [
+ "adb-buffer",
+ "adb-core",
+ "adb-page",
+ "bincode",
+ "crc32fast",
+ "parking_lot",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-buffer"
 version = "0.1.0"
 dependencies = [
@@ -47,8 +62,15 @@ dependencies = [
 name = "adb-storage"
 version = "0.1.0"
 dependencies = [
+ "adb-btree",
+ "adb-buffer",
  "adb-core",
+ "adb-page",
+ "bincode",
+ "crc32fast",
  "serde",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
