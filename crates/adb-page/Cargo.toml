@@ -1,0 +1,12 @@
+[package]
+name = "adb-page"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+thiserror.workspace = true
+crc32fast.workspace = true
+
+[dev-dependencies]
