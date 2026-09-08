@@ -12,8 +12,8 @@ use crc32fast::Hasher;
 use crate::{
     error::WalError,
     format::{HEADER_LEN, MAX_WAL_RECORD_BYTES, WAL_MAGIC, WAL_VERSION},
-    record::WalRecord,
     reader::WalReader,
+    record::WalRecord,
 };
 
 /// Appends framed write-ahead log records and provides the durability synchronization point.
@@ -53,8 +53,8 @@ impl WalWriter {
         if payload.len() > MAX_WAL_RECORD_BYTES {
             return Err(WalError::RecordTooLarge(payload.len()));
         }
-        let payload_len = u32::try_from(payload.len())
-            .map_err(|_| WalError::RecordTooLarge(payload.len()))?;
+        let payload_len =
+            u32::try_from(payload.len()).map_err(|_| WalError::RecordTooLarge(payload.len()))?;
 
         let mut hasher = Hasher::new();
         hasher.update(&payload);
@@ -64,8 +64,7 @@ impl WalWriter {
 
         self.file.write_all(&WAL_MAGIC.to_le_bytes())?;
         self.file.write_all(&WAL_VERSION.to_le_bytes())?;
-        self.file
-            .write_all(&payload_len.to_le_bytes())?;
+        self.file.write_all(&payload_len.to_le_bytes())?;
         self.file.write_all(&checksum.to_le_bytes())?;
         self.file.write_all(&payload)?;
 
