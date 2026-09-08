@@ -24,6 +24,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-page"
+version = "0.1.0"
+dependencies = [
+ "adb-core",
+ "crc32fast",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-storage"
 version = "0.1.0"
 dependencies = [

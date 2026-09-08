@@ -1,0 +1,12 @@
+{
+  "milestone": "1",
+  "edition": "historical-rustdoc-review",
+  "behavior_changes": false,
+  "rustdoc": {
+    "rust_files": 28,
+    "detected_items": 98,
+    "undocumented": 0
+  },
+  "security_review": "SECURITY-REVIEW.md",
+  "compile_certified": false
+}

@@ -1,0 +1,28 @@
+Adaptive DB Milestone 1.0.2 validation note
+============================================
+
+Package construction checks performed:
+- verified Milestone 1.0.1 hardened source archive was used as the base;
+- engine crate source files were retained unchanged;
+- examples/demo and examples/benchmark were added as Rust workspace members;
+- workspace metadata was updated for the 1.0.2 package;
+- demo/benchmark source and documentation presence was checked;
+- archive and SHA-256 checksum were generated.
+
+Environment limitation:
+- the artifact-generation container does not provide `cargo` / Rust toolchain;
+- therefore cargo fmt/check/test/doc and executable compilation could not be
+  executed here.
+
+Full validation command on a Rust development machine:
+
+    ./build-milestone1.0.2.sh
+
+Recommended benchmark run after successful validation:
+
+    cargo run --release -p adb-benchmark -- \
+      --rows 10000 \
+      --batch-size 100 \
+      --lookups 100000 \
+      --warmup-lookups 10000 \
+      --output examples/results/1.0.2-local.json

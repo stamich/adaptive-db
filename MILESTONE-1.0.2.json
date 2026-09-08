@@ -1,0 +1,9 @@
+{
+  "milestone": "1.0.2",
+  "base": "1.0.1 Hardened",
+  "scope": "Rust-only demo and benchmark baseline; engine feature scope unchanged",
+  "engine_changes": "none",
+  "examples": ["adb-demo", "adb-benchmark"],
+  "benchmark_outputs": ["console", "json"],
+  "rustdoc": "Milestone 1.0.1 documentation retained; new example code documented"
+}
