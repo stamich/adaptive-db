@@ -55,19 +55,12 @@ pub fn recover(records: impl IntoIterator<Item = WalRecord>) -> RecoveryResult {
                     .push((row_id, Mutation::Delete));
             }
 
-            WalRecord::Commit {
-                tx_id,
-                commit_ts,
-            } => {
+            WalRecord::Commit { tx_id, commit_ts } => {
                 result.max_tx_id = result.max_tx_id.max(tx_id.0);
                 result.max_commit_ts = result.max_commit_ts.max(commit_ts.0);
 
                 if let Some(pending_tx) = pending.remove(&tx_id) {
-                    apply_mutations(
-                        &mut result.stores,
-                        pending_tx.mutations,
-                        commit_ts,
-                    );
+                    apply_mutations(&mut result.stores, pending_tx.mutations, commit_ts);
                 }
             }
 
@@ -82,11 +75,7 @@ pub fn recover(records: impl IntoIterator<Item = WalRecord>) -> RecoveryResult {
 }
 
 /// Applies a committed transaction's mutations to the reconstructed stores.
-fn apply_mutations(
-    stores: &mut Stores,
-    mutations: Vec<(RowId, Mutation)>,
-    commit_ts: CommitTs,
-) {
+fn apply_mutations(stores: &mut Stores, mutations: Vec<(RowId, Mutation)>, commit_ts: CommitTs) {
     for (row_id, mutation) in mutations {
         match mutation {
             Mutation::Put(row) => stores.apply_put(row_id, row, commit_ts),
