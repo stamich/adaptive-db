@@ -15,11 +15,7 @@ pub struct TransactionManager {
 /// Implements behavior for `TransactionManager`.
 impl TransactionManager {
     /// Creates a new instance initialized with the supplied state.
-    pub fn new(
-        next_tx_id: u64,
-        next_commit_ts: u64,
-        last_committed_ts: u64,
-    ) -> Self {
+    pub fn new(next_tx_id: u64, next_commit_ts: u64, last_committed_ts: u64) -> Self {
         Self {
             next_tx_id,
             next_commit_ts,
@@ -61,9 +57,7 @@ impl TransactionManager {
     /// Implements the `advance_after_recovery` operation used by this subsystem.
     pub fn advance_after_recovery(&mut self, max_tx_id: u64, max_commit_ts: u64) {
         self.next_tx_id = self.next_tx_id.max(max_tx_id.saturating_add(1));
-        self.next_commit_ts = self
-            .next_commit_ts
-            .max(max_commit_ts.saturating_add(1));
+        self.next_commit_ts = self.next_commit_ts.max(max_commit_ts.saturating_add(1));
         self.last_committed_ts = self.last_committed_ts.max(max_commit_ts);
     }
 }

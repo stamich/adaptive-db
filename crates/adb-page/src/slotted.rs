@@ -2,7 +2,7 @@
 //!
 use adb_core::SlotId;
 
-use crate::{PAGE_HEADER_SIZE, PAGE_SIZE, Page, PageError};
+use crate::{Page, PageError, PAGE_HEADER_SIZE, PAGE_SIZE};
 
 /// Defines the `SLOT_SIZE` constant used by this subsystem.
 const SLOT_SIZE: usize = 4;
