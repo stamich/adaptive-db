@@ -26,11 +26,7 @@ impl VersionStore {
     }
 
     /// Returns the row version visible at the supplied historical commit timestamp.
-    pub fn get_at(
-        &self,
-        row_id: RowId,
-        ts: CommitTs,
-    ) -> Option<&HistoricalVersion> {
+    pub fn get_at(&self, row_id: RowId, ts: CommitTs) -> Option<&HistoricalVersion> {
         self.versions
             .get(&row_id)?
             .iter()
@@ -40,9 +36,6 @@ impl VersionStore {
 
     /// Implements the `all_for` operation used by this subsystem.
     pub fn all_for(&self, row_id: RowId) -> &[HistoricalVersion] {
-        self.versions
-            .get(&row_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.versions.get(&row_id).map(Vec::as_slice).unwrap_or(&[])
     }
 }
