@@ -1,7 +1,7 @@
 //! Hardening tests for page checksum and structural validation.
 
 use adb_core::PageId;
-use adb_page::{Page, PageKind, PAGE_SIZE};
+use adb_page::{PAGE_SIZE, Page, PageKind};
 
 /// Verifies checksum corruption is detected before higher-level decoding.
 #[test]

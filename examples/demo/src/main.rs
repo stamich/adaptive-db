@@ -1,131 +1,137 @@
-//! Adaptive DB Milestone 1.0.2 demo.
+//! Adaptive DB Milestone 1.5.2 demonstration.
 //!
-//! This executable intentionally demonstrates only capabilities already present
-//! in Milestone 1.0.1: MVCC transactions, transaction-local reads, snapshots,
-//! durable WAL commits, write-write conflict detection, deletes, and recovery.
+//! The program deliberately exercises only functionality already present in
+//! Milestone 1.5.1 Hardened. 1.5.2 adds examples and benchmarks, not engine
+//! features.
 
-use std::{
-    fs,
-    path::PathBuf,
-    process,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use adb_core::{FieldId, Row, RowId, Value};
+use adb_btree::BTree;
+use adb_core::{Lsn, PageId, Row, RowId, RowLocation, Value};
 use adb_engine::{Database, DbError};
+use adb_page::{Page, PageKind};
+use adb_storage::CheckpointStore;
+use tempfile::tempdir;
 
-const VALUE_FIELD: FieldId = 1;
-const LABEL_FIELD: FieldId = 2;
-
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("demo failed: {error}");
-        process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let path = demo_path();
-    let _ = fs::remove_dir_all(&path);
-
-    println!("Adaptive DB — Milestone 1.0.2 Rust demo");
-    println!("database path: {}", path.display());
-    println!();
-
-    let db = Database::open(&path)?;
-
-    println!("1) Transaction-local read (read-your-own-write inside a transaction)");
-    let mut tx = db.begin();
-    tx.put(RowId(1), row(100, "first"));
-    let local = db
-        .get_in_tx(&tx, RowId(1))?
-        .expect("transaction-local row must exist");
-    println!("   before commit: local={}, global={:?}", value(&local), db.get(RowId(1)));
-    let first_commit = db.commit(tx)?;
-    println!("   committed at ts={}", first_commit.0);
-    println!("   after commit: global={}", value(&db.get(RowId(1)).unwrap()));
-    println!();
-
-    println!("2) MVCC snapshot isolation and historical read");
-    let old_snapshot = db.begin();
-    let mut update = db.begin();
-    update.put(RowId(1), row(200, "second"));
-    let second_commit = db.commit(update)?;
-
-    let visible_in_old_snapshot = db
-        .get_in_tx(&old_snapshot, RowId(1))?
-        .expect("old snapshot must see the first version");
-    let current = db.get(RowId(1)).expect("current row must exist");
-    let historical = db
-        .get_at(RowId(1), first_commit)
-        .expect("historical row must exist");
-
-    println!("   old snapshot sees={}", value(&visible_in_old_snapshot));
-    println!("   current value={}", value(&current));
-    println!("   get_at(ts={})={}", first_commit.0, value(&historical));
-    println!("   second commit ts={}", second_commit.0);
-    db.rollback(old_snapshot)?;
-    println!();
-
-    println!("3) Write-write conflict detection");
-    let mut tx_a = db.begin();
-    let mut tx_b = db.begin();
-    tx_a.put(RowId(1), row(300, "winner"));
-    tx_b.put(RowId(1), row(400, "conflict"));
-    db.commit(tx_a)?;
-    match db.commit(tx_b) {
-        Err(DbError::TransactionConflict) => println!("   conflict detected correctly"),
-        other => return Err(format!("unexpected conflict result: {other:?}").into()),
-    }
-    println!();
-
-    println!("4) Durable delete");
-    let mut delete_tx = db.begin();
-    delete_tx.delete(RowId(1));
-    db.commit(delete_tx)?;
-    println!("   after delete: {:?}", db.get(RowId(1)));
-    println!();
-
-    println!("5) WAL recovery after close/reopen");
-    let mut seed = db.begin();
-    seed.put(RowId(2), row(777, "survives-restart"));
-    db.commit(seed)?;
-    let wal = db.wal_path().to_path_buf();
-    drop(db);
-
-    let recovered = Database::open(&path)?;
-    let recovered_row = recovered
-        .get(RowId(2))
-        .expect("committed row must be reconstructed from WAL");
-    println!("   WAL: {}", wal.display());
-    println!("   recovered row 2 value={}", value(&recovered_row));
-    println!();
-
-    println!("Demo completed successfully.");
-    println!("Note: tables, SQL, schemas, indexes and persistent current storage are not Milestone 1.0.2 features.");
-
-    drop(recovered);
-    let _ = fs::remove_dir_all(path);
-    Ok(())
-}
-
-fn row(number: i64, label: &str) -> Row {
-    Row::new()
-        .with_field(VALUE_FIELD, Value::Int64(number))
-        .with_field(LABEL_FIELD, Value::String(label.to_owned()))
+fn row(value: i64) -> Row {
+    Row::new().with_field(1, Value::Int64(value))
 }
 
 fn value(row: &Row) -> i64 {
-    match row.get(VALUE_FIELD) {
-        Some(Value::Int64(number)) => *number,
-        other => panic!("demo invariant violated: expected Int64 in field {VALUE_FIELD}, got {other:?}"),
+    match row.get(1) {
+        Some(Value::Int64(v)) => *v,
+        other => panic!("expected Int64 in demo row, got {other:?}"),
     }
 }
 
-fn demo_path() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!("adaptive-db-demo-{}-{nonce}", process::id()))
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("=== Adaptive DB Milestone 1.5.2 demo ===");
+    println!("Engine baseline: Milestone 1.5.1 Hardened\n");
+
+    let dir = tempdir()?;
+    let db_path = dir.path().join("database");
+
+    println!("[1] Open persistent database");
+    let db = Database::open(&db_path)?;
+
+    println!("[2] Commit row 1 = 100");
+    let mut tx1 = db.begin();
+    tx1.put(RowId(1), row(100));
+    let ts1 = db.commit(tx1)?;
+
+    println!("[3] Update row 1 = 200");
+    let mut tx2 = db.begin();
+    tx2.put(RowId(1), row(200));
+    let ts2 = db.commit(tx2)?;
+
+    let current = db.get(RowId(1))?.expect("row 1 must exist");
+    let historical = db
+        .get_at(RowId(1), ts1)?
+        .expect("historical row must exist");
+    println!(
+        "    current={} historical@{}={}",
+        value(&current),
+        ts1.0,
+        value(&historical)
+    );
+    assert_eq!(value(&current), 200);
+    assert_eq!(value(&historical), 100);
+
+    println!("[4] Read-your-own-writes inside a transaction, then rollback");
+    let mut local = db.begin();
+    local.put(RowId(2), row(222));
+    assert_eq!(
+        value(&db.get_in_tx(&local, RowId(2))?.expect("local row")),
+        222
+    );
+    assert!(db.get(RowId(2))?.is_none());
+    db.rollback(local)?;
+
+    println!("[5] Detect write/write conflict");
+    let mut a = db.begin();
+    let mut b = db.begin();
+    a.put(RowId(1), row(300));
+    b.put(RowId(1), row(400));
+    db.commit(a)?;
+    match db.commit(b) {
+        Err(DbError::TransactionConflict) => println!("    conflict detected as expected"),
+        other => return Err(format!("expected TransactionConflict, got {other:?}").into()),
+    }
+
+    println!("[6] Inspect checkpoint produced after durable current-store flush");
+    let checkpoint = CheckpointStore::new(db_path.join("checkpoint.meta")).load()?;
+    println!(
+        "    checkpoint_lsn={} checkpoint_commit_ts={}",
+        checkpoint.last_applied_commit_lsn, checkpoint.last_commit_ts
+    );
+
+    println!("[7] Drop and reopen database: persistent Current + WAL recovery");
+    drop(db);
+    let reopened = Database::open(&db_path)?;
+    assert_eq!(value(&reopened.get(RowId(1))?.expect("recovered row")), 300);
+    assert_eq!(
+        value(
+            &reopened
+                .get_at(RowId(1), ts1)?
+                .expect("recovered historical row")
+        ),
+        100
+    );
+    assert_eq!(
+        value(
+            &reopened
+                .get_at(RowId(1), ts2)?
+                .expect("recovered historical row")
+        ),
+        200
+    );
+    println!("    current and historical versions recovered successfully");
+
+    println!("[8] Exercise persistent primary B+Tree directly");
+    let tree_dir = dir.path().join("btree-demo");
+    std::fs::create_dir_all(&tree_dir)?;
+    let tree = BTree::open(tree_dir.join("tree.idx"), tree_dir.join("tree.meta"), 8)?;
+    let location = RowLocation {
+        page_id: PageId(7),
+        slot_id: 3,
+    };
+    tree.insert_at_lsn(RowId(42), location, Lsn(1234))?;
+    tree.flush()?;
+    assert_eq!(tree.get(RowId(42))?, Some(location));
+    drop(tree);
+    let tree = BTree::open(tree_dir.join("tree.idx"), tree_dir.join("tree.meta"), 8)?;
+    assert_eq!(tree.get(RowId(42))?, Some(location));
+    println!("    RowId(42) -> {:?} survived B+Tree reopen", location);
+
+    println!("[9] Verify hardened page checksum catches corruption");
+    let mut page = Page::new(PageId(0), PageKind::Heap);
+    page.set_page_lsn(Lsn(77));
+    page.seal_for_write();
+    let clean = *page.bytes();
+    Page::from_bytes(PageId(0), clean)?;
+    let mut corrupt = clean;
+    corrupt[128] ^= 0x5a;
+    assert!(Page::from_bytes(PageId(0), corrupt).is_err());
+    println!("    corrupted page rejected");
+
+    println!("\nDemo completed successfully.");
+    Ok(())
 }

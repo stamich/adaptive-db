@@ -1,11 +1,11 @@
 //! B+Tree node codec with bounds, shape and ordering validation.
 
 use adb_core::{PageId, RowId, RowLocation};
-use adb_page::{Page, PageKind, PAGE_HEADER_SIZE, PAGE_SIZE};
+use adb_page::{PAGE_HEADER_SIZE, PAGE_SIZE, Page, PageKind};
 
 use crate::{
     error::BTreeError,
-    node::{InternalNode, LeafNode, Node, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES},
+    node::{InternalNode, LeafNode, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES, Node},
 };
 
 /// Documents `NONE_PAGE` and its role in this hardened milestone.

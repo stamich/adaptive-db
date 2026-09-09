@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "adb-benchmark-1-5-2"
+version = "0.1.0"
+dependencies = [
+ "adb-btree",
+ "adb-core",
+ "adb-engine",
+ "tempfile",
+]
+
+[[package]]
 name = "adb-btree"
 version = "0.1.0"
 dependencies = [
@@ -34,6 +44,18 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "adb-demo-1-5-2"
+version = "0.1.0"
+dependencies = [
+ "adb-btree",
+ "adb-core",
+ "adb-engine",
+ "adb-page",
+ "adb-storage",
+ "tempfile",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 use adb_btree::codec::decode_node;
 use adb_core::PageId;
-use adb_page::{Page, PageKind, PAGE_HEADER_SIZE};
+use adb_page::{PAGE_HEADER_SIZE, Page, PageKind};
 
 /// Verifies a corrupt leaf count returns an error instead of panicking.
 #[test]

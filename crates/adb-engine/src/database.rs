@@ -12,7 +12,7 @@ use adb_storage::{
     Checkpoint, CheckpointStore, CurrentRecord, HistoricalVersion, PersistentCurrentStore,
     VersionStore,
 };
-use adb_tx::{validate_write, Mutation, Transaction, TransactionManager};
+use adb_tx::{Mutation, Transaction, TransactionManager, validate_write};
 use adb_wal::{WalReader, WalRecord, WalWriter};
 use parking_lot::{Mutex, RwLock};
 
