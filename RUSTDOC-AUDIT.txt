@@ -1,3 +1,3 @@
-Rust files: 29
-Rust items: 102
+Rust files: 55
+Rust items: 255
 Missing Rustdoc: 0

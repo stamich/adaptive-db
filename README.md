@@ -1,36 +1,39 @@
-# Adaptive DB — Milestone 1
+# Adaptive DB — Milestone 1.5.2
 
-Minimal, single-node transactional storage engine in Rust.
+Milestone 1.5.2 is the demo/benchmark packaging release over **Milestone 1.5.1 Hardened**.
+It does not add later-milestone database features.
 
-## Scope
+The inherited 1.5.1 engine contains:
+- snapshot-isolated MVCC transaction API,
+- logical WAL with durable commit,
+- fixed 16 KiB persistent pages,
+- BufferPool,
+- slotted heap pages / persistent Current heap,
+- primary B+Tree (`RowId -> RowLocation`),
+- checkpoint + WAL recovery,
+- checksummed/hardened page and metadata formats.
 
-- logical WAL,
-- CRC32 checksum per WAL record,
-- crash recovery,
-- Current Store,
-- Version Store,
-- Snapshot Isolation,
-- read-your-writes,
-- write-write conflict detection,
-- temporal `get_at`,
-- global serialized commit path (intentional and temporal simplification of V1).
-
-## Out of scope
-
-- SQL,
-- persistent B+Tree,
-- checkpointing,
-- WAL segment rotation,
-- Raft,
-- distributed transactions,
-- column/search/vector/graph projections.
-
-## Run
+## Demo
 
 ```bash
-cargo test --workspace
+cargo run --release -p adb-demo-1-5-2
 ```
 
-## The main invariant
+## Benchmark
 
-Response `commit()` is returned after `fsync` of record `Commit` in WAL.
+```bash
+cargo run --release -p adb-benchmark-1-5-2 -- \
+  --rows 10000 \
+  --batch-size 100 \
+  --lookups 100000 \
+  --historical-versions 1000 \
+  --output examples/results/1.5.2-local.json
+```
+
+## Full validation
+
+```bash
+./build-milestone1.5.2.sh
+```
+
+See `TASKS-1.5.2.md`, `HARDENING-1.5.1.md`, `SECURITY-REVIEW.md`, `docs/architecture.md` and `docs/invariants.md`.
