@@ -11,7 +11,7 @@ use crate::{
     codec::{decode_node, encode_node},
     error::BTreeError,
     meta::MetaStore,
-    node::{InternalNode, LeafNode, Node, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES},
+    node::{InternalNode, LeafNode, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES, Node},
 };
 
 /// Represents `Split` state used by the src subsystem.
@@ -67,7 +67,7 @@ impl BTree {
             let node = self.pool.read(page_id, decode_node)??;
             match node {
                 Node::Leaf(leaf) => {
-                    return Ok(leaf.keys.binary_search(&key).ok().map(|i| leaf.values[i]))
+                    return Ok(leaf.keys.binary_search(&key).ok().map(|i| leaf.values[i]));
                 }
                 Node::Internal(internal) => {
                     let mut idx = 0;

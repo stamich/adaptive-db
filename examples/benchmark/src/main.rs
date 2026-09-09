@@ -95,7 +95,9 @@ fn parse_args() -> Result<Config, String> {
             }
             "--output" => cfg.output = Some(PathBuf::from(value(&mut args, "--output")?)),
             "--help" | "-h" => {
-                println!("adb-benchmark-1-5-2 [--rows N] [--batch-size N] [--lookups N] [--historical-versions N] [--output FILE]");
+                println!(
+                    "adb-benchmark-1-5-2 [--rows N] [--batch-size N] [--lookups N] [--historical-versions N] [--output FILE]"
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}")),
@@ -148,7 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     slot_id: (i % 8) as u16,
                 },
             )
-                .unwrap();
+            .unwrap();
         }
         tree.flush().unwrap();
     }));
@@ -260,7 +262,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fs::create_dir_all(parent)?;
             }
         }
-        let mut json = String::from("{\n  \"milestone\": \"1.5.2\",\n  \"engine_base\": \"1.5.1-hardened\",\n  \"measurements\": [\n");
+        let mut json = String::from(
+            "{\n  \"milestone\": \"1.5.2\",\n  \"engine_base\": \"1.5.1-hardened\",\n  \"measurements\": [\n",
+        );
         for (i, m) in measurements.iter().enumerate() {
             let comma = if i + 1 == measurements.len() { "" } else { "," };
             json.push_str(&format!("    {{\"name\":\"{}\",\"operations\":{},\"elapsed_ns\":{},\"ops_per_sec\":{:.3},\"ns_per_op\":{:.3}}}{}\n",

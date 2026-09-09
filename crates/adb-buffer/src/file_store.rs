@@ -7,7 +7,7 @@ use std::{
 };
 
 use adb_core::PageId;
-use adb_page::{Page, PageKind, PAGE_SIZE};
+use adb_page::{PAGE_SIZE, Page, PageKind};
 use parking_lot::Mutex;
 
 use crate::{BufferError, PageStore};
