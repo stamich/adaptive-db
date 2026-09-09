@@ -1,5 +1,5 @@
 [package]
-name = "adb-demo"
+name = "adb-demo-1-5-2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -8,6 +8,8 @@ members = [
     "crates/adb-storage",
     "crates/adb-tx",
     "crates/adb-engine",
+    "examples/demo",
+    "examples/benchmark"
 ]
 resolver = "2"
 
