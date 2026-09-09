@@ -7,4 +7,8 @@ publish = false
 
 [dependencies]
 adb-core = { path = "../../crates/adb-core" }
+adb-page = { path = "../../crates/adb-page" }
+adb-btree = { path = "../../crates/adb-btree" }
+adb-storage = { path = "../../crates/adb-storage" }
 adb-engine = { path = "../../crates/adb-engine" }
+tempfile.workspace = true
