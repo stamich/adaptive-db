@@ -1,0 +1,14 @@
+Adaptive DB Milestone 1.5.2 validation manifest
+
+Base engine: Milestone 1.5.1 Hardened.
+Scope: examples/demo + examples/benchmark + packaging/documentation only.
+
+Recommended validation:
+  cargo fmt --all --check
+  cargo check --workspace
+  cargo test --workspace
+  cargo doc --workspace --no-deps
+  cargo run --release -p adb-demo-1-5-2
+  cargo run --release -p adb-benchmark-1-5-2 -- --rows 1000 --batch-size 100 --lookups 10000 --historical-versions 200
+
+This packaging environment does not provide cargo/rustc, therefore compilation and execution are intentionally not claimed here.

@@ -1,43 +1,75 @@
-# Milestone 1.0.1 — Security / Durability Review
+# Milestone 1.5.1 — Security / Durability Review
 
-## Hardened issues
+## Inherited WAL hardening
 
-### HIGH — WAL crash-tail append hazard
-Milestone 1.0 could ignore an incomplete suffix during recovery but reopen the writer at physical EOF.
-New commits could therefore be appended behind the damaged suffix and become invisible to the next recovery.
+1.5.1 includes the complete 1.0.1 WAL hardening:
+- incomplete crash-tail truncation before append,
+- 16 MiB per-record payload bound,
+- checked frame length conversion,
+- framed corruption remains a hard error.
 
-1.0.1 scans to the last complete valid frame and truncates only an incomplete crash suffix before append.
-Fully framed corruption (bad magic/version/CRC) remains a hard error and is never silently discarded.
+## Hardened page/storage issues
 
-### HIGH — attacker/corruption-controlled WAL allocation
-The original reader trusted the persisted `payload_len` and allocated `Vec(payload_len)`.
-A corrupted length could trigger a multi-gigabyte allocation and process OOM.
+### HIGH — corrupted B+Tree counts could panic the process
+The original codec trusted persisted leaf/internal counts and sliced payloads with `unwrap`.
+1.5.1 validates:
+- maximum entry/key counts,
+- required payload byte size,
+- leaf key/value shape,
+- internal `children = keys + 1`,
+- strict key ordering,
+- every primitive read/write range.
 
-1.0.1 enforces `MAX_WAL_RECORD_BYTES = 16 MiB` before allocation and before append.
+Corruption now produces `BTreeError::Corrupt` rather than a data-dependent slice panic.
 
-### MEDIUM — unchecked frame-length narrowing
-The original writer cast payload length directly to `u32`.
-1.0.1 uses checked conversion.
+### HIGH — pages had no checksum
+New/rewritten pages use page format v1 and CRC32 over the complete 16 KiB page.
 
-## Properties preserved
+Legacy Milestone 1.5 pages (format marker 0) remain readable after structural validation so the
+hardening patch can open existing data. They are automatically upgraded to checksummed v1 on write.
+This means a never-rewritten legacy page retains the original 1.5 corruption-detection limitation.
 
-The original WAL-before-visibility ordering remains unchanged:
+### HIGH — common page header/slot metadata was insufficiently validated
+1.5.1 validates:
+- page magic/kind/version,
+- `PAGE_HEADER_SIZE <= free_start <= free_end <= PAGE_SIZE`,
+- heap slot-directory size,
+- every slot tuple range,
+- overflow-safe range arithmetic.
 
-1. validate transaction,
-2. append BEGIN/mutations/COMMIT,
-3. `flush + sync_data`,
-4. apply in-memory stores,
-5. publish CommitTs.
+### HIGH — partial page-file crash suffix
+A page file whose length is not a multiple of 16 KiB is normalized by truncating only the incomplete
+last page before allocation/read use. Checked offset arithmetic prevents wraparound.
 
-Recovery still applies only transactions that have a COMMIT record.
+### MEDIUM — poisoned `std::sync::Mutex<File>` panic path
+The file page store now uses `parking_lot::Mutex`, eliminating `.lock().unwrap()` poisoning failures.
 
-## Residual risks intentionally not solved in 1.0.1
+### MEDIUM — panic could leak manual BufferPool pins
+Read/write callbacks execute while the BufferPool state mutex is held, so manual `pins += 1/-=1`
+was unnecessary and panic-sensitive. 1.5.1 removes that counter from the synchronous pool.
 
-- WAL is one unbounded file; no segmentation/rotation.
-- Recovery still materializes the complete valid WAL in memory before logical replay.
-- There is no checkpoint; restart cost grows with WAL size.
-- Mid-file corruption fails database open; there is no redundant WAL copy or repair.
-- Storage is in-memory after recovery; persistent page/current store belongs to Milestone 1.5.
-- No authentication/encryption exists because Milestone 1 is an embedded storage-engine milestone, not a network server.
+### HIGH — root/checkpoint metadata replacement lacked durability framing
+B+Tree root metadata and checkpoint metadata now use:
+- magic,
+- version,
+- payload length bound,
+- CRC32,
+- temporary file,
+- `sync_all`,
+- atomic rename,
+- parent-directory `sync_all`.
 
-These limits are architectural scope boundaries, not hidden claims of production readiness.
+Original 1.5 bare-bincode root/checkpoint files remain readable and are upgraded on the next save.
+
+## Residual risks intentionally not solved in 1.5.1
+
+- Root/checkpoint metadata has one active file, not the later dual-slot fallback design.
+  A corrupt latest metadata file therefore fails open instead of automatically selecting a previous generation.
+- Current heap is append-oriented and does not reclaim obsolete records; update-heavy workloads cause file growth.
+- There is no page free list or general compaction.
+- Historical Version Store is not yet independently persistent; Milestone 1.6 addresses that layer.
+- WAL remains a single file and whole-WAL recovery remains memory proportional to WAL size.
+- B+Tree uses a coarse tree mutex; this is correctness-first, not high-concurrency production design.
+- CRC32 detects accidental corruption but is not a cryptographic integrity/MAC mechanism.
+
+The patch deliberately does not import Milestone 1.6+ features into this historical milestone.

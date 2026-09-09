@@ -1,29 +1,21 @@
 # Changelog
 
-## Milestone 1.0.2
+## 1.5.2
+- Based on Milestone 1.5.1 Hardened; no new database-engine functionality.
+- Added Rust-only `examples/demo` covering MVCC, persistence, checkpoint/recovery, B+Tree persistence and page CRC validation.
+- Added Rust-only `examples/benchmark` baseline for B+Tree, durable commits, persistent Current reads, historical reads and reopen/recovery.
+- Added machine-readable benchmark JSON output and `examples/results` convention.
+- Added detailed `TASKS-1.5.2.md` implementation sequence from the 1.0.2 contract to 1.5.x physical storage.
 
-Based directly on Milestone 1.0.1 Hardened.
+## 1.5.1
+- Hardened the Milestone 1.5 persistent-storage architecture.
+- Added page CRC/version validation and structural checks.
+- Hardened B+Tree decoding and root metadata.
+- Hardened checkpoint publication and page-file crash-tail behavior.
+- Retained bounded WAL and WAL crash-tail handling inherited from 1.0.1.
 
-Added:
-- Rust-only demo under `examples/demo`;
-- Rust-only benchmark baseline under `examples/benchmark`;
-- current point-read, historical-read, durable single-commit, durable batch and WAL-recovery measurements;
-- p50/p95/p99 latency reporting where applicable;
-- optional machine-readable JSON benchmark output;
-- example/benchmark methodology documentation.
+## 1.5
+- Added persistent fixed pages, BufferPool, persistent Current heap, primary B+Tree and checkpoint + WAL recovery.
 
-Unchanged:
-- engine architecture and data model;
-- in-memory Current/Version stores;
-- MVCC semantics;
-- transaction behavior;
-- WAL format, durability and recovery behavior;
-- all Milestone 1.0.1 hardening constraints.
-
-No later-milestone functionality has been backported.
-
-## Milestone 1.0.1
-
-WAL/recovery hardening patch over Milestone 1.0, including bounded WAL payloads,
-oversized length rejection, crash-tail discovery/truncation, checked frame-length
-conversion and regression coverage.
+## 1.0.2
+- Added Rust-only demo and benchmark baseline over the 1.0.1 hardened transactional/WAL engine.

@@ -1,0 +1,15 @@
+{
+  "milestone": "1.5.2",
+  "base": "1.5.1 Hardened",
+  "scope": "Rust-only demo and benchmark baseline; no new engine feature",
+  "examples": ["examples/demo", "examples/benchmark"],
+  "engine_architecture": [
+    "MVCC + snapshot isolation",
+    "logical WAL durability",
+    "fixed 16 KiB pages",
+    "BufferPool",
+    "persistent Current heap",
+    "primary RowId B+Tree",
+    "checkpoint + WAL recovery"
+  ]
+}
