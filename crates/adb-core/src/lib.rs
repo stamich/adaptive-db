@@ -1,14 +1,14 @@
-//! Lib module for the adb-core crate.
-//!
+//! Module `lib` for crate `adb-core`.
 pub mod error;
 pub mod ids;
 pub mod location;
 pub mod row;
 pub mod value;
-mod version_key;
+pub mod version_key;
 
 pub use error::CoreError;
 pub use ids::{CommitTs, FieldId, Lsn, PageId, RowId, SlotId, TxId};
 pub use location::RowLocation;
 pub use row::Row;
 pub use value::Value;
+pub use version_key::VersionKey;
