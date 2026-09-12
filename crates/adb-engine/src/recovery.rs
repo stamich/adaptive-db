@@ -33,6 +33,9 @@ pub fn recover(records: impl IntoIterator<Item = WalRecord>) -> RecoveryResult {
                 pending.entry(tx_id).or_default();
             }
 
+            WalRecord::Version { tx_id, .. } => {
+                result.max_commit_ts = result.max_commit_ts.max(tx_id.0);
+            }
             WalRecord::Put {
                 tx_id,
                 row_id,
