@@ -244,6 +244,9 @@ fn replay_current_tail(
             WalRecord::Begin { tx_id, .. } => {
                 pending.entry(*tx_id).or_default();
             }
+            WalRecord::Version { tx_id, .. } => {
+                pending.entry(*tx_id).or_default();
+            }
             WalRecord::Put {
                 tx_id,
                 row_id,
