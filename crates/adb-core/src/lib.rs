@@ -5,6 +5,7 @@ pub mod ids;
 pub mod location;
 pub mod row;
 pub mod value;
+mod version_key;
 
 pub use error::CoreError;
 pub use ids::{CommitTs, FieldId, Lsn, PageId, RowId, SlotId, TxId};
