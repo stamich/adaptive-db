@@ -1,5 +1,4 @@
-//! Btree module for the adb-btree crate.
-//!
+//! Module `btree` for crate `adb-btree`.
 use adb_btree::BTree;
 use adb_core::{PageId, RowId, RowLocation};
 use tempfile::tempdir;
