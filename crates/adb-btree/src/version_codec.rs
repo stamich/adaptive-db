@@ -2,12 +2,12 @@
 use crate::{
     error::BTreeError,
     version_node::{
-        VersionInternalNode, VersionLeafNode, VersionNode, MAX_VERSION_INTERNAL_KEYS,
-        MAX_VERSION_LEAF_ENTRIES,
+        MAX_VERSION_INTERNAL_KEYS, MAX_VERSION_LEAF_ENTRIES, VersionInternalNode, VersionLeafNode,
+        VersionNode,
     },
 };
 use adb_core::{CommitTs, PageId, RowId, RowLocation, VersionKey};
-use adb_page::{Page, PageKind, PAGE_HEADER_SIZE, PAGE_SIZE};
+use adb_page::{PAGE_HEADER_SIZE, PAGE_SIZE, Page, PageKind};
 /// Defines the `NONE_PAGE` constant used by this subsystem.
 const NONE_PAGE: u64 = u64::MAX;
 const PAYLOAD: usize = PAGE_SIZE - PAGE_HEADER_SIZE;

@@ -1,13 +1,13 @@
-//! Lib module for the adb-btree crate.
-//!
+//! Module `lib` for crate `adb-btree`.
 pub mod codec;
 pub mod error;
 pub mod meta;
 pub mod node;
 pub mod tree;
-mod version_tree;
-mod version_node;
-mod version_codec;
+pub mod version_codec;
+pub mod version_node;
+pub mod version_tree;
 
 pub use error::BTreeError;
 pub use tree::BTree;
+pub use version_tree::VersionBTree;

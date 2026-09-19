@@ -11,8 +11,8 @@ use crate::{
     meta::MetaStore,
     version_codec::{decode_version_node, encode_version_node},
     version_node::{
-        VersionInternalNode, VersionLeafNode, VersionNode, MAX_VERSION_INTERNAL_KEYS,
-        MAX_VERSION_LEAF_ENTRIES,
+        MAX_VERSION_INTERNAL_KEYS, MAX_VERSION_LEAF_ENTRIES, VersionInternalNode, VersionLeafNode,
+        VersionNode,
     },
 };
 
