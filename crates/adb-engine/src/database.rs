@@ -10,11 +10,11 @@ use std::{
 use adb_core::{CommitTs, Lsn, Row, RowId, TxId};
 use adb_storage::{
     Checkpoint, CheckpointStore, CurrentRecord, HistoricalVersion, PersistentCurrentStore,
-    VersionStore,
+    PersistentVersionStore,
 };
 use adb_tx::{Mutation, Transaction, TransactionManager, validate_write};
 use adb_wal::{WalReader, WalRecord, WalWriter};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex};
 
 use crate::{error::DbError, recovery::recover};
 
@@ -29,7 +29,7 @@ pub struct Database {
 /// Represents `DatabaseInner` state used by the src subsystem.
 struct DatabaseInner {
     current: Mutex<PersistentCurrentStore>,
-    versions: RwLock<VersionStore>,
+    versions: Mutex<PersistentVersionStore>,
     wal: Mutex<WalWriter>,
     tx_manager: Mutex<TransactionManager>,
     commit_lock: Mutex<()>,
@@ -54,6 +54,8 @@ impl Database {
         let checkpoint = CheckpointStore::new(dir.join("checkpoint.meta"));
         let cp = checkpoint.load()?;
         let current = PersistentCurrentStore::open(dir.join("current"))?;
+        let versions = PersistentVersionStore::open(dir.join("versions"))?;
+
         replay_current_tail(&entries, cp.last_applied_commit_lsn, &current)?;
         current.flush()?;
 
@@ -78,7 +80,7 @@ impl Database {
         Ok(Self {
             inner: Arc::new(DatabaseInner {
                 current: Mutex::new(current),
-                versions: RwLock::new(logical.stores.versions),
+                versions: Mutex::new(versions),
                 wal: Mutex::new(wal),
                 tx_manager: Mutex::new(tx_manager),
                 commit_lock: Mutex::new(()),
@@ -98,19 +100,38 @@ impl Database {
         Ok(self.inner.current.lock().get(row_id)?.and_then(|r| r.value))
     }
 
-    /// Returns the row version visible at the supplied historical commit timestamp.
+    /// Implements the `get_at` operation used by this subsystem.
     pub fn get_at(&self, row_id: RowId, ts: CommitTs) -> Result<Option<Row>, DbError> {
         if let Some(current) = self.inner.current.lock().get(row_id)? {
             if current.commit_ts <= ts {
                 return Ok(current.value);
             }
         }
+
         Ok(self
             .inner
             .versions
-            .read()
-            .get_at(row_id, ts)
-            .and_then(|v| v.value.clone()))
+            .lock()
+            .get_at(row_id, ts)?
+            .and_then(|version| version.value))
+    }
+
+    /// Implements the `history` operation used by this subsystem.
+    pub fn history(&self, row_id: RowId) -> Result<Vec<HistoricalVersion>, DbError> {
+        let mut history = self.inner.versions.lock().history(row_id)?;
+
+        if let Some(current) = self.inner.current.lock().get(row_id)? {
+            // Current state is represented as an open-ended logical version
+            // only in the history API. It is not persisted in VersionStore.
+            history.push(HistoricalVersion {
+                begin_ts: current.commit_ts,
+                end_ts: CommitTs(u64::MAX),
+                value: current.value,
+            });
+        }
+
+        history.sort_by_key(|version| version.begin_ts);
+        Ok(history)
     }
 
     /// Returns the row visible inside the supplied transaction, including transaction-local writes.
@@ -175,17 +196,18 @@ impl Database {
 
         {
             let current = self.inner.current.lock();
-            let mut versions = self.inner.versions.write();
+            let versions = self.inner.versions.lock();
             for (row_id, mutation) in tx.writes() {
                 if let Some(old) = current.get(*row_id)? {
-                    versions.push(
+                    versions.put_at_lsn(
                         *row_id,
-                        HistoricalVersion {
+                        &HistoricalVersion {
                             begin_ts: old.commit_ts,
                             end_ts: commit_ts,
                             value: old.value,
                         },
-                    );
+                        commit_lsn,
+                    )?;
                 }
                 let record = match mutation {
                     Mutation::Put(row) => CurrentRecord {
