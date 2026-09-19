@@ -1,5 +1,4 @@
-//! Recovery module for the adb-engine crate.
-//!
+//! Module `recovery` for crate `adb-engine`.
 mod common;
 use adb_core::RowId;
 use adb_engine::Database;
@@ -23,9 +22,9 @@ fn committed_transaction_survives_restart_using_persistent_current_store() {
     }
 }
 
-/// Implements the `historical_versions_survive_restart_via_wal_reconstruction` operation used by this subsystem.
+/// Implements the `historical_versions_survive_restart_via_persistent_version_store` operation used by this subsystem.
 #[test]
-fn historical_versions_survive_restart_via_wal_reconstruction() {
+fn historical_versions_survive_restart_via_persistent_version_store() {
     let dir = tempdir().unwrap();
     let (t1, t2);
     {
@@ -39,7 +38,7 @@ fn historical_versions_survive_restart_via_wal_reconstruction() {
     }
     {
         let db = Database::open(dir.path()).unwrap();
-        // assert_eq!(read_i64(&db.get_at(RowId(1), t1).unwrap().unwrap()), 100);
+        assert_eq!(read_i64(&db.get_at(RowId(1), t1).unwrap().unwrap()), 100);
         assert_eq!(read_i64(&db.get_at(RowId(1), t2).unwrap().unwrap()), 200);
     }
 }
@@ -54,9 +53,18 @@ fn truncated_wal_tail_is_ignored() {
         let mut tx = db.begin();
         tx.put(RowId(1), row_with_i64(100));
         db.commit(tx).unwrap();
-        wal_path = db.wal_path().to_path_buf();
+        wal_path = db.wal_dir().to_path_buf();
     }
-    let mut f = OpenOptions::new().append(true).open(wal_path).unwrap();
+    let mut segments = std::fs::read_dir(&wal_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("wal"))
+        .collect::<Vec<_>>();
+    segments.sort();
+
+    let tail = segments.last().unwrap();
+    let mut f = OpenOptions::new().append(true).open(tail).unwrap();
+
     f.write_all(&[0x57, 0x42]).unwrap();
     f.flush().unwrap();
     let db = Database::open(dir.path()).unwrap();

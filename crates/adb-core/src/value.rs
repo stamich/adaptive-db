@@ -1,8 +1,7 @@
-//! Value module for the adb-core crate.
-//!
+//! Module `value` for crate `adb-core`.
 use serde::{Deserialize, Serialize};
 
-/// Enumerates the supported `Value` variants used by this subsystem.
+/// Enumerates `Value` alternatives used by this subsystem.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Null,

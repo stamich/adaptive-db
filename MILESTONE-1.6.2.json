@@ -1,0 +1,18 @@
+{
+  "milestone": "1.6.2",
+  "engine_base": "1.6.1-hardened",
+  "language": "Rust",
+  "scope": [
+    "persistent-current-store",
+    "persistent-version-store",
+    "temporal-version-btree",
+    "segmented-wal",
+    "checkpoint-v2",
+    "temporal-recovery",
+    "integrity-verification",
+    "demo",
+    "benchmark-baseline"
+  ],
+  "production_source_change": false,
+  "build_metadata_fix": "adb-wal dev-dependency tempfile.workspace=true"
+}

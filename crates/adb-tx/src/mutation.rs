@@ -1,8 +1,7 @@
-//! Mutation module for the adb-tx crate.
-//!
+//! Module `mutation` for crate `adb-tx`.
 use adb_core::Row;
 
-/// Enumerates the supported `Mutation` variants used by this subsystem.
+/// Enumerates `Mutation` alternatives used by this subsystem.
 #[derive(Debug, Clone)]
 pub enum Mutation {
     Put(Row),

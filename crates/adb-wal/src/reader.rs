@@ -1,138 +1,106 @@
-//! Reader module for the adb-wal crate.
-//!
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
-};
-
-use adb_core::Lsn;
-use crc32fast::Hasher;
-
+//! Reader for the legacy single-file WAL format.
 use crate::{
     error::WalError,
     format::{HEADER_LEN, MAX_WAL_RECORD_BYTES, WAL_MAGIC, WAL_VERSION},
     record::WalRecord,
 };
-
-/// Reads and validates framed write-ahead log records in LSN order.
+use adb_core::Lsn;
+use crc32fast::Hasher;
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
+/// Sequential reader that validates WAL frames and tolerates only an incomplete crash suffix.
 pub struct WalReader {
     file: File,
     offset: u64,
 }
-
-/// Implements behavior for `WalReader`.
+/// Implements bounded and checksum-validated single-file WAL reading.
 impl WalReader {
-    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
+    /// Opens an existing WAL file at offset zero.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WalError> {
-        let file = File::open(path)?;
-        Ok(Self { file, offset: 0 })
+        Ok(Self {
+            file: File::open(path)?,
+            offset: 0,
+        })
     }
-
-    /// Reads all complete valid WAL records until EOF or an incomplete crash tail.
+    /// Reads every complete valid frame into memory.
     pub fn read_all(mut self) -> Result<Vec<(Lsn, WalRecord)>, WalError> {
         let mut out = Vec::new();
-
-        loop {
-            match self.next_record()? {
-                Some(item) => out.push(item),
-                None => return Ok(out),
-            }
+        while let Some(item) = self.next_record()? {
+            out.push(item);
         }
+        Ok(out)
     }
-
-    /// Scans complete records and returns the byte offset immediately after the last valid frame.
-    ///
-    /// An incomplete crash tail is treated as a recoverable suffix. Fully framed corruption,
-    /// such as bad magic or CRC, remains an error and is never silently truncated.
+    /// Returns the byte offset immediately following the last complete valid WAL frame.
     pub fn valid_end(mut self) -> Result<u64, WalError> {
         while self.next_record()?.is_some() {}
         Ok(self.offset)
     }
-
-    /// Reads and validates the next WAL record from the current reader offset.
+    /// Reads the next frame, returning `None` only for EOF or an incomplete final crash suffix.
     pub fn next_record(&mut self) -> Result<Option<(Lsn, WalRecord)>, WalError> {
         self.file.seek(SeekFrom::Start(self.offset))?;
-
+        let frame_start = self.offset;
         let mut magic = [0u8; 4];
         match self.file.read_exact(&mut magic) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(e) => return Err(e.into()),
         }
-
-        let magic = u32::from_le_bytes(magic);
-        if magic != WAL_MAGIC {
+        if u32::from_le_bytes(magic) != WAL_MAGIC {
             return Err(WalError::Corrupt(format!(
-                "invalid magic at offset {}",
-                self.offset
+                "invalid magic at offset {frame_start}"
             )));
         }
-
         let mut version = [0u8; 2];
-        if let Err(e) = self.file.read_exact(&mut version) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            }
-            return Err(e.into());
+        if !read_tail_field(&mut self.file, &mut version)? {
+            return Ok(None);
         }
-
         let version = u16::from_le_bytes(version);
         if version != WAL_VERSION {
             return Err(WalError::Corrupt(format!(
                 "unsupported WAL version {version}"
             )));
         }
-
         let mut len = [0u8; 4];
-        if let Err(e) = self.file.read_exact(&mut len) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            }
-            return Err(e.into());
+        if !read_tail_field(&mut self.file, &mut len)? {
+            return Ok(None);
         }
         let payload_len = u32::from_le_bytes(len) as usize;
         if payload_len > MAX_WAL_RECORD_BYTES {
             return Err(WalError::Corrupt(format!(
-                "payload length {payload_len} exceeds hardened limit at offset {}",
-                self.offset
+                "payload length {payload_len} exceeds hardened limit at offset {frame_start}"
             )));
         }
-
         let mut crc = [0u8; 4];
-        if let Err(e) = self.file.read_exact(&mut crc) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            }
-            return Err(e.into());
+        if !read_tail_field(&mut self.file, &mut crc)? {
+            return Ok(None);
         }
         let expected_crc = u32::from_le_bytes(crc);
-
         let mut payload = vec![0u8; payload_len];
-        if let Err(e) = self.file.read_exact(&mut payload) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                // Partial tail after crash: ignore safely.
-                return Ok(None);
-            }
-            return Err(e.into());
+        if !read_tail_field(&mut self.file, &mut payload)? {
+            return Ok(None);
         }
-
         let mut hasher = Hasher::new();
         hasher.update(&payload);
-        let actual_crc = hasher.finalize();
-
-        if actual_crc != expected_crc {
+        if hasher.finalize() != expected_crc {
             return Err(WalError::Corrupt(format!(
-                "checksum mismatch at offset {}",
-                self.offset
+                "checksum mismatch at offset {frame_start}"
             )));
         }
-
         let record: WalRecord = bincode::deserialize(&payload)?;
-        let lsn = Lsn(self.offset);
-
-        self.offset += (HEADER_LEN + payload_len) as u64;
-
-        Ok(Some((lsn, record)))
+        self.offset = frame_start
+            .checked_add((HEADER_LEN + payload_len) as u64)
+            .ok_or_else(|| WalError::Corrupt("WAL offset overflow".into()))?;
+        Ok(Some((Lsn(frame_start), record)))
+    }
+}
+/// Reads one tail field and maps a short final read to a recoverable incomplete suffix.
+fn read_tail_field(file: &mut File, bytes: &mut [u8]) -> Result<bool, WalError> {
+    match file.read_exact(bytes) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }

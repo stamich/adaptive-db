@@ -1,5 +1,4 @@
-//! Lib module for the adb-engine crate.
-//!
+//! Module `lib` for crate `adb-engine`.
 pub mod database;
 pub mod error;
 pub mod recovery;

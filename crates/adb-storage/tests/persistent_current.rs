@@ -1,5 +1,4 @@
-//! Persistent Current module for the adb-storage crate.
-//!
+//! Module `persistent_current` for crate `adb-storage`.
 use adb_core::{CommitTs, Row, RowId, Value};
 use adb_storage::{CurrentRecord, PersistentCurrentStore};
 use tempfile::tempdir;

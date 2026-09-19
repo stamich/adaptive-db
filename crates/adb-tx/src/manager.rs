@@ -1,10 +1,9 @@
-//! Manager module for the adb-tx crate.
-//!
+//! Module `manager` for crate `adb-tx`.
 use adb_core::{CommitTs, TxId};
 
 use crate::Transaction;
 
-/// Allocates transaction identifiers and commit timestamps and tracks the latest published commit.
+/// Represents `TransactionManager` state used by this subsystem.
 #[derive(Debug)]
 pub struct TransactionManager {
     next_tx_id: u64,
@@ -14,7 +13,7 @@ pub struct TransactionManager {
 
 /// Implements behavior for `TransactionManager`.
 impl TransactionManager {
-    /// Creates a new instance initialized with the supplied state.
+    /// Implements the `new` operation used by this subsystem.
     pub fn new(next_tx_id: u64, next_commit_ts: u64, last_committed_ts: u64) -> Self {
         Self {
             next_tx_id,
@@ -23,7 +22,7 @@ impl TransactionManager {
         }
     }
 
-    /// Starts a new transaction at the latest published MVCC snapshot.
+    /// Implements the `begin` operation used by this subsystem.
     pub fn begin(&mut self) -> Transaction {
         let id = TxId(self.next_tx_id);
         self.next_tx_id += 1;
@@ -62,7 +61,7 @@ impl TransactionManager {
     }
 }
 
-/// Implements behavior for `Default for TransactionManager`.
+/// Implements behavior for `Default`.
 impl Default for TransactionManager {
     /// Implements the `default` operation used by this subsystem.
     fn default() -> Self {

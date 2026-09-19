@@ -1,12 +1,11 @@
-//! Error module for the adb-storage crate.
-//!
+//! Module `error` for crate `adb-storage`.
 use thiserror::Error;
 
 use adb_btree::BTreeError;
 use adb_buffer::BufferError;
 use adb_page::PageError;
 
-/// Enumerates the supported `StorageError` variants used by this subsystem.
+/// Enumerates `StorageError` alternatives used by this subsystem.
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("buffer error: {0}")]
@@ -19,7 +18,7 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     Serialization(#[from] Box<bincode::ErrorKind>),
-    /// Persistent storage metadata is structurally invalid or checksum-corrupt.
-    #[error("corrupt storage: {0}")]
-    Corrupt(String),
+
+    #[error("invalid storage state: {0}")]
+    Invalid(String),
 }

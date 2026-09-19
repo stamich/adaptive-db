@@ -1,10 +1,9 @@
-//! Error module for the adb-btree crate.
-//!
+//! Module `error` for crate `adb-btree`.
 use thiserror::Error;
 
 use adb_buffer::BufferError;
 
-/// Enumerates the supported `BTreeError` variants used by this subsystem.
+/// Enumerates `BTreeError` alternatives used by this subsystem.
 #[derive(Debug, Error)]
 pub enum BTreeError {
     #[error("buffer error: {0}")]

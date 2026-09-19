@@ -1,5 +1,4 @@
-//! Persistent Current module for the adb-storage crate.
-//!
+//! Module `persistent_current` for crate `adb-storage`.
 use std::path::Path;
 
 use adb_btree::BTree;
@@ -7,7 +6,7 @@ use adb_core::{Lsn, RowId, RowLocation};
 
 use crate::{CurrentRecord, HeapFile, StorageError};
 
-/// Persists the latest committed row version using a heap file plus a RowId B+Tree.
+/// Represents `PersistentCurrentStore` state used by this subsystem.
 pub struct PersistentCurrentStore {
     heap: HeapFile,
     index: BTree,
@@ -15,7 +14,7 @@ pub struct PersistentCurrentStore {
 
 /// Implements behavior for `PersistentCurrentStore`.
 impl PersistentCurrentStore {
-    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
+    /// Implements the `open` operation used by this subsystem.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, StorageError> {
         let dir = dir.as_ref();
         std::fs::create_dir_all(dir)?;
@@ -25,7 +24,7 @@ impl PersistentCurrentStore {
         })
     }
 
-    /// Returns the value visible for the requested key or row at the operation's default snapshot.
+    /// Implements the `get` operation used by this subsystem.
     pub fn get(&self, row_id: RowId) -> Result<Option<CurrentRecord>, StorageError> {
         let Some(location) = self.index.get(row_id)? else {
             return Ok(None);
@@ -52,10 +51,38 @@ impl PersistentCurrentStore {
         Ok(location)
     }
 
-    /// Flushes dirty state to the backing store and performs the subsystem's durability synchronization.
+    /// Implements the `flush` operation used by this subsystem.
     pub fn flush(&self) -> Result<(), StorageError> {
         self.heap.flush()?;
         self.index.flush()?;
         Ok(())
+    }
+
+    /// Implements the `entries` operation used by this subsystem.
+    pub fn entries(&self) -> Result<Vec<(RowId, CurrentRecord)>, StorageError> {
+        self.index
+            .scan_all()?
+            .into_iter()
+            .map(|(row_id, location)| {
+                let bytes = self.heap.read(location)?;
+                let record = bincode::deserialize(&bytes)?;
+                Ok((row_id, record))
+            })
+            .collect()
+    }
+
+    /// Implements the `root_page_id` operation used by this subsystem.
+    pub fn root_page_id(&self) -> adb_core::PageId {
+        self.index.root_page_id()
+    }
+
+    /// Implements the `index_page_count` operation used by this subsystem.
+    pub fn index_page_count(&self) -> Result<u64, StorageError> {
+        Ok(self.index.page_count()?)
+    }
+
+    /// Implements the `heap_page_count` operation used by this subsystem.
+    pub fn heap_page_count(&self) -> Result<u64, StorageError> {
+        self.heap.page_count()
     }
 }

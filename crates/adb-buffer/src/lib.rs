@@ -1,5 +1,4 @@
-//! Lib module for the adb-buffer crate.
-//!
+//! Module `lib` for crate `adb-buffer`.
 pub mod buffer_pool;
 pub mod error;
 pub mod file_store;

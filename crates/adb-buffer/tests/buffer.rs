@@ -1,5 +1,4 @@
-//! Buffer module for the adb-buffer crate.
-//!
+//! Module `buffer` for crate `adb-buffer`.
 use std::sync::Arc;
 
 use adb_buffer::{BufferPool, FilePageStore};

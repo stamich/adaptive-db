@@ -1,5 +1,4 @@
-//! Tree module for the adb-btree crate.
-//!
+//! Module `tree` for crate `adb-btree`.
 use std::{path::Path, sync::Arc};
 
 use adb_buffer::{BufferPool, FilePageStore};
@@ -11,16 +10,16 @@ use crate::{
     codec::{decode_node, encode_node},
     error::BTreeError,
     meta::MetaStore,
-    node::{InternalNode, LeafNode, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES, Node},
+    node::{InternalNode, LeafNode, Node, MAX_INTERNAL_KEYS, MAX_LEAF_ENTRIES},
 };
 
-/// Represents `Split` state used by the src subsystem.
+/// Represents `Split` state used by this subsystem.
 struct Split {
     separator: RowId,
     right: PageId,
 }
 
-/// Implements the persistent primary B+Tree mapping RowId keys to heap RowLocation values.
+/// Represents `BTree` state used by this subsystem.
 pub struct BTree {
     pool: Arc<BufferPool>,
     root: RwLock<PageId>,
@@ -30,7 +29,7 @@ pub struct BTree {
 
 /// Implements behavior for `BTree`.
 impl BTree {
-    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
+    /// Implements the `open` operation used by this subsystem.
     pub fn open(
         data_path: impl AsRef<Path>,
         meta_path: impl AsRef<Path>,
@@ -51,6 +50,14 @@ impl BTree {
                 root
             }
         };
+        let page_count = pool.page_count()?;
+        if root.0 >= page_count {
+            return Err(BTreeError::Corrupt(format!(
+                "root page is outside page file: root={}, pages={page_count}",
+                root.0
+            )));
+        }
+
         Ok(Self {
             pool,
             root: RwLock::new(root),
@@ -59,15 +66,23 @@ impl BTree {
         })
     }
 
-    /// Returns the value visible for the requested key or row at the operation's default snapshot.
+    /// Implements the `get` operation used by this subsystem.
     pub fn get(&self, key: RowId) -> Result<Option<RowLocation>, BTreeError> {
         let _guard = self.tree_lock.lock();
         let mut page_id = *self.root.read();
+        let max_steps = self.pool.page_count()?.saturating_add(1);
+        let mut steps = 0u64;
         loop {
+            steps = steps.saturating_add(1);
+            if steps > max_steps {
+                return Err(BTreeError::Corrupt(
+                    "cycle detected while descending B+Tree".into(),
+                ));
+            }
             let node = self.pool.read(page_id, decode_node)??;
             match node {
                 Node::Leaf(leaf) => {
-                    return Ok(leaf.keys.binary_search(&key).ok().map(|i| leaf.values[i]));
+                    return Ok(leaf.keys.binary_search(&key).ok().map(|i| leaf.values[i]))
                 }
                 Node::Internal(internal) => {
                     let mut idx = 0;
@@ -80,12 +95,12 @@ impl BTree {
         }
     }
 
-    /// Inserts a new item into the underlying page, heap, tree, or transaction-local mutation set.
+    /// Implements the `insert` operation used by this subsystem.
     pub fn insert(&self, key: RowId, value: RowLocation) -> Result<(), BTreeError> {
         self.insert_at_lsn(key, value, Lsn(0))
     }
 
-    /// Inserts or replaces an item and stamps changed pages with the supplied WAL LSN.
+    /// Implements the `insert_at_lsn` operation used by this subsystem.
     pub fn insert_at_lsn(
         &self,
         key: RowId,
@@ -94,7 +109,7 @@ impl BTree {
     ) -> Result<(), BTreeError> {
         let _guard = self.tree_lock.lock();
         let root = *self.root.read();
-        if let Some(split) = self.insert_recursive(root, key, value, lsn)? {
+        if let Some(split) = self.insert_recursive(root, key, value, lsn, 0)? {
             let new_root = self.pool.allocate_page(PageKind::BTreeInternal)?;
             let node = Node::Internal(InternalNode {
                 keys: vec![split.separator],
@@ -111,10 +126,68 @@ impl BTree {
         Ok(())
     }
 
-    /// Flushes dirty state to the backing store and performs the subsystem's durability synchronization.
+    /// Implements the `flush` operation used by this subsystem.
     pub fn flush(&self) -> Result<(), BTreeError> {
         self.pool.flush_all()?;
         Ok(())
+    }
+
+    /// Implements the `root_page_id` operation used by this subsystem.
+    pub fn root_page_id(&self) -> PageId {
+        *self.root.read()
+    }
+
+    /// Implements the `page_count` operation used by this subsystem.
+    pub fn page_count(&self) -> Result<u64, BTreeError> {
+        Ok(self.pool.page_count()?)
+    }
+
+    /// Implements the `scan_all` operation used by this subsystem.
+    pub fn scan_all(&self) -> Result<Vec<(RowId, RowLocation)>, BTreeError> {
+        let _guard = self.tree_lock.lock();
+        let mut page_id = *self.root.read();
+        let max_steps = self.pool.page_count()?.saturating_add(1);
+        let mut descent_steps = 0u64;
+
+        loop {
+            descent_steps = descent_steps.saturating_add(1);
+            if descent_steps > max_steps {
+                return Err(BTreeError::Corrupt(
+                    "cycle detected while locating first leaf".into(),
+                ));
+            }
+            match self.pool.read(page_id, decode_node)?? {
+                Node::Leaf(_) => break,
+                Node::Internal(internal) => {
+                    page_id = internal.children[0];
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut leaf_steps = 0u64;
+
+        loop {
+            leaf_steps = leaf_steps.saturating_add(1);
+            if leaf_steps > max_steps {
+                return Err(BTreeError::Corrupt("cycle detected in leaf chain".into()));
+            }
+            let node = self.pool.read(page_id, decode_node)??;
+            let Node::Leaf(leaf) = node else {
+                return Err(BTreeError::Corrupt(
+                    "leaf chain points to an internal node".to_string(),
+                ));
+            };
+
+            out.extend(leaf.keys.iter().copied().zip(leaf.values.iter().copied()));
+
+            match leaf.next {
+                Some(next) => page_id = next,
+                None => break,
+            }
+        }
+
+        Ok(out)
     }
 
     /// Implements the `insert_recursive` operation used by this subsystem.
@@ -124,7 +197,13 @@ impl BTree {
         key: RowId,
         value: RowLocation,
         lsn: Lsn,
+        depth: usize,
     ) -> Result<Option<Split>, BTreeError> {
+        if depth > 1024 {
+            return Err(BTreeError::Corrupt(
+                "B+Tree depth exceeds hardened limit".into(),
+            ));
+        }
         let node = self.pool.read(page_id, decode_node)??;
         match node {
             Node::Leaf(mut leaf) => {
@@ -180,7 +259,7 @@ impl BTree {
                     child_idx += 1;
                 }
                 let child = internal.children[child_idx];
-                if let Some(split) = self.insert_recursive(child, key, value, lsn)? {
+                if let Some(split) = self.insert_recursive(child, key, value, lsn, depth + 1)? {
                     internal.keys.insert(child_idx, split.separator);
                     internal.children.insert(child_idx + 1, split.right);
                 } else {
