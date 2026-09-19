@@ -1,7 +1,5 @@
 # Benchmark results
 
-Store machine-readable benchmark runs here. Suggested naming:
-
-`1.5.2-<hostname>-<date>.json`
-
-The repository intentionally does not ship invented benchmark numbers. Generate them on the target machine with the release command documented in `examples/README.md`.
+Store machine-specific Milestone 1.6.2 JSON outputs here. Do not commit fabricated baseline
+numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
+Rust version and whether the filesystem/cache state was warm or cold.

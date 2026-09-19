@@ -1,3 +1,4 @@
+//! Module `lib` for crate `adb-tx`.
 pub mod manager;
 pub mod mutation;
 pub mod transaction;

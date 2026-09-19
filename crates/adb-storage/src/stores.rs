@@ -1,10 +1,9 @@
-//! Stores module for the adb-storage crate.
-//!
+//! Module `stores` for crate `adb-storage`.
 use adb_core::{CommitTs, Row, RowId};
 
 use crate::{CurrentRecord, CurrentStore, HistoricalVersion, VersionStore};
 
-/// Groups the current-state and historical-version stores used by the MVCC engine.
+/// Represents `Stores` state used by this subsystem.
 #[derive(Debug, Default)]
 pub struct Stores {
     pub current: CurrentStore,
@@ -13,7 +12,7 @@ pub struct Stores {
 
 /// Implements behavior for `Stores`.
 impl Stores {
-    /// Reads the `at` value from the binary representation.
+    /// Implements the `read_at` operation used by this subsystem.
     pub fn read_at(&self, row_id: RowId, ts: CommitTs) -> Option<Row> {
         if let Some(current) = self.current.get(row_id) {
             if current.commit_ts <= ts {
@@ -26,7 +25,7 @@ impl Stores {
             .and_then(|version| version.value.clone())
     }
 
-    /// Applies the `put` operation to the relevant storage state.
+    /// Implements the `apply_put` operation used by this subsystem.
     pub fn apply_put(&mut self, row_id: RowId, value: Row, commit_ts: CommitTs) {
         if let Some(old) = self.current.remove(row_id) {
             self.versions.push(
@@ -48,7 +47,7 @@ impl Stores {
         );
     }
 
-    /// Applies the `delete` operation to the relevant storage state.
+    /// Implements the `apply_delete` operation used by this subsystem.
     pub fn apply_delete(&mut self, row_id: RowId, commit_ts: CommitTs) {
         if let Some(old) = self.current.remove(row_id) {
             self.versions.push(

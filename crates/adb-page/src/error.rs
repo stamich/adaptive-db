@@ -1,8 +1,7 @@
-//! Error module for the adb-page crate.
-//!
+//! Module `error` for crate `adb-page`.
 use thiserror::Error;
 
-/// Enumerates the supported `PageError` variants used by this subsystem.
+/// Enumerates `PageError` alternatives used by this subsystem.
 #[derive(Debug, Error)]
 pub enum PageError {
     #[error("page is full")]

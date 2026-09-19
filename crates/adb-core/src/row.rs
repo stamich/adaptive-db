@@ -1,12 +1,11 @@
-//! Row module for the adb-core crate.
-//!
+//! Module `row` for crate `adb-core`.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{FieldId, Value};
 
-/// Represents `Row` state used by the src subsystem.
+/// Represents `Row` state used by this subsystem.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Row {
     pub fields: BTreeMap<FieldId, Value>,
@@ -14,7 +13,7 @@ pub struct Row {
 
 /// Implements behavior for `Row`.
 impl Row {
-    /// Creates a new instance initialized with the supplied state.
+    /// Implements the `new` operation used by this subsystem.
     pub fn new() -> Self {
         Self::default()
     }
@@ -25,7 +24,7 @@ impl Row {
         self
     }
 
-    /// Returns the value visible for the requested key or row at the operation's default snapshot.
+    /// Implements the `get` operation used by this subsystem.
     pub fn get(&self, field_id: FieldId) -> Option<&Value> {
         self.fields.get(&field_id)
     }

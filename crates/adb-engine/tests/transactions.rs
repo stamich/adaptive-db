@@ -1,5 +1,4 @@
-//! Transactions module for the adb-engine crate.
-//!
+//! Module `transactions` for crate `adb-engine`.
 mod common;
 use adb_core::RowId;
 use adb_engine::{Database, DbError};
@@ -32,7 +31,7 @@ fn transaction_reads_its_own_writes() {
     db.rollback(tx).unwrap();
 }
 
-/// Writes the `write conflict is detected` value into the binary representation.
+/// Implements the `write_write_conflict_is_detected` operation used by this subsystem.
 #[test]
 fn write_write_conflict_is_detected() {
     let dir = tempdir().unwrap();

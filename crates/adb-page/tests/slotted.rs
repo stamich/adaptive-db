@@ -1,5 +1,4 @@
-//! Slotted module for the adb-page crate.
-//!
+//! Module `slotted` for crate `adb-page`.
 use adb_core::PageId;
 use adb_page::{Page, PageKind, SlottedPage};
 

@@ -1,31 +1,41 @@
-# Milestone 1.5 architecture
+# Milestone 1.6 architecture
 
 ```text
-Transaction API
-      |
-      v
-Transaction Manager / Snapshot Isolation
-      |
-      +------> logical WAL -> fsync
-      |                        |
-      |                        v
-      |                    Commit LSN
-      v
-Persistent Current Store
-      |
-      +--> B+Tree: RowId -> RowLocation
-      |
-      +--> HeapFile -> SlottedPage -> BufferPool -> FilePageStore
-      |
-      +--> flush
-      v
-Checkpoint(last_applied_commit_lsn, last_commit_ts)
-      |
-      v
-publish CommitTs
+                         Rust data plane
 
-Historical versions:
-logical WAL -> recovery -> in-memory VersionStore
+             +------------------------------+
+             | Transaction / MVCC           |
+             +---------------+--------------+
+                             |
+                             v
+             +------------------------------+
+             | Segmented logical WAL        |
+             | BEGIN / VERSION / PUT /      |
+             | DELETE / COMMIT              |
+             +---------------+--------------+
+                             |
+                            fsync
+                             |
+              +--------------+--------------+
+              |                             |
+              v                             v
+    +--------------------+       +----------------------+
+    | Persistent Current |       | Persistent Versions  |
+    |                    |       |                      |
+    | RowId              |       | (RowId, BeginTs)     |
+    |   -> B+Tree        |       |    -> VersionBTree   |
+    |   -> RowLocation   |       |    -> RowLocation    |
+    |   -> Heap page     |       |    -> Version heap   |
+    +----------+---------+       +-----------+----------+
+               |                             |
+               +-------------+---------------+
+                             |
+                             v
+                    +----------------+
+                    | Checkpoint v2  |
+                    +----------------+
 ```
 
-`page_lsn` is stored on heap and B+Tree pages. Milestone 1.5 enforces WAL-before-data at the engine level; a later milestone can use pageLSN for physiological redo/ARIES-like recovery.
+Before-images są zapisane w WAL jawnie. Dzięki temu crash po utrwaleniu
+Current Store, ale przed utrwaleniem Version Store nie powoduje utraty
+historycznej wartości.

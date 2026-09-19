@@ -1,12 +1,11 @@
-//! Transaction module for the adb-tx crate.
-//!
+//! Module `transaction` for crate `adb-tx`.
 use std::collections::HashMap;
 
 use adb_core::{CommitTs, Row, RowId, TxId};
 
 use crate::Mutation;
 
-/// Represents one MVCC transaction, including its snapshot timestamp and transaction-local write set.
+/// Represents `Transaction` state used by this subsystem.
 #[derive(Debug)]
 pub struct Transaction {
     pub(crate) id: TxId,
@@ -17,7 +16,7 @@ pub struct Transaction {
 
 /// Implements behavior for `Transaction`.
 impl Transaction {
-    /// Creates a new instance initialized with the supplied state.
+    /// Implements the `new` operation used by this subsystem.
     pub(crate) fn new(id: TxId, snapshot_ts: CommitTs) -> Self {
         Self {
             id,
@@ -66,7 +65,7 @@ impl Transaction {
         self.closed = true;
     }
 
-    /// Returns whether the `closed` condition holds.
+    /// Implements the `is_closed` operation used by this subsystem.
     pub fn is_closed(&self) -> bool {
         self.closed
     }

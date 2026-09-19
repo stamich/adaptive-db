@@ -1,75 +1,63 @@
-# Milestone 1.5.1 — Security / Durability Review
+# Milestone 1.6.1 — Security, Durability and Recovery Review
 
-## Inherited WAL hardening
+## Fixed high-severity correctness/resilience issues
 
-1.5.1 includes the complete 1.0.1 WAL hardening:
-- incomplete crash-tail truncation before append,
-- 16 MiB per-record payload bound,
-- checked frame length conversion,
-- framed corruption remains a hard error.
+### Segmented WAL crash tail
+The original 1.6 reader tolerated an incomplete final segment suffix, but the writer reopened
+at physical EOF. New commits could therefore be appended behind damaged bytes and become
+invisible on a later restart. 1.6.1 scans the newest segment to its last complete frame and
+truncates only the incomplete suffix before append.
 
-## Hardened page/storage issues
+### Unbounded WAL payload allocation
+Persisted `payload_len` is now capped at 16 MiB before allocating. This prevents a corrupted
+header from requesting multi-gigabyte memory.
 
-### HIGH — corrupted B+Tree counts could panic the process
-The original codec trusted persisted leaf/internal counts and sliced payloads with `unwrap`.
-1.5.1 validates:
-- maximum entry/key counts,
-- required payload byte size,
-- leaf key/value shape,
-- internal `children = keys + 1`,
-- strict key ordering,
-- every primitive read/write range.
+### Missing/non-tail WAL segments
+All retained segment ids must be contiguous. A partial frame is tolerated only in the newest
+segment; truncation in an older segment is corruption.
 
-Corruption now produces `BTreeError::Corrupt` rather than a data-dependent slice panic.
+### Temporal B+Tree disk corruption
+Both RowId and `(RowId, CommitTs)` codecs now validate count, encoded byte range, node shape,
+and strictly increasing key order. Persisted counts no longer drive unchecked slicing or
+`Vec::with_capacity` without a maximum.
 
-### HIGH — pages had no checksum
-New/rewritten pages use page format v1 and CRC32 over the complete 16 KiB page.
+### B+Tree cycles and invalid roots
+Root ids are checked against physical page count. Descent and leaf-chain scans are bounded by
+page count, and recursive inserts have a hardened depth ceiling, preventing corrupted pointers
+from spinning forever or recursively overflowing the stack.
 
-Legacy Milestone 1.5 pages (format marker 0) remain readable after structural validation so the
-hardening patch can open existing data. They are automatically upgraded to checksummed v1 on write.
-This means a never-rewritten legacy page retains the original 1.5 corruption-detection limitation.
+### Page-file integrity
+Hardened pages carry a format marker and non-zero CRC. Free-space bounds and heap slot ranges
+are checked before higher-level decoding. An incomplete trailing physical page is removed on
+open. Legacy pre-hardened pages remain readable after structural validation and are upgraded
+on write.
 
-### HIGH — common page header/slot metadata was insufficiently validated
-1.5.1 validates:
-- page magic/kind/version,
-- `PAGE_HEADER_SIZE <= free_start <= free_end <= PAGE_SIZE`,
-- heap slot-directory size,
-- every slot tuple range,
-- overflow-safe range arithmetic.
+### Root/checkpoint crash consistency
+B+Tree root metadata and checkpoint v2 now have magic/version/length/CRC envelopes and use:
+`write temp -> fsync temp -> rename -> fsync parent directory`.
 
-### HIGH — partial page-file crash suffix
-A page file whose length is not a multiple of 16 KiB is normalized by truncating only the incomplete
-last page before allocation/read use. Checked offset arithmetic prevents wraparound.
+### Logical WAL state
+Recovery rejects mutation/version/commit/abort records without a preceding BEGIN, duplicate
+transaction reuse, and invalid historical intervals.
 
-### MEDIUM — poisoned `std::sync::Mutex<File>` panic path
-The file page store now uses `parking_lot::Mutex`, eliminating `.lock().unwrap()` poisoning failures.
+## Positive properties retained
+- WAL is synchronized before Current/Version pages become durable.
+- Version Store is independently persistent.
+- Current and Version checkpoint frontiers remain independent.
+- Recovery remains logically idempotent.
+- Production Rust code contains no `unsafe` block in Milestone 1.6.1.
 
-### MEDIUM — panic could leak manual BufferPool pins
-Read/write callbacks execute while the BufferPool state mutex is held, so manual `pins += 1/-=1`
-was unnecessary and panic-sensitive. 1.5.1 removes that counter from the synchronous pool.
-
-### HIGH — root/checkpoint metadata replacement lacked durability framing
-B+Tree root metadata and checkpoint metadata now use:
-- magic,
-- version,
-- payload length bound,
-- CRC32,
-- temporary file,
-- `sync_all`,
-- atomic rename,
-- parent-directory `sync_all`.
-
-Original 1.5 bare-bincode root/checkpoint files remain readable and are upgraded on the next save.
-
-## Residual risks intentionally not solved in 1.5.1
-
-- Root/checkpoint metadata has one active file, not the later dual-slot fallback design.
-  A corrupt latest metadata file therefore fails open instead of automatically selecting a previous generation.
-- Current heap is append-oriented and does not reclaim obsolete records; update-heavy workloads cause file growth.
-- There is no page free list or general compaction.
-- Historical Version Store is not yet independently persistent; Milestone 1.6 addresses that layer.
-- WAL remains a single file and whole-WAL recovery remains memory proportional to WAL size.
-- B+Tree uses a coarse tree mutex; this is correctness-first, not high-concurrency production design.
-- CRC32 detects accidental corruption but is not a cryptographic integrity/MAC mechanism.
-
-The patch deliberately does not import Milestone 1.6+ features into this historical milestone.
+## Residual risks / intentional scope limits
+- Recovery still materializes all retained WAL records in memory; very large retained WAL can
+  produce high restart memory usage.
+- Integrity verification and statistics materialize large index/history sets and are not
+  streaming operations.
+- Root/checkpoint metadata has one active file, not a dual-slot previous-generation fallback.
+- CRC32 detects accidental corruption; it is not a cryptographic MAC against a filesystem
+  attacker capable of rewriting data and checksum together.
+- The Current/Version heaps are append-oriented and do not reclaim obsolete physical records.
+- B+Trees use coarse tree mutexes and do not implement delete/merge.
+- `TransactionManager::publish_commit` still contains an internal monotonicity assertion; live
+  commit timestamp allocation makes it unreachable under valid engine state, but it remains an
+  invariant panic rather than a typed error.
+- No user authentication/encryption exists: 1.6 is an embedded storage-engine milestone.

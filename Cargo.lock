@@ -3,18 +3,20 @@
 version = 4
 
 [[package]]
-name = "adb-benchmark-1-5-2"
-version = "0.1.0"
+name = "adb-benchmark-1-6-2"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-btree",
  "adb-core",
  "adb-engine",
+ "adb-storage",
+ "adb-wal",
  "tempfile",
 ]
 
 [[package]]
 name = "adb-btree"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-buffer",
  "adb-core",
@@ -29,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "adb-buffer"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
  "adb-page",
@@ -40,27 +42,27 @@ dependencies = [
 
 [[package]]
 name = "adb-core"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "serde",
  "thiserror",
 ]
 
 [[package]]
-name = "adb-demo-1-5-2"
-version = "0.1.0"
+name = "adb-demo-1-6-2"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-btree",
  "adb-core",
  "adb-engine",
- "adb-page",
  "adb-storage",
+ "adb-wal",
  "tempfile",
 ]
 
 [[package]]
 name = "adb-engine"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
  "adb-storage",
@@ -73,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "adb-page"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
  "crc32fast",
@@ -82,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "adb-storage"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-btree",
  "adb-buffer",
@@ -97,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "adb-tx"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
  "adb-storage",
@@ -106,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "adb-wal"
-version = "0.1.0"
+version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
  "bincode",

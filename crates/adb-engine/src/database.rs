@@ -1,81 +1,118 @@
-//! Database module for the adb-engine crate.
-//!
+//! Module `database` for crate `adb-engine`.
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use adb_core::{CommitTs, Lsn, Row, RowId, TxId};
+use adb_core::{CommitTs, Row, RowId};
 use adb_storage::{
-    Checkpoint, CheckpointStore, CurrentRecord, HistoricalVersion, PersistentCurrentStore,
-    PersistentVersionStore,
+    Checkpoint, CheckpointStore, CurrentRecord, HistoricalVersion, IntegrityChecker,
+    IntegrityReport, PersistentCurrentStore, PersistentVersionStore, StorageStats,
 };
-use adb_tx::{Mutation, Transaction, TransactionManager, validate_write};
-use adb_wal::{WalReader, WalRecord, WalWriter};
-use parking_lot::{Mutex};
+use adb_tx::{validate_write, Mutation, Transaction, TransactionManager};
+use adb_wal::{SegmentedWalReader, SegmentedWalWriter, WalRecord, DEFAULT_SEGMENT_SIZE};
+use parking_lot::Mutex;
 
-use crate::{error::DbError, recovery::recover};
+use crate::{
+    error::DbError,
+    recovery::{analyze, collect_committed},
+};
 
-/// Defines the `WAL_FILE` constant used by this subsystem.
-const WAL_FILE: &str = "wal.log";
+/// Defines the `WAL_DIR` constant used by this subsystem.
+const WAL_DIR: &str = "wal";
 
-/// Represents an Adaptive DB database handle and coordinates transactions, WAL, storage, and recovery.
+/// Represents `Database` state used by this subsystem.
 pub struct Database {
     inner: Arc<DatabaseInner>,
 }
 
-/// Represents `DatabaseInner` state used by the src subsystem.
+/// Represents `DatabaseInner` state used by this subsystem.
 struct DatabaseInner {
     current: Mutex<PersistentCurrentStore>,
     versions: Mutex<PersistentVersionStore>,
-    wal: Mutex<WalWriter>,
+    wal: Mutex<SegmentedWalWriter>,
     tx_manager: Mutex<TransactionManager>,
     commit_lock: Mutex<()>,
     checkpoint: CheckpointStore,
-    wal_path: PathBuf,
+    wal_dir: PathBuf,
 }
 
 /// Implements behavior for `Database`.
 impl Database {
-    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
+    /// Implements the `open` operation used by this subsystem.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let dir = path.as_ref();
         fs::create_dir_all(dir)?;
-        let wal_path = dir.join(WAL_FILE);
-        let entries = if wal_path.exists() {
-            WalReader::open(&wal_path)?.read_all()?
-        } else {
-            Vec::new()
-        };
-        let logical = recover(entries.iter().map(|(_, r)| r.clone()));
 
+        let wal_dir = dir.join(WAL_DIR);
+        let entries = SegmentedWalReader::read_all(&wal_dir)?;
         let checkpoint = CheckpointStore::new(dir.join("checkpoint.meta"));
-        let cp = checkpoint.load()?;
+        let mut cp = checkpoint.load()?;
+
         let current = PersistentCurrentStore::open(dir.join("current"))?;
         let versions = PersistentVersionStore::open(dir.join("versions"))?;
 
-        replay_current_tail(&entries, cp.last_applied_commit_lsn, &current)?;
-        current.flush()?;
+        let committed = collect_committed(&entries)?;
 
-        let latest_commit_lsn = entries
-            .iter()
-            .rev()
-            .find_map(|(lsn, r)| matches!(r, WalRecord::Commit { .. }).then_some(lsn.0))
-            .unwrap_or(cp.last_applied_commit_lsn);
-        if logical.max_commit_ts > cp.last_commit_ts
-            || latest_commit_lsn > cp.last_applied_commit_lsn
-        {
-            checkpoint.save(Checkpoint {
-                last_applied_commit_lsn: latest_commit_lsn,
-                last_commit_ts: logical.max_commit_ts,
-            })?;
+        let mut newest_commit_lsn = cp.current_applied_lsn.max(cp.version_applied_lsn);
+
+        for (commit_lsn, tx_id, commit_ts, pending) in committed {
+            if commit_lsn.0 > cp.version_applied_lsn {
+                for (row_id, version) in &pending.versions {
+                    versions.put_at_lsn(*row_id, version, commit_lsn)?;
+                }
+            }
+
+            if commit_lsn.0 > cp.current_applied_lsn {
+                for (row_id, mutation) in &pending.mutations {
+                    let existing = current.get(*row_id)?;
+
+                    // Idempotent replay: do not replace a newer/equal
+                    // durable current version.
+                    if existing
+                        .as_ref()
+                        .is_some_and(|record| record.commit_ts >= commit_ts)
+                    {
+                        continue;
+                    }
+
+                    let record = match mutation {
+                        Mutation::Put(row) => CurrentRecord {
+                            commit_ts,
+                            value: Some(row.clone()),
+                        },
+                        Mutation::Delete => CurrentRecord {
+                            commit_ts,
+                            value: None,
+                        },
+                    };
+
+                    current.put_at_lsn(*row_id, &record, commit_lsn)?;
+                }
+            }
+
+            newest_commit_lsn = newest_commit_lsn.max(commit_lsn.0);
+            cp.last_commit_ts = cp.last_commit_ts.max(commit_ts.0);
+            cp.last_tx_id = cp.last_tx_id.max(tx_id.0);
         }
 
+        current.flush()?;
+        versions.flush()?;
+
+        cp.current_applied_lsn = newest_commit_lsn;
+        cp.version_applied_lsn = newest_commit_lsn;
+
+        let summary = analyze(entries.iter().map(|(_, record)| record.clone()));
+
+        cp.last_commit_ts = cp.last_commit_ts.max(summary.max_commit_ts);
+        cp.last_tx_id = cp.last_tx_id.max(summary.max_tx_id);
+        checkpoint.save(cp)?;
+
         let mut tx_manager = TransactionManager::default();
-        tx_manager.advance_after_recovery(logical.max_tx_id, logical.max_commit_ts);
-        let wal = WalWriter::open(&wal_path)?;
+        tx_manager.advance_after_recovery(cp.last_tx_id, cp.last_commit_ts);
+
+        let wal = SegmentedWalWriter::open(&wal_dir, DEFAULT_SEGMENT_SIZE)?;
 
         Ok(Self {
             inner: Arc::new(DatabaseInner {
@@ -85,19 +122,24 @@ impl Database {
                 tx_manager: Mutex::new(tx_manager),
                 commit_lock: Mutex::new(()),
                 checkpoint,
-                wal_path,
+                wal_dir,
             }),
         })
     }
 
-    /// Starts a new transaction at the latest published MVCC snapshot.
+    /// Implements the `begin` operation used by this subsystem.
     pub fn begin(&self) -> Transaction {
         self.inner.tx_manager.lock().begin()
     }
 
-    /// Returns the value visible for the requested key or row at the operation's default snapshot.
+    /// Implements the `get` operation used by this subsystem.
     pub fn get(&self, row_id: RowId) -> Result<Option<Row>, DbError> {
-        Ok(self.inner.current.lock().get(row_id)?.and_then(|r| r.value))
+        Ok(self
+            .inner
+            .current
+            .lock()
+            .get(row_id)?
+            .and_then(|record| record.value))
     }
 
     /// Implements the `get_at` operation used by this subsystem.
@@ -134,42 +176,69 @@ impl Database {
         Ok(history)
     }
 
-    /// Returns the row visible inside the supplied transaction, including transaction-local writes.
+    /// Implements the `get_in_tx` operation used by this subsystem.
     pub fn get_in_tx(&self, tx: &Transaction, row_id: RowId) -> Result<Option<Row>, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
         }
+
         if let Some(local) = tx.local_read(row_id) {
             return Ok(local);
         }
+
         self.get_at(row_id, tx.snapshot_ts())
     }
 
-    /// Validates and durably commits a transaction before publishing its commit timestamp.
+    /// Implements the `commit` operation used by this subsystem.
     pub fn commit(&self, mut tx: Transaction) -> Result<CommitTs, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
         }
-        let _guard = self.inner.commit_lock.lock();
+
+        let _commit_guard = self.inner.commit_lock.lock();
+
+        // Validate and capture before-images while commit order is stable.
+        let mut before_images = Vec::new();
 
         {
             let current = self.inner.current.lock();
+
             for row_id in tx.writes().keys() {
-                let record = current.get(*row_id)?;
-                if !validate_write(record.as_ref(), &tx) {
+                let old = current.get(*row_id)?;
+
+                if !validate_write(old.as_ref(), &tx) {
                     return Err(DbError::TransactionConflict);
+                }
+
+                if let Some(old) = old {
+                    before_images.push((*row_id, old));
                 }
             }
         }
 
         let commit_ts = self.inner.tx_manager.lock().allocate_commit_ts();
+
         let commit_lsn;
+
         {
             let mut wal = self.inner.wal.lock();
+
             wal.append(&WalRecord::Begin {
                 tx_id: tx.id(),
                 snapshot_ts: tx.snapshot_ts(),
             })?;
+
+            // Persist before-images in WAL before the new values.
+            for (row_id, old) in &before_images {
+                wal.append(&WalRecord::Version {
+                    tx_id: tx.id(),
+                    row_id: *row_id,
+                    begin_ts: old.commit_ts,
+                    end_ts: commit_ts,
+                    value: old.value.clone(),
+                })?;
+            }
+
             for (row_id, mutation) in tx.writes() {
                 match mutation {
                     Mutation::Put(row) => {
@@ -179,6 +248,7 @@ impl Database {
                             value: row.clone(),
                         })?;
                     }
+
                     Mutation::Delete => {
                         wal.append(&WalRecord::Delete {
                             tx_id: tx.id(),
@@ -187,124 +257,119 @@ impl Database {
                     }
                 }
             }
+
             commit_lsn = wal.append(&WalRecord::Commit {
                 tx_id: tx.id(),
                 commit_ts,
             })?;
+
+            // Durability point: WAL before all data pages.
             wal.sync()?;
         }
 
         {
-            let current = self.inner.current.lock();
             let versions = self.inner.versions.lock();
+
+            for (row_id, old) in &before_images {
+                versions.put_at_lsn(
+                    *row_id,
+                    &HistoricalVersion {
+                        begin_ts: old.commit_ts,
+                        end_ts: commit_ts,
+                        value: old.value.clone(),
+                    },
+                    commit_lsn,
+                )?;
+            }
+
+            versions.flush()?;
+        }
+
+        {
+            let current = self.inner.current.lock();
+
             for (row_id, mutation) in tx.writes() {
-                if let Some(old) = current.get(*row_id)? {
-                    versions.put_at_lsn(
-                        *row_id,
-                        &HistoricalVersion {
-                            begin_ts: old.commit_ts,
-                            end_ts: commit_ts,
-                            value: old.value,
-                        },
-                        commit_lsn,
-                    )?;
-                }
                 let record = match mutation {
                     Mutation::Put(row) => CurrentRecord {
                         commit_ts,
                         value: Some(row.clone()),
                     },
+
                     Mutation::Delete => CurrentRecord {
                         commit_ts,
                         value: None,
                     },
                 };
+
                 current.put_at_lsn(*row_id, &record, commit_lsn)?;
             }
+
             current.flush()?;
         }
 
+        // Publish checkpoint only after both stores are durable.
         self.inner.checkpoint.save(Checkpoint {
-            last_applied_commit_lsn: commit_lsn.0,
+            format_version: adb_storage::CHECKPOINT_FORMAT_VERSION,
+            current_applied_lsn: commit_lsn.0,
+            version_applied_lsn: commit_lsn.0,
             last_commit_ts: commit_ts.0,
+            last_tx_id: tx.id().0,
         })?;
+
         self.inner.tx_manager.lock().publish_commit(commit_ts);
+
         tx.mark_closed();
         Ok(commit_ts)
     }
 
-    /// Closes a transaction without applying its local mutations.
+    /// Implements the `rollback` operation used by this subsystem.
     pub fn rollback(&self, mut tx: Transaction) -> Result<(), DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
         }
+
         tx.mark_closed();
         Ok(())
     }
 
-    /// Implements the `wal_path` operation used by this subsystem.
-    pub fn wal_path(&self) -> &Path {
-        &self.inner.wal_path
-    }
-}
+    /// Implements the `storage_stats` operation used by this subsystem.
+    pub fn storage_stats(&self) -> Result<StorageStats, DbError> {
+        let current = self.inner.current.lock();
+        let versions = self.inner.versions.lock();
 
-/// Implements the `replay_current_tail` operation used by this subsystem.
-fn replay_current_tail(
-    entries: &[(Lsn, WalRecord)],
-    checkpoint_lsn: u64,
-    current: &PersistentCurrentStore,
-) -> Result<(), DbError> {
-    /// Represents `Pending` state used by the src subsystem.
-    #[derive(Default)]
-    struct Pending {
-        mutations: Vec<(RowId, Mutation)>,
+        Ok(StorageStats {
+            current_rows: current.entries()?.len() as u64,
+            historical_versions: versions.scan_all()?.len() as u64,
+            current_heap_pages: current.heap_page_count()?,
+            current_index_pages: current.index_page_count()?,
+            version_heap_pages: versions.heap_page_count()?,
+            version_index_pages: versions.index_page_count()?,
+        })
     }
-    let mut pending: HashMap<TxId, Pending> = HashMap::new();
 
-    for (lsn, record) in entries {
-        match record {
-            WalRecord::Begin { tx_id, .. } => {
-                pending.entry(*tx_id).or_default();
-            }
-            WalRecord::Version { tx_id, .. } => {
-                pending.entry(*tx_id).or_default();
-            }
-            WalRecord::Put {
-                tx_id,
-                row_id,
-                value,
-            } => pending
-                .entry(*tx_id)
-                .or_default()
-                .mutations
-                .push((*row_id, Mutation::Put(value.clone()))),
-            WalRecord::Delete { tx_id, row_id } => pending
-                .entry(*tx_id)
-                .or_default()
-                .mutations
-                .push((*row_id, Mutation::Delete)),
-            WalRecord::Abort { tx_id } => {
-                pending.remove(tx_id);
-            }
-            WalRecord::Commit { tx_id, commit_ts } => {
-                let tx = pending.remove(tx_id).unwrap_or_default();
-                if lsn.0 > checkpoint_lsn {
-                    for (row_id, mutation) in tx.mutations {
-                        let record = match mutation {
-                            Mutation::Put(row) => CurrentRecord {
-                                commit_ts: *commit_ts,
-                                value: Some(row),
-                            },
-                            Mutation::Delete => CurrentRecord {
-                                commit_ts: *commit_ts,
-                                value: None,
-                            },
-                        };
-                        current.put_at_lsn(row_id, &record, *lsn)?;
-                    }
-                }
-            }
-        }
+    /// Implements the `verify` operation used by this subsystem.
+    pub fn verify(&self) -> Result<IntegrityReport, DbError> {
+        let current = self.inner.current.lock();
+        let versions = self.inner.versions.lock();
+
+        Ok(IntegrityChecker::verify(&current, &versions)?)
     }
-    Ok(())
+
+    /// Basic WAL retention for Milestone 1.6.
+    /// Safe because Current and Version stores are independently persistent.
+    pub fn prune_wal_before_checkpoint(&self) -> Result<usize, DbError> {
+        let cp = self.inner.checkpoint.load()?;
+        let removed = self
+            .inner
+            .wal
+            .lock()
+            .prune_segments_before(cp.replay_lsn())?;
+
+        Ok(removed)
+    }
+
+    /// Implements the `wal_dir` operation used by this subsystem.
+    pub fn wal_dir(&self) -> &Path {
+        &self.inner.wal_dir
+    }
 }

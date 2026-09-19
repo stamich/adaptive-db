@@ -1,5 +1,4 @@
-//! Mvcc module for the adb-engine crate.
-//!
+//! Module `mvcc` for crate `adb-engine`.
 mod common;
 use adb_core::RowId;
 use adb_engine::Database;

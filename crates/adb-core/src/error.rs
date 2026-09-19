@@ -1,8 +1,7 @@
-//! Error module for the adb-core crate.
-//!
+//! Module `error` for crate `adb-core`.
 use thiserror::Error;
 
-/// Enumerates the supported `CoreError` variants used by this subsystem.
+/// Enumerates `CoreError` alternatives used by this subsystem.
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("invalid data: {0}")]

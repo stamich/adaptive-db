@@ -1,24 +1,23 @@
-//! Ids module for the adb-core crate.
-//!
+//! Module `ids` for crate `adb-core`.
 use serde::{Deserialize, Serialize};
 
-/// Represents `RowId` state used by the src subsystem.
+/// Represents `RowId` state used by this subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RowId(pub u128);
 
-/// Represents `TxId` state used by the src subsystem.
+/// Represents `TxId` state used by this subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TxId(pub u64);
 
-/// Represents `CommitTs` state used by the src subsystem.
+/// Represents `CommitTs` state used by this subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CommitTs(pub u64);
 
-/// Represents `Lsn` state used by the src subsystem.
+/// Represents `Lsn` state used by this subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Lsn(pub u64);
 
-/// Represents `PageId` state used by the src subsystem.
+/// Represents `PageId` state used by this subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageId(pub u64);
 

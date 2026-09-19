@@ -1,5 +1,4 @@
-//! Buffer Pool module for the adb-buffer crate.
-//!
+//! Module `buffer_pool` for crate `adb-buffer`.
 use std::{collections::HashMap, sync::Arc};
 
 use adb_core::PageId;
@@ -8,20 +7,21 @@ use parking_lot::Mutex;
 
 use crate::{BufferError, PageStore};
 
-/// Represents `Frame` state used by the src subsystem.
+/// Represents `Frame` state used by this subsystem.
 struct Frame {
     page: Page,
     dirty: bool,
+    pins: u32,
     last_used: u64,
 }
 
-/// Represents `State` state used by the src subsystem.
+/// Represents `State` state used by this subsystem.
 struct State {
     frames: HashMap<PageId, Frame>,
     clock: u64,
 }
 
-/// Caches database pages, tracks dirty state, and evicts unpinned frames when capacity is reached.
+/// Represents `BufferPool` state used by this subsystem.
 pub struct BufferPool {
     store: Arc<dyn PageStore>,
     capacity: usize,
@@ -30,10 +30,8 @@ pub struct BufferPool {
 
 /// Implements behavior for `BufferPool`.
 impl BufferPool {
-    /// Creates a new instance initialized with the supplied state.
+    /// Implements the `new` operation used by this subsystem.
     pub fn new(store: Arc<dyn PageStore>, capacity: usize) -> Self {
-        // A zero-page pool is unusable and previously panicked. Harden it to the smallest
-        // meaningful capacity so configuration errors cannot terminate the process.
         let capacity = capacity.max(1);
         Self {
             store,
@@ -45,12 +43,12 @@ impl BufferPool {
         }
     }
 
-    /// Returns the number of complete fixed-size pages currently present in the backing store.
+    /// Implements the `page_count` operation used by this subsystem.
     pub fn page_count(&self) -> Result<u64, BufferError> {
         self.store.page_count()
     }
 
-    /// Allocates and initializes a new fixed-size database page.
+    /// Implements the `allocate_page` operation used by this subsystem.
     pub fn allocate_page(&self, kind: PageKind) -> Result<PageId, BufferError> {
         let page = self.store.allocate_page(kind)?;
         let id = page.id;
@@ -63,6 +61,7 @@ impl BufferPool {
             Frame {
                 page,
                 dirty: false,
+                pins: 0,
                 last_used: used,
             },
         );
@@ -75,13 +74,10 @@ impl BufferPool {
         self.load_locked(&mut state, page_id)?;
         state.clock += 1;
         let used = state.clock;
-        let frame = state
-            .frames
-            .get_mut(&page_id)
-            .ok_or(BufferError::MissingPage(page_id.0))?;
-        // The state mutex remains held while the closure runs, so this frame cannot be
-        // evicted concurrently. Avoid manual pin increments whose decrement could be skipped
-        // if caller code panics.
+        let frame = state.frames.get_mut(&page_id).ok_or_else(|| {
+            BufferError::CorruptStore("loaded page missing from buffer state".into())
+        })?;
+        // The state mutex keeps the frame non-evictable for the closure lifetime.
         frame.last_used = used;
         Ok(f(&frame.page))
     }
@@ -96,18 +92,17 @@ impl BufferPool {
         self.load_locked(&mut state, page_id)?;
         state.clock += 1;
         let used = state.clock;
-        let frame = state
-            .frames
-            .get_mut(&page_id)
-            .ok_or(BufferError::MissingPage(page_id.0))?;
-        // The state mutex itself pins the frame for the closure's lifetime.
+        let frame = state.frames.get_mut(&page_id).ok_or_else(|| {
+            BufferError::CorruptStore("loaded page missing from buffer state".into())
+        })?;
+        // The state mutex keeps the frame non-evictable for the closure lifetime.
         frame.last_used = used;
         let result = f(&mut frame.page);
         frame.dirty = true;
         Ok(result)
     }
 
-    /// Writes all dirty cached pages and synchronizes the backing page store.
+    /// Implements the `flush_all` operation used by this subsystem.
     pub fn flush_all(&self) -> Result<(), BufferError> {
         let mut state = self.state.lock();
         for frame in state.frames.values_mut() {
@@ -133,6 +128,7 @@ impl BufferPool {
             Frame {
                 page,
                 dirty: false,
+                pins: 0,
                 last_used: used,
             },
         );
@@ -147,13 +143,13 @@ impl BufferPool {
         let victim = state
             .frames
             .iter()
+            .filter(|(_, frame)| frame.pins == 0)
             .min_by_key(|(_, frame)| frame.last_used)
             .map(|(id, _)| *id)
             .ok_or(BufferError::NoEvictableFrame)?;
-        let frame = state
-            .frames
-            .remove(&victim)
-            .ok_or(BufferError::NoEvictableFrame)?;
+        let frame = state.frames.remove(&victim).ok_or_else(|| {
+            BufferError::CorruptStore("selected victim missing from buffer state".into())
+        })?;
         if frame.dirty {
             self.store.write_page(&frame.page)?;
         }
