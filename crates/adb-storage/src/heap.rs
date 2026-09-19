@@ -1,5 +1,4 @@
-//! Heap module for the adb-storage crate.
-//!
+//! Module `heap` for crate `adb-storage`.
 use std::{path::Path, sync::Arc};
 
 use adb_buffer::{BufferPool, FilePageStore};
@@ -8,14 +7,14 @@ use adb_page::{PageError, PageKind, SlottedPage};
 
 use crate::StorageError;
 
-/// Stores serialized row records in append-oriented slotted heap pages.
+/// Represents `HeapFile` state used by this subsystem.
 pub struct HeapFile {
     pool: Arc<BufferPool>,
 }
 
 /// Implements behavior for `HeapFile`.
 impl HeapFile {
-    /// Opens or creates the underlying resource and reconstructs the runtime state required by this subsystem.
+    /// Implements the `open` operation used by this subsystem.
     pub fn open(path: impl AsRef<Path>, buffer_pages: usize) -> Result<Self, StorageError> {
         let store = Arc::new(FilePageStore::open(path)?);
         Ok(Self {
@@ -23,7 +22,7 @@ impl HeapFile {
         })
     }
 
-    /// Inserts a new item into the underlying page, heap, tree, or transaction-local mutation set.
+    /// Implements the `insert` operation used by this subsystem.
     pub fn insert(&self, bytes: &[u8], lsn: Lsn) -> Result<RowLocation, StorageError> {
         let count = self.pool.page_count()?;
         if count > 0 {
@@ -56,9 +55,14 @@ impl HeapFile {
         Ok(bytes)
     }
 
-    /// Flushes dirty state to the backing store and performs the subsystem's durability synchronization.
+    /// Implements the `flush` operation used by this subsystem.
     pub fn flush(&self) -> Result<(), StorageError> {
         self.pool.flush_all()?;
         Ok(())
+    }
+
+    /// Implements the `page_count` operation used by this subsystem.
+    pub fn page_count(&self) -> Result<u64, StorageError> {
+        Ok(self.pool.page_count()?)
     }
 }
