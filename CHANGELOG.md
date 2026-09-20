@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.2
+- Based on Milestone 1.7.1 Hardened.
+- Added Rust demo for execution pipeline, ADB Batch v1 and C ABI.
+- Added execution/FFI benchmark baseline and JSON result export.
+- Added implementation task map and release validation script.
+- Added missing `adb-wal` test-only `tempfile.workspace = true` dependency required by segmented-WAL hardening tests.
+- No 2.0 functionality introduced.
+
+## 1.7.1
+- Execution/FFI hardening: bounded path/plan inputs, output-handle clearing, status mapping, cardinality checks, checked wire conversions, 64 MiB batch ceiling, memory-limit enforcement, panic-path removal and explicit C pointer/handle contract.
+
+## 1.7
+- Added PhysicalPlan execution, batched operators and initial C ABI.
+
+### 1.7.2 build-fix — FFI point lookup JSON decoding
+
+- fixed `adb_execute_plan_json` returning `InvalidArgument` for the point-lookup plan used by `crates/adb-ffi/tests/ffi.rs`,
+- introduced an FFI-only `WirePhysicalPlan` decoder instead of deserializing transport JSON directly into engine-native `PhysicalPlan`,
+- accepts numeric `row_id` values through `u64` and decimal-string `row_id` values through the full `u128` range,
+- leaves `adb_core::RowId` serialization and all persisted Rust engine formats unchanged,
+- added regression tests for numeric and full-range decimal-string point lookup IDs.
+
 ## 1.6.2
 
 - Added Rust-only temporal demo under `examples/demo`.

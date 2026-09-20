@@ -1,6 +1,7 @@
 //! Module `error` for crate `adb-engine`.
 use thiserror::Error;
 
+use adb_execution::ExecutionError;
 use adb_storage::StorageError;
 use adb_wal::WalError;
 
@@ -12,6 +13,9 @@ pub enum DbError {
 
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    #[error("execution error: {0}")]
+    Execution(#[from] ExecutionError),
 
     #[error("transaction conflict")]
     TransactionConflict,

@@ -16,7 +16,7 @@ fn segmented_writer_truncates_crash_tail() {
             tx_id: TxId(1),
             snapshot_ts: CommitTs(0),
         })
-        .unwrap();
+            .unwrap();
         w.sync().unwrap();
     }
     let p = fs::read_dir(d.path())
@@ -36,7 +36,7 @@ fn segmented_writer_truncates_crash_tail() {
             tx_id: TxId(1),
             commit_ts: CommitTs(1),
         })
-        .unwrap();
+            .unwrap();
         w.sync().unwrap();
     }
     assert_eq!(SegmentedWalReader::read_all(d.path()).unwrap().len(), 2);

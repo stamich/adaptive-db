@@ -6,6 +6,9 @@ use std::{
 };
 
 use adb_core::{CommitTs, Row, RowId};
+use adb_execution::{
+    DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
+};
 use adb_storage::{
     Checkpoint, CheckpointStore, CurrentRecord, HistoricalVersion, IntegrityChecker,
     IntegrityReport, PersistentCurrentStore, PersistentVersionStore, StorageStats,
@@ -23,6 +26,7 @@ use crate::{
 const WAL_DIR: &str = "wal";
 
 /// Represents `Database` state used by this subsystem.
+#[derive(Clone)]
 pub struct Database {
     inner: Arc<DatabaseInner>,
 }
@@ -371,5 +375,72 @@ impl Database {
     /// Implements the `wal_dir` operation used by this subsystem.
     pub fn wal_dir(&self) -> &Path {
         &self.inner.wal_dir
+    }
+
+    /// Implements the `latest_committed_ts` operation used by this subsystem.
+    pub fn latest_committed_ts(&self) -> CommitTs {
+        self.inner.tx_manager.lock().latest_committed_ts()
+    }
+
+    /// Implements the `execute` operation used by this subsystem.
+    pub fn execute(&self, plan: PhysicalPlan) -> Result<QueryCursor, DbError> {
+        let context = ExecutionContext::new(self.latest_committed_ts());
+        Ok(Executor::execute(Arc::new(self.clone()), plan, context)?)
+    }
+
+    /// Implements the `execute_at` operation used by this subsystem.
+    pub fn execute_at(
+        &self,
+        plan: PhysicalPlan,
+        snapshot_ts: CommitTs,
+    ) -> Result<QueryCursor, DbError> {
+        Ok(Executor::execute(
+            Arc::new(self.clone()),
+            plan,
+            ExecutionContext::new(snapshot_ts),
+        )?)
+    }
+}
+
+/// Implements behavior for `DataSource`.
+impl DataSource for Database {
+    /// Implements the `latest_committed_ts` operation used by this subsystem.
+    fn latest_committed_ts(&self) -> CommitTs {
+        Database::latest_committed_ts(self)
+    }
+
+    /// Implements the `point_lookup` operation used by this subsystem.
+    fn point_lookup(
+        &self,
+        row_id: RowId,
+        snapshot_ts: CommitTs,
+    ) -> Result<Option<Row>, ExecutionError> {
+        self.get_at(row_id, snapshot_ts)
+            .map_err(|error| ExecutionError::DataSource(error.to_string()))
+    }
+
+    /// Implements the `scan_rows` operation used by this subsystem.
+    fn scan_rows(&self, snapshot_ts: CommitTs) -> Result<Vec<(RowId, Row)>, ExecutionError> {
+        let row_ids = self
+            .inner
+            .current
+            .lock()
+            .entries()
+            .map_err(|error| ExecutionError::DataSource(error.to_string()))?
+            .into_iter()
+            .map(|(row_id, _)| row_id)
+            .collect::<Vec<_>>();
+
+        let mut rows = Vec::with_capacity(row_ids.len());
+        for row_id in row_ids {
+            if let Some(row) = self
+                .get_at(row_id, snapshot_ts)
+                .map_err(|error| ExecutionError::DataSource(error.to_string()))?
+            {
+                rows.push((row_id, row));
+            }
+        }
+
+        Ok(rows)
     }
 }

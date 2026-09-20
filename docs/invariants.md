@@ -10,5 +10,4 @@
 10. A page checksum mismatch is treated as corruption.
 11. The B+Tree physical layout is not part of the database’s public semantics.
 12. WAL segments may only be deleted before the oldest required retain LSN.
-
-Translated with DeepL.com (free version)
+13. 

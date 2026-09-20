@@ -3,14 +3,14 @@
 version = 4
 
 [[package]]
-name = "adb-benchmark-1-6-2"
+name = "adb-benchmark-1-7-2"
 version = "0.1.6+examples.2"
 dependencies = [
- "adb-btree",
  "adb-core",
  "adb-engine",
- "adb-storage",
- "adb-wal",
+ "adb-execution",
+ "adb-ffi",
+ "serde_json",
  "tempfile",
 ]
 
@@ -49,14 +49,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "adb-demo-1-6-2"
+name = "adb-demo-1-7-2"
 version = "0.1.6+examples.2"
 dependencies = [
- "adb-btree",
  "adb-core",
  "adb-engine",
- "adb-storage",
- "adb-wal",
+ "adb-execution",
+ "adb-ffi",
+ "serde_json",
  "tempfile",
 ]
 
@@ -65,6 +65,7 @@ name = "adb-engine"
 version = "0.1.6+examples.2"
 dependencies = [
  "adb-core",
+ "adb-execution",
  "adb-storage",
  "adb-tx",
  "adb-wal",
@@ -82,6 +83,21 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "adb-ffi"
+version = "0.1.6+examples.2"
+dependencies = [
+ "adb-core",
+ "adb-engine",
+ "adb-execution",
+ "adb-storage",
+ "adb-wal",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

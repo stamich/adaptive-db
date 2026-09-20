@@ -1,0 +1,7 @@
+{
+  "milestone": "1.7.1",
+  "cargo_version": "0.1.7+hardening.1",
+  "base": "1.7",
+  "kind": "hardening patch",
+  "rustdoc": "full item-level audit"
+}

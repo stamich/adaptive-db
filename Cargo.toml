@@ -9,6 +9,7 @@ members = [
     "crates/adb-tx",
     "crates/adb-engine",
     "crates/adb-execution",
+    "crates/adb-ffi",
     "examples/demo",
     "examples/benchmark",
 ]
