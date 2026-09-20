@@ -1,63 +1,45 @@
-# Milestone 1.6.1 — Security, Durability and Recovery Review
+# Milestone 1.7.1 — Security, FFI and Execution Review
 
-## Fixed high-severity correctness/resilience issues
+Milestone 1.7.1 inherits every WAL/page/B+Tree/checkpoint/recovery hardening item from 1.6.1.
 
-### Segmented WAL crash tail
-The original 1.6 reader tolerated an incomplete final segment suffix, but the writer reopened
-at physical EOF. New commits could therefore be appended behind damaged bytes and become
-invisible on a later restart. 1.6.1 scans the newest segment to its last complete frame and
-truncates only the incomplete suffix before append.
+## Fixed 1.7-specific issues
 
-### Unbounded WAL payload allocation
-Persisted `payload_len` is now capped at 16 MiB before allocating. This prevents a corrupted
-header from requesting multi-gigabyte memory.
+### Oversized FFI input declarations
+`adb_open` rejects paths larger than 64 KiB and `adb_execute_plan_json` rejects plans larger
+than 8 MiB before constructing Rust slices. Fallible functions clear output handles first.
 
-### Missing/non-tail WAL segments
-All retained segment ids must be contiguous. A partial frame is tolerated only in the newest
-segment; truncation in an older segment is corruption.
+### Batch wire narrowing and malformed batches
+ADB Batch v1 encoding now checks row count, column count, bitmap length and payload lengths
+before conversion to u32, verifies every column has exactly the batch row count, and caps the
+encoded batch at 64 MiB.
 
-### Temporal B+Tree disk corruption
-Both RowId and `(RowId, CommitTs)` codecs now validate count, encoded byte range, node shape,
-and strictly increasing key order. Persisted counts no longer drive unchecked slicing or
-`Vec::with_capacity` without a maximum.
+### Per-batch execution memory boundary
+`QueryCursor` estimates batch-owned heap memory and rejects a batch exceeding the configured
+query memory limit instead of blindly returning it.
 
-### B+Tree cycles and invalid roots
-Root ids are checked against physical page count. Descent and leaf-chain scans are bounded by
-page count, and recursive inserts have a hardened depth ceiling, preventing corrupted pointers
-from spinning forever or recursively overflowing the stack.
+### Panic boundary
+FFI operations remain wrapped by `catch_unwind`; an internal Rust panic is converted to
+`ADB_INTERNAL` instead of unwinding through C.
 
-### Page-file integrity
-Hardened pages carry a format marker and non-zero CRC. Free-space bounds and heap slot ranges
-are checked before higher-level decoding. An incomplete trailing physical page is removed on
-open. Legacy pre-hardened pages remain readable after structural validation and are upgraded
-on write.
+## Important residual C ABI risk
+Raw pointers are inherently unsafe. The library can check nullness and declared length, but it
+cannot prove that a non-null pointer actually references that many readable/writable bytes.
+Likewise, `Box::from_raw` requires each opaque handle to be released exactly once. Therefore:
+- forged/dangling pointers can cause undefined behavior,
+- double close/release can cause undefined behavior,
+- use-after-release can cause undefined behavior.
 
-### Root/checkpoint crash consistency
-B+Tree root metadata and checkpoint v2 now have magic/version/length/CRC envelopes and use:
-`write temp -> fsync temp -> rename -> fsync parent directory`.
+This ABI is appropriate only for a trusted native adapter obeying the header contract. A future
+hardening path is a Rust-owned registry with generational integer handles.
 
-### Logical WAL state
-Recovery rejects mutation/version/commit/abort records without a preceding BEGIN, duplicate
-transaction reuse, and invalid historical intervals.
-
-## Positive properties retained
-- WAL is synchronized before Current/Version pages become durable.
-- Version Store is independently persistent.
-- Current and Version checkpoint frontiers remain independent.
-- Recovery remains logically idempotent.
-- Production Rust code contains no `unsafe` block in Milestone 1.6.1.
-
-## Residual risks / intentional scope limits
-- Recovery still materializes all retained WAL records in memory; very large retained WAL can
-  produce high restart memory usage.
-- Integrity verification and statistics materialize large index/history sets and are not
-  streaming operations.
-- Root/checkpoint metadata has one active file, not a dual-slot previous-generation fallback.
-- CRC32 detects accidental corruption; it is not a cryptographic MAC against a filesystem
-  attacker capable of rewriting data and checksum together.
-- The Current/Version heaps are append-oriented and do not reclaim obsolete physical records.
-- B+Trees use coarse tree mutexes and do not implement delete/merge.
-- `TransactionManager::publish_commit` still contains an internal monotonicity assertion; live
-  commit timestamp allocation makes it unreachable under valid engine state, but it remains an
-  invariant panic rather than a typed error.
-- No user authentication/encryption exists: 1.6 is an embedded storage-engine milestone.
+## Other residual risks
+- Full Scan still captures the complete stable logical row set before producing batches. The
+  new per-batch limit does not prevent the initial snapshot collection from becoming large.
+- JSON plan parsing is transitional; serde_json has recursion protection and the plan has a
+  depth validator, but protobuf/binary protocol is a better long-term boundary.
+- FFI exposes arbitrary database filesystem paths to the trusted host process; it is not a
+  sandbox boundary.
+- No authentication/authorization exists in 1.7; that belongs to later security milestones.
+- `adb_last_error_ptr` is borrowed thread-local memory and becomes invalid after the next error
+  on the same thread.
+- CRC32 is accidental-corruption detection, not adversarial integrity protection.

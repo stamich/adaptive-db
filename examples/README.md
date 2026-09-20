@@ -1,8 +1,10 @@
-# Milestone 1.6.2 examples
+# Milestone 1.7.2 examples
 
-`demo/` is a feature tour of the actual Milestone 1.6.1 Hardened Rust API.
+- `demo`: engine -> PhysicalPlan -> operators -> RecordBatch -> ADB Batch v1 -> C ABI.
+- `benchmark`: execution and FFI baseline added on top of the 1.6.x storage baseline.
 
-`benchmark/` is the comparative 1.6.2 baseline. It adds temporal-store and segmented-WAL
-measurements to the 1.5.2 physical-storage baseline.
-
-Run both in `--release` mode when collecting performance data.
+Run:
+```bash
+cargo run --release -p adb-demo-1-7-2
+cargo run --release -p adb-benchmark-1-7-2 -- --rows 10000 --iters 1000 --output examples/results/1.7.2-local.json
+```

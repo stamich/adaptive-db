@@ -154,9 +154,9 @@ impl SegmentedWalWriter {
         }
         if self.offset > 0
             && self
-                .offset
-                .checked_add(record_len)
-                .map_or(true, |end| end > self.segment_size)
+            .offset
+            .checked_add(record_len)
+            .map_or(true, |end| end > self.segment_size)
         {
             self.rotate()?;
         }

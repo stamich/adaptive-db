@@ -1,0 +1,5 @@
+Adaptive DB Milestone 1.7.2 validation manifest
+Base: Milestone 1.7.1 Hardened
+Added: examples/demo, examples/benchmark, TASKS-1.7.2.md, release metadata
+No benchmark numbers are fabricated.
+Compilation/tests must be certified by build-milestone1.7.2.sh on a host with cargo/rustc.

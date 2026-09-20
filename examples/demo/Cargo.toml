@@ -1,13 +1,13 @@
 [package]
-name = "adb-demo-1-6-2"
+name = "adb-demo-1-7-2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 adb-core = { path = "../../crates/adb-core" }
-adb-btree = { path = "../../crates/adb-btree" }
-adb-storage = { path = "../../crates/adb-storage" }
 adb-engine = { path = "../../crates/adb-engine" }
-adb-wal = { path = "../../crates/adb-wal" }
+adb-execution = { path = "../../crates/adb-execution" }
+adb-ffi = { path = "../../crates/adb-ffi" }
 tempfile.workspace = true
+serde_json.workspace = true

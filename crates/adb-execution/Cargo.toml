@@ -1,0 +1,12 @@
+[package]
+name = "adb-execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
