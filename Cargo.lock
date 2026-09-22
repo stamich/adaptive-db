@@ -95,7 +95,6 @@ dependencies = [
  "adb-storage",
  "adb-wal",
  "parking_lot",
- "serde",
  "serde_json",
  "tempfile",
 ]
