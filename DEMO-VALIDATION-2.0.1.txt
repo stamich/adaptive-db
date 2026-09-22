@@ -1,0 +1,13 @@
+Adaptive DB Milestone 2.0.1 demo validation
+Demo assets: present
+Chronological phase coverage: 1.0.1 -> 1.5.1 -> 1.6.1 -> 1.7.1 -> 2.0.1
+CLI --demo dispatch: present
+Scala version: 3.3.8 in all Scala modules
+Java/Scala target: JDK 22
+PhysicalPlanner namespace aliases: LPlan/PPlan
+PointLookup RowId wire: decimal string, legacy small numeric input accepted
+CHANGELOG.md: 1.0 through 2.0.1
+Base hardened 2.0.1 and ABI v2 retained
+Structural errors: 0
+WARNING: OpenJDK 21 is installed here; demo requires JDK 22+ finalized FFM.
+WARNING: cargo/gradle/rustfmt are unavailable here; runnable demo is structurally validated, not execution-certified.
