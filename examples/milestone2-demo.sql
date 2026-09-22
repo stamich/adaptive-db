@@ -1,0 +1,10 @@
+CREATE TABLE account (id BIGINT PRIMARY KEY, balance BIGINT NOT NULL, owner STRING);
+INSERT INTO account VALUES (1, 100, 'Alice');
+INSERT INTO account VALUES (2, 200, 'Bob');
+INSERT INTO account VALUES (3, 300, 'Carol');
+SELECT id, owner, balance FROM account WHERE balance > 100 LIMIT 10;
+EXPLAIN SELECT * FROM account WHERE id = 2;
+UPDATE account SET balance = 250 WHERE id = 2;
+SELECT * FROM account WHERE id = 2;
+DELETE FROM account WHERE id = 1;
+SELECT * FROM account;

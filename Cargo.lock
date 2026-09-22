@@ -3,20 +3,19 @@
 version = 4
 
 [[package]]
-name = "adb-benchmark-1-7-2"
-version = "0.1.6+examples.2"
+name = "adb-benchmark-2-0-2-rust"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "adb-engine",
  "adb-execution",
- "adb-ffi",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "adb-btree"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-buffer",
  "adb-core",
@@ -31,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "adb-buffer"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "adb-page",
@@ -42,27 +41,15 @@ dependencies = [
 
 [[package]]
 name = "adb-core"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "serde",
  "thiserror",
 ]
 
 [[package]]
-name = "adb-demo-1-7-2"
-version = "0.1.6+examples.2"
-dependencies = [
- "adb-core",
- "adb-engine",
- "adb-execution",
- "adb-ffi",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "adb-engine"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "adb-execution",
@@ -76,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "adb-execution"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "parking_lot",
@@ -87,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "adb-ffi"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "adb-engine",
@@ -101,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "adb-page"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "crc32fast",
@@ -110,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "adb-storage"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-btree",
  "adb-buffer",
@@ -125,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "adb-tx"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "adb-storage",
@@ -134,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "adb-wal"
-version = "0.1.6+examples.2"
+version = "0.2.0+hardening.1"
 dependencies = [
  "adb-core",
  "bincode",
