@@ -1,7 +1,0 @@
-{
-  "milestone": "1.7.2",
-  "engine_base": "1.7.1-hardened",
-  "language": "Rust",
-  "scope": ["demo", "benchmark", "execution", "batch-wire-v1", "ffi-c-abi"],
-  "excluded": ["milestone-2.0-features", "sql", "jvm"]
-}

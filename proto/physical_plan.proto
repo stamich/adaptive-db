@@ -1,0 +1,29 @@
+syntax = "proto3";
+package adb.plan.v1;
+
+message PhysicalPlan {
+  oneof node {
+    PointLookup point_lookup = 1;
+    Scan scan = 2;
+    Filter filter = 3;
+    Project project = 4;
+    Limit limit = 5;
+  }
+}
+message PointLookup { bytes row_id_u128_be = 1; }
+message Scan {}
+message Filter { PhysicalPlan input = 1; Expr predicate = 2; }
+message Project { PhysicalPlan input = 1; repeated uint32 fields = 2; }
+message Limit { PhysicalPlan input = 1; uint64 limit = 2; }
+message Expr {
+  oneof node {
+    Column column = 1;
+    Literal literal = 2;
+    Binary binary = 3;
+    Not not = 4;
+  }
+}
+message Column { uint32 field_id = 1; }
+message Literal { oneof value { bool bool_value=1; sint64 int64_value=2; double float64_value=3; string string_value=4; bytes bytes_value=5; bool null_value=6; } }
+message Binary { Expr left=1; string op=2; Expr right=3; }
+message Not { Expr expr=1; }

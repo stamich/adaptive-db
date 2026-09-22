@@ -8,14 +8,13 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-adb-core = { path = "../adb-core"}
 adb-storage = { path = "../adb-storage" }
 adb-wal = { path = "../adb-wal" }
+adb-core = { path = "../adb-core" }
 adb-engine = { path = "../adb-engine" }
 adb-execution = { path = "../adb-execution" }
 serde_json.workspace = true
 parking_lot.workspace = true
-serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
 adb-core = { path = "../adb-core" }

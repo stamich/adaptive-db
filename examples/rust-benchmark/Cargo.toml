@@ -1,5 +1,5 @@
 [package]
-name = "adb-demo-1-7-2"
+name = "adb-benchmark-2-0-2-rust"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,5 @@ license.workspace = true
 adb-core = { path = "../../crates/adb-core" }
 adb-engine = { path = "../../crates/adb-engine" }
 adb-execution = { path = "../../crates/adb-execution" }
-adb-ffi = { path = "../../crates/adb-ffi" }
 tempfile.workspace = true
 serde_json.workspace = true

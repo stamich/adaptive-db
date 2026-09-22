@@ -1,23 +1,30 @@
 //! Slotted-page tuple insertion and validated lookup.
-use crate::{Page, PageError, PAGE_HEADER_SIZE, PAGE_SIZE};
+
 use adb_core::SlotId;
-/// Number of bytes in one `(offset,len)` slot-directory entry.
+
+use crate::{Page, PageError, PAGE_HEADER_SIZE, PAGE_SIZE};
+
+/// Number of bytes in one `(offset, len)` slot-directory entry.
 const SLOT_SIZE: usize = 4;
+
 /// Mutable view over a heap page using a compact slot directory.
 pub struct SlottedPage<'a> {
     page: &'a mut Page,
 }
+
 /// Implements bounded tuple insertion and slot lookup.
 impl<'a> SlottedPage<'a> {
     /// Wraps a page for slotted-page operations.
     pub fn new(page: &'a mut Page) -> Self {
         Self { page }
     }
+
     /// Inserts a tuple when both tuple bytes and a new slot entry fit.
     pub fn insert(&mut self, bytes: &[u8]) -> Result<SlotId, PageError> {
         if bytes.len() > u16::MAX as usize {
             return Err(PageError::PayloadTooLarge(bytes.len()));
         }
+
         let free_start = self.page.free_start() as usize;
         let free_end = self.page.free_end() as usize;
         let needed = SLOT_SIZE
@@ -26,6 +33,7 @@ impl<'a> SlottedPage<'a> {
         if free_end < free_start || free_end - free_start < needed {
             return Err(PageError::Full);
         }
+
         let slot_id = self.page.slot_count();
         if slot_id == u16::MAX {
             return Err(PageError::Full);
@@ -40,6 +48,7 @@ impl<'a> SlottedPage<'a> {
         if slot_off + SLOT_SIZE > free_end {
             return Err(PageError::Full);
         }
+
         let tuple_start = free_end - bytes.len();
         self.page.bytes_mut()[tuple_start..free_end].copy_from_slice(bytes);
         self.page.bytes_mut()[slot_off..slot_off + 2]
@@ -51,6 +60,7 @@ impl<'a> SlottedPage<'a> {
         self.page.set_free_end(tuple_start as u16);
         Ok(slot_id)
     }
+
     /// Returns tuple bytes after validating slot-directory and tuple-area bounds.
     pub fn get(&self, slot_id: SlotId) -> Result<&[u8], PageError> {
         if slot_id >= self.page.slot_count() {
@@ -73,7 +83,7 @@ impl<'a> SlottedPage<'a> {
         let end = offset
             .checked_add(len)
             .ok_or_else(|| PageError::Corrupt("tuple range overflow".into()))?;
-        if offset < (self.page.free_end() as usize) || end > PAGE_SIZE {
+        if offset < self.page.free_end() as usize || end > PAGE_SIZE {
             return Err(PageError::Corrupt("slot points outside tuple area".into()));
         }
         Ok(&self.page.bytes()[offset..end])

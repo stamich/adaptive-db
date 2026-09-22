@@ -1,0 +1,14 @@
+Adaptive DB Milestone 2.0.1 hardened validation
+Rust workspace crates: 10
+Rustdoc: Rust files=99, items=478, missing=0
+Scaladoc: Scala files=31, items=229, missing=0
+C ABI functions: header=18, Rust=18
+JVM modules: 9
+Rust direct dependency audit: passed
+Rust unsafe-containing files=6, outside adb-ffi=0
+Version contract: engine=0.2.0+hardening.1, ABI=2
+Structural errors: 0
+WARNING: cargo/rustc/rustfmt unavailable: Rust compile/test/doc not executed here.
+WARNING: gradle/scalac unavailable: JVM/Scala compile/test not executed here.
+WARNING: Installed Java is OpenJDK 21; Java FFM adapter requires JDK 22+.
+WARNING: Structural/contract validation is not compile certification.

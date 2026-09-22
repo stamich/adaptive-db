@@ -23,7 +23,7 @@ fn version_btree_supports_composite_keys_and_range() {
                     },
                     Lsn(ts),
                 )
-                .unwrap();
+                    .unwrap();
             }
         }
 

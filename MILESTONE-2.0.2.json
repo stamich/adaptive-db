@@ -1,0 +1,9 @@
+{
+  "milestone": "2.0.2",
+  "base": "2.0.1-with-demo-buildfix",
+  "engineVersion": "0.2.0+hardening.1",
+  "nativeAbi": 2,
+  "scope": "demo-and-benchmark",
+  "newEngineFeatures": false,
+  "benchmarkLayers": ["rust-storage-execution", "jvm-planner", "jvm-ffm-rust-end-to-end"]
+}

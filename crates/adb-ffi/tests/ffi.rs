@@ -1,4 +1,4 @@
-//! Module `ffi` for crate `adb-ffi`.
+//! Module `ffi` for `adb-ffi` in Adaptive DB Milestone 2.0.1.
 use std::ptr;
 
 use adb_core::{RowId, Value};
@@ -10,7 +10,7 @@ use adb_ffi::{
 };
 use tempfile::tempdir;
 
-/// Implements the `ffi_executes_point_lookup` operation used by this subsystem.
+/// Documents `ffi_executes_point_lookup` and its role in the hardened Milestone 2.0.1 implementation.
 #[test]
 fn ffi_executes_point_lookup() {
     let dir = tempdir().unwrap();

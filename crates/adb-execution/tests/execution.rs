@@ -90,7 +90,7 @@ fn cancellation_is_observed() {
         PhysicalPlan::Scan,
         ExecutionContext::new(CommitTs(1)),
     )
-    .unwrap();
+        .unwrap();
 
     cursor.cancel();
     assert!(matches!(

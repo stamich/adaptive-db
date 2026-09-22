@@ -1,0 +1,15 @@
+Adaptive DB Milestone 2.0.1 with demo — buildfix validation
+Rust workspace crates: 10
+Scala 3.3.8 modules: 8/8; Java/Scala target: 22
+Reported Rust compile fixes: tempfile + Checkpoint type + temporal codec import present
+PointLookup u128 JSON wire: decimal string + legacy u64 input; planner aliases LPlan/PPlan
+CHANGELOG coverage: 1.0 through 2.0.1; demo retained
+C/Rust ABI functions: 18/18
+Rustdoc: files=100, items=500, missing=0
+Scaladoc: files=32, items=228, missing=0
+Rust formatting proxy: lines >120=0; rustfmt.toml present
+Version/ABI retained: 0.2.0+hardening.1 / ABI 2
+Structural errors: 0
+WARNING: cargo/rustc/rustfmt are not installed in this environment; cargo fmt/check/test/doc were not executable here.
+WARNING: gradle/scalac are not installed and local Java is 21; JDK22/Scala3.3.8 build must be confirmed locally.
+NOTE: compressed Rust sources were manually normalized to rustfmt-style layout; run cargo fmt --all --check locally for compiler-tool exactness.

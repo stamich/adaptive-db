@@ -19,7 +19,7 @@ use crate::{
 pub const DEFAULT_SEGMENT_SIZE: u64 = 64 * 1024 * 1024;
 /// Number of low LSN bits reserved for an offset within a WAL segment.
 const OFFSET_BITS: u32 = 32;
-/// Largest segment id/offset representable by the packed Milestone 1.6 LSN.
+/// Largest segment id or offset representable by the packed Milestone 1.6 LSN.
 const OFFSET_MASK: u64 = (1u64 << OFFSET_BITS) - 1;
 
 /// Packs a segment id and offset into one LSN after validating both components.
@@ -52,18 +52,19 @@ fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
     dir.join(segment_name(segment_id))
 }
 
-/// Lists recognized WAL segments in ascending order and validates id range/contiguity.
+/// Lists recognized WAL segments in ascending order and validates id range and contiguity.
 fn list_segments(dir: &Path) -> Result<Vec<u64>, WalError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
+
     let mut ids = Vec::new();
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
-        if path.extension().and_then(|v| v.to_str()) != Some("wal") {
+        if path.extension().and_then(|value| value.to_str()) != Some("wal") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|v| v.to_str()) else {
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
             continue;
         };
         let Ok(id) = u64::from_str_radix(stem, 16) else {
@@ -76,6 +77,7 @@ fn list_segments(dir: &Path) -> Result<Vec<u64>, WalError> {
         }
         ids.push(id);
     }
+
     ids.sort_unstable();
     ids.dedup();
     for pair in ids.windows(2) {
@@ -108,6 +110,7 @@ impl SegmentedWalWriter {
                 HEADER_LEN + 1
             )));
         }
+
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let segments = list_segments(&dir)?;
@@ -122,6 +125,7 @@ impl SegmentedWalWriter {
         if newly_created {
             sync_dir(&dir)?;
         }
+
         let physical_end = file.seek(SeekFrom::End(0))?;
         let valid_end = read_segment(&path, segment_id, true, None)?;
         if valid_end < physical_end {
@@ -129,6 +133,7 @@ impl SegmentedWalWriter {
             file.sync_data()?;
         }
         file.seek(SeekFrom::End(0))?;
+
         Ok(Self {
             dir,
             segment_size,
@@ -160,10 +165,12 @@ impl SegmentedWalWriter {
         {
             self.rotate()?;
         }
+
         let lsn = make_lsn(self.segment_id, self.offset)?;
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let checksum = hasher.finalize();
+
         self.file.write_all(&WAL_MAGIC.to_le_bytes())?;
         self.file.write_all(&WAL_VERSION.to_le_bytes())?;
         self.file.write_all(&payload_len.to_le_bytes())?;
@@ -204,7 +211,7 @@ impl SegmentedWalWriter {
         Ok(removed)
     }
 
-    /// Synchronizes the active segment and atomically advances to a newly created next segment.
+    /// Synchronizes the active segment and advances to a newly created next segment.
     fn rotate(&mut self) -> Result<(), WalError> {
         self.sync()?;
         let next = self
@@ -216,6 +223,7 @@ impl SegmentedWalWriter {
                 "segment id exceeds LSN range".into(),
             ));
         }
+
         let path = segment_path(&self.dir, next);
         let file = OpenOptions::new()
             .create_new(true)
@@ -268,6 +276,7 @@ fn read_segment(
             "segment {segment_id} exceeds LSN offset range"
         )));
     }
+
     loop {
         if offset == file_len {
             return Ok(offset);
@@ -282,6 +291,7 @@ fn read_segment(
                 )))
             };
         }
+
         file.seek(SeekFrom::Start(offset))?;
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
@@ -290,6 +300,7 @@ fn read_segment(
                 "bad WAL magic in segment {segment_id} at {offset}"
             )));
         }
+
         let mut version = [0u8; 2];
         file.read_exact(&mut version)?;
         if u16::from_le_bytes(version) != WAL_VERSION {
@@ -297,6 +308,7 @@ fn read_segment(
                 "unsupported WAL version in segment {segment_id}"
             )));
         }
+
         let mut len = [0u8; 4];
         file.read_exact(&mut len)?;
         let payload_len = u32::from_le_bytes(len) as usize;
@@ -305,6 +317,7 @@ fn read_segment(
                 "payload length {payload_len} exceeds hardened limit in segment {segment_id}"
             )));
         }
+
         let mut crc = [0u8; 4];
         file.read_exact(&mut crc)?;
         let expected_crc = u32::from_le_bytes(crc);
@@ -320,6 +333,7 @@ fn read_segment(
                 )))
             };
         }
+
         let mut payload = vec![0u8; payload_len];
         file.read_exact(&mut payload)?;
         let mut hasher = Hasher::new();
@@ -329,6 +343,7 @@ fn read_segment(
                 "checksum mismatch in segment {segment_id} at {offset}"
             )));
         }
+
         let record: WalRecord = bincode::deserialize(&payload)?;
         if let Some(records) = out.as_mut() {
             (**records).push((make_lsn(segment_id, offset)?, record));

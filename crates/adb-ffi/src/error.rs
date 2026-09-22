@@ -1,16 +1,28 @@
 //! Panic containment, thread-local error reporting, and engine-error status mapping for the C ABI.
-use crate::AdbStatus;
-use adb_engine::DbError;
+
 use std::{cell::RefCell, panic::AssertUnwindSafe};
-thread_local! {static LAST_ERROR:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())};}
+
+use adb_engine::DbError;
+
+use crate::AdbStatus;
+
+thread_local! {
+    /// Stores the last FFI error bytes independently for each native caller thread.
+    static LAST_ERROR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Maximum UTF-8 database path accepted by the C ABI.
 pub const MAX_PATH_BYTES: usize = 64 * 1024;
 /// Maximum physical-plan JSON accepted by the C ABI.
 pub const MAX_PLAN_JSON_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum mutation JSON accepted by INSERT/UPDATE C ABI calls.
+pub const MAX_MUTATION_JSON_BYTES: usize = 8 * 1024 * 1024;
+
 /// Replaces the current thread's last-error byte buffer.
 pub fn set_last_error(message: impl Into<String>) {
-    LAST_ERROR.with(|s| *s.borrow_mut() = message.into().into_bytes());
+    LAST_ERROR.with(|slot| *slot.borrow_mut() = message.into().into_bytes());
 }
+
 /// Maps top-level engine errors into stable C status categories.
 pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
     let status = match &error {
@@ -22,13 +34,14 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
     };
     (status, error.to_string())
 }
+
 /// Executes one FFI operation while preventing Rust panics from unwinding across the C boundary.
 pub fn ffi_guard(body: impl FnOnce() -> Result<AdbStatus, (AdbStatus, String)>) -> AdbStatus {
     match std::panic::catch_unwind(AssertUnwindSafe(body)) {
-        Ok(Ok(s)) => s,
-        Ok(Err((s, m))) => {
-            set_last_error(m);
-            s
+        Ok(Ok(status)) => status,
+        Ok(Err((status, message))) => {
+            set_last_error(message);
+            status
         }
         Err(_) => {
             set_last_error("panic contained at FFI boundary");
@@ -36,14 +49,17 @@ pub fn ffi_guard(body: impl FnOnce() -> Result<AdbStatus, (AdbStatus, String)>) 
         }
     }
 }
+
 /// Returns the byte length of the current thread's last error message.
 #[no_mangle]
 pub extern "C" fn adb_last_error_len() -> usize {
-    LAST_ERROR.with(|s| s.borrow().len())
+    LAST_ERROR.with(|slot| slot.borrow().len())
 }
+
 /// Returns a borrowed pointer to the current thread's last error bytes.
+///
 /// The pointer is invalidated by the next FFI error on the same thread.
 #[no_mangle]
 pub extern "C" fn adb_last_error_ptr() -> *const u8 {
-    LAST_ERROR.with(|s| s.borrow().as_ptr())
+    LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
