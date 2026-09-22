@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use adb_core::{CommitTs, Row, RowId};
+use adb_core::{CommitTs, Lsn, Row, RowId};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
 };
