@@ -9,6 +9,7 @@ use crate::Expr;
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum PhysicalPlan {
     PointLookup {
+        #[serde(with = "row_id_json")]
         row_id: RowId,
     },
 
@@ -58,6 +59,43 @@ impl PhysicalPlan {
                 input.validate_depth(depth + 1)
             }
             Self::Limit { input, .. } => input.validate_depth(depth + 1),
+        }
+    }
+}
+
+/// JSON adapter for 128-bit row identifiers.
+///
+/// JSON numbers are not a portable representation for the complete `u128` domain used by
+/// composed `(entity_id << 64) | primary_key` identifiers. The canonical wire form is a
+/// decimal string; small legacy numeric values are still accepted on input.
+mod row_id_json {
+    use adb_core::RowId;
+    use serde::{de::Error as _, Deserialize, Deserializer, Serializer};
+
+    /// Serializes a row id as a decimal JSON string.
+    pub fn serialize<S>(row_id: &RowId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&row_id.0.to_string())
+    }
+
+    /// Deserializes the canonical string form while retaining compatibility with small JSON numbers.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<RowId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        /// Accepts the canonical decimal-string wire form and the legacy small numeric form.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum WireRowId {
+            Decimal(String),
+            LegacyNumber(u64),
+        }
+
+        match WireRowId::deserialize(deserializer)? {
+            WireRowId::Decimal(value) => value.parse::<u128>().map(RowId).map_err(D::Error::custom),
+            WireRowId::LegacyNumber(value) => Ok(RowId(u128::from(value))),
         }
     }
 }

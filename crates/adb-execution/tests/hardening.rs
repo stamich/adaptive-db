@@ -1,6 +1,8 @@
 //! Execution wire hardening tests.
+
 use adb_core::RowId;
 use adb_execution::{encode_batch_v1, ColumnVector, RecordBatch};
+
 /// Verifies batch encoding rejects columns whose cardinality differs from row ids.
 #[test]
 fn mismatched_column_length_is_rejected() {

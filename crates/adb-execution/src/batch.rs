@@ -109,11 +109,19 @@ impl RecordBatch {
                 ColumnVector::Float64 { values, .. } => values.len().saturating_mul(16),
                 ColumnVector::String { values, .. } => values
                     .iter()
-                    .map(|v| v.as_ref().map_or(1, |s| s.len().saturating_add(1)))
+                    .map(|value| {
+                        value
+                            .as_ref()
+                            .map_or(1, |text| text.len().saturating_add(1))
+                    })
                     .sum(),
                 ColumnVector::Bytes { values, .. } => values
                     .iter()
-                    .map(|v| v.as_ref().map_or(1, |b| b.len().saturating_add(1)))
+                    .map(|value| {
+                        value
+                            .as_ref()
+                            .map_or(1, |bytes| bytes.len().saturating_add(1))
+                    })
                     .sum(),
             });
         }
