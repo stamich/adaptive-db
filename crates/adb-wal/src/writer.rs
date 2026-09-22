@@ -1,25 +1,30 @@
 //! Writer for the legacy single-file WAL format.
+
+use std::{
+    fs::OpenOptions,
+    io::{Seek, SeekFrom, Write},
+    path::Path,
+};
+
+use adb_core::Lsn;
+use crc32fast::Hasher;
+
 use crate::{
     error::WalError,
     format::{HEADER_LEN, MAX_WAL_RECORD_BYTES, WAL_MAGIC, WAL_VERSION},
     reader::WalReader,
     record::WalRecord,
 };
-use adb_core::Lsn;
-use crc32fast::Hasher;
-use std::{
-    fs::OpenOptions,
-    io::{Seek, SeekFrom, Write},
-    path::Path,
-};
+
 /// Appends framed records to one WAL file and truncates only an incomplete crash tail on open.
 pub struct WalWriter {
     file: std::fs::File,
     next_lsn: u64,
 }
+
 /// Implements durable append, synchronization, and crash-tail normalization.
 impl WalWriter {
-    /// Opens/creates the WAL and truncates an incomplete suffix after the last valid frame.
+    /// Opens or creates the WAL and truncates an incomplete suffix after the last valid frame.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, WalError> {
         let path = path.as_ref();
         if !path.exists() {
@@ -30,6 +35,7 @@ impl WalWriter {
                 .open(path)?;
             return Ok(Self { file, next_lsn: 0 });
         }
+
         let valid_end = WalReader::open(path)?.valid_end()?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -47,6 +53,7 @@ impl WalWriter {
             next_lsn: valid_end,
         })
     }
+
     /// Appends one CRC-protected record and returns its starting LSN.
     pub fn append(&mut self, record: &WalRecord) -> Result<Lsn, WalError> {
         let payload = bincode::serialize(record)?;
@@ -59,6 +66,7 @@ impl WalWriter {
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let checksum = hasher.finalize();
+
         self.file.write_all(&WAL_MAGIC.to_le_bytes())?;
         self.file.write_all(&WAL_VERSION.to_le_bytes())?;
         self.file.write_all(&payload_len.to_le_bytes())?;
@@ -70,12 +78,14 @@ impl WalWriter {
             .ok_or_else(|| WalError::Corrupt("WAL LSN overflow".into()))?;
         Ok(lsn)
     }
+
     /// Flushes process buffers and synchronizes WAL data to stable storage.
     pub fn sync(&mut self) -> Result<(), WalError> {
         self.file.flush()?;
         self.file.sync_data()?;
         Ok(())
     }
+
     /// Returns the next append LSN.
     pub fn position(&self) -> Lsn {
         Lsn(self.next_lsn)

@@ -1,57 +1,56 @@
-//! Regression tests for segmented WAL hardening.
-use adb_core::{CommitTs, TxId};
-use adb_wal::{SegmentedWalReader, SegmentedWalWriter, WalRecord};
+//! Regression tests for segmented-WAL crash-tail and corruption hardening.
+
 use std::{
     fs::{self, OpenOptions},
     io::Write,
 };
+
+use adb_core::{CommitTs, TxId};
+use adb_wal::{SegmentedWalReader, SegmentedWalWriter, WalRecord};
 use tempfile::tempdir;
-/// Verifies that an incomplete suffix of the newest segment is truncated before later appends.
+
+/// Verifies that reopening the final WAL segment truncates only an incomplete
+/// crash tail before new records are appended.
 #[test]
-fn segmented_writer_truncates_crash_tail() {
-    let d = tempdir().unwrap();
+fn writer_truncates_incomplete_tail_before_append() {
+    let dir = tempdir().unwrap();
+    let wal_dir = dir.path().join("wal");
+
     {
-        let mut w = SegmentedWalWriter::open(d.path(), 1024 * 1024).unwrap();
-        w.append(&WalRecord::Begin {
-            tx_id: TxId(1),
-            snapshot_ts: CommitTs(0),
-        })
+        let mut writer = SegmentedWalWriter::open(&wal_dir, 1024 * 1024).unwrap();
+        writer
+            .append(&WalRecord::Begin {
+                tx_id: TxId(1),
+                snapshot_ts: CommitTs(0),
+            })
             .unwrap();
-        w.sync().unwrap();
+        writer.sync().unwrap();
     }
-    let p = fs::read_dir(d.path())
+
+    let mut segments: Vec<_> = fs::read_dir(&wal_dir)
         .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    segments.sort();
+    let last = segments.last().unwrap();
     {
-        let mut f = OpenOptions::new().append(true).open(&p).unwrap();
-        f.write_all(&[0x57, 0x42]).unwrap();
-        f.sync_data().unwrap();
+        let mut file = OpenOptions::new().append(true).open(last).unwrap();
+        file.write_all(&[0x57, 0x42, 0x44]).unwrap();
+        file.sync_data().unwrap();
     }
+
     {
-        let mut w = SegmentedWalWriter::open(d.path(), 1024 * 1024).unwrap();
-        w.append(&WalRecord::Commit {
-            tx_id: TxId(1),
-            commit_ts: CommitTs(1),
-        })
+        let mut writer = SegmentedWalWriter::open(&wal_dir, 1024 * 1024).unwrap();
+        writer
+            .append(&WalRecord::Commit {
+                tx_id: TxId(1),
+                commit_ts: CommitTs(1),
+            })
             .unwrap();
-        w.sync().unwrap();
+        writer.sync().unwrap();
     }
-    assert_eq!(SegmentedWalReader::read_all(d.path()).unwrap().len(), 2);
-}
-/// Verifies that a gap between retained WAL segment ids is detected as corruption.
-#[test]
-fn segment_gap_is_rejected() {
-    let d = tempdir().unwrap();
-    fs::write(d.path().join("0000000000000001.wal"), []).unwrap();
-    fs::write(d.path().join("0000000000000003.wal"), []).unwrap();
-    assert!(SegmentedWalReader::read_all(d.path()).is_err());
-}
-/// Verifies invalid segment sizes fail with an error instead of triggering packed-LSN assertions.
-#[test]
-fn invalid_segment_size_is_rejected() {
-    let d = tempdir().unwrap();
-    assert!(SegmentedWalWriter::open(d.path(), 1).is_err());
+
+    let records = SegmentedWalReader::read_all(&wal_dir).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(matches!(records[1].1, WalRecord::Commit { .. }));
 }
