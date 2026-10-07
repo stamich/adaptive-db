@@ -10,7 +10,7 @@ Executor::execute
 Operator tree (pull, batch-oriented)
     |
     +-- PointLookup
-    +-- Scan
+    +-- Scan / EntityScan
     +-- Filter
     +-- Project
     +-- Limit
@@ -22,4 +22,6 @@ RowBatch (internal)
 RecordBatch (columnar public result)
 ```
 
-`adb-execution` zależy wyłącznie od `adb-core`. Dostęp do danych odbywa się przez `DataSource`, więc execution layer nie zna PageId, SlotId, B+Tree node layout ani WAL.
+`adb-execution` depends only on `adb-core`. All data access goes through `DataSource`, so the execution layer knows nothing about PageId, SlotId, the B+Tree node layout or the WAL.
+
+Since Milestone 2.0.3 scans are key-range scans paged through `DataSource::scan_page` (`Scan` = every entity, `EntityScan` = one entity), so a scan never holds more than one batch in memory.

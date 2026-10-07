@@ -1,38 +1,37 @@
 # Adaptive DB — Milestone 2.0.3
 
-Adaptive DB to baza danych, w której **kanoniczny log jest źródłem prawdy**, a fizyczne struktury
-(current store, version store, w przyszłości projekcje kolumnowe, wyszukiwawcze i grafowe) są
-odtwarzalnymi projekcjami tego logu. Koncepcja całości jest w [docs/concept/AdaptiveDB_1_3_baza_nowej_generacji.md](docs/concept/AdaptiveDB_1_3_baza_nowej_generacji.md).
-To repozytorium realizuje jej rdzeń V1: jednowęzłowy silnik transakcyjny z historią i natywnym
-strumieniem zmian.
+Adaptive DB is a database in which **the canonical log is the source of truth** and every physical
+structure (the current store, the version store and, in the future, columnar, search and graph
+projections) is a rebuildable projection of that log. This repository implements the V1 core of
+that design: a single-node transactional engine with history and a native change stream.
 
-## Co wnosi 2.0.3
+## What 2.0.3 changes
 
-| Obszar | 2.0.2 | 2.0.3 |
+| Area | 2.0.2 | 2.0.3 |
 |---|---|---|
-| Źródło prawdy | store'y; WAL przycinany po checkpoincie | **log, nigdy nieprzycinany**; store'y odtwarzalne (`rebuild_projections`) |
-| Trwałość commitu | 6 fsync na commit, globalnie serializowane | WAL fsync + **group commit**; strony store'ów tylko w checkpointach |
-| Checkpoint / torn pages | zapis stron w miejscu, bez ochrony | **atomowy dziennik (doublewrite)** dla wszystkich plików naraz |
-| Błąd po zapisie do WAL | klient dostaje błąd, stan w pamięci rozjechany | **poisoning** + `CommitOutcomeUnknown`, rozstrzyga recovery |
-| Current heap | każdy UPDATE zostawiał martwą krotkę | zwalnianie slotów, kompaktowanie, mapa wolnego miejsca; **`vacuum()`** tombstone'ów |
-| Skan tabeli | skan całej bazy + filtr, materializacja w `Vec` | **`EntityScan`**: zakres kluczy encji, stronicowany strumieniowo |
-| Izolacja | Snapshot (write skew możliwy) | **Serializable domyślnie** (walidacja read-setu), Snapshot opcjonalnie |
-| CDC | brak | **natywny strumień zmian** z logu: before/after, kursory, filtry, trwałe offsety konsumentów |
-| C ABI | v2 | **v3** (CDC, checkpoint, vacuum, statusy `POISONED`, `LOG_TRUNCATED`) |
-| B+Tree | dwie prawie identyczne implementacje | **jedna generyczna** `BPlusTree<K>` (ten sam format na dysku) |
-| Testy Rust | 30 | **113** |
+| Source of truth | stores; WAL pruned after checkpoints | **the log, never pruned**; stores are rebuildable (`rebuild_projections`) |
+| Commit durability | ~6 fsyncs per commit, globally serialized | one WAL fsync + **group commit**; store pages written only by checkpoints |
+| Checkpoints / torn pages | pages written in place, unprotected | **atomic journal (doublewrite)** covering all files at once |
+| Failure after the WAL write | client gets an error, memory diverges | **poisoning** + `CommitOutcomeUnknown`; recovery decides |
+| Current heap | every UPDATE left a dead tuple | slot reuse, compaction, free-space map; **`vacuum()`** of tombstones |
+| Table scan | scan of the whole database + filter, materialized in a `Vec` | **`EntityScan`**: the entity's key range, streamed in pages |
+| Isolation | Snapshot (write skew possible) | **Serializable by default** (read-set validation), Snapshot optional |
+| CDC | none | **native change stream** from the log: before/after images, cursors, filters, durable consumer offsets |
+| C ABI | v2 | **v3** (CDC, checkpoint, vacuum, `POISONED` and `LOG_TRUNCATED` statuses) |
+| B+Tree | two near-identical implementations | **one generic** `BPlusTree<K>` (same on-disk format) |
+| Rust tests | 30 | **113** |
 
-Pomiary (`examples/rust-benchmark`, 5 000 wierszy na encję, ta sama maszyna):
+Measurements (`examples/rust-benchmark`, 5,000 rows per entity, same machine):
 
-| Miara | 2.0.2 | 2.0.3 |
+| Metric | 2.0.2 | 2.0.3 |
 |---|---:|---:|
-| commit jednowierszowy, 1 wątek | 522 /s | ~3 500–3 900 /s |
-| commit jednowierszowy, 8 wątków | 459 /s | ~9 900 /s |
-| ładowanie (100 wierszy / tx) | 21 147 wierszy/s | 48 189 wierszy/s |
-| skan jednej encji z 3 (5 000 wierszy) | 71 ms | 2,9 ms |
-| strony heapu po 2 000 aktualizacjach 100 wierszy | 1 → 7 | 1 → 1 |
+| single-row commit, 1 thread | 522 /s | ~3,500–3,900 /s |
+| single-row commit, 8 threads | 459 /s | ~9,900 /s |
+| bulk load (100 rows / tx) | 21,147 rows/s | 48,189 rows/s |
+| scan of one entity out of 3 (5,000 rows) | 71 ms | 2.9 ms |
+| heap pages after 2,000 updates of 100 rows | 1 → 7 | 1 → 1 |
 
-## Architektura
+## Architecture
 
 ```text
 SQL -> Scala (parser, binder, planner) -> PhysicalPlan JSON -> Java FFM -> C ABI v3 -> Rust
@@ -43,12 +42,12 @@ SQL -> Scala (parser, binder, planner) -> PhysicalPlan JSON -> Java FFM -> C ABI
   checkpoint: dirty pages + roots + record -> journal -> in place
 ```
 
-Szczegóły: [docs/architecture.md](docs/architecture.md), niezmienniki z testami:
-[docs/invariants.md](docs/invariants.md), CDC: [docs/cdc.md](docs/cdc.md), ABI:
-[docs/ffi.md](docs/ffi.md), format planu: [docs/plan-wire-format.md](docs/plan-wire-format.md),
-roadmapa: [docs/roadmap.md](docs/roadmap.md).
+Details: [docs/architecture.md](docs/architecture.md); invariants mapped to tests:
+[docs/invariants.md](docs/invariants.md); CDC: [docs/cdc.md](docs/cdc.md); ABI:
+[docs/ffi.md](docs/ffi.md); plan format: [docs/plan-wire-format.md](docs/plan-wire-format.md);
+roadmap: [docs/roadmap.md](docs/roadmap.md).
 
-## Użycie (Rust)
+## Usage (Rust)
 
 ```rust
 use adb_core::{Row, RowId, Value};
@@ -61,44 +60,44 @@ let id = RowId::compose(/* entity */ 1, /* pk */ 42);
 if db.get_in_tx(&mut tx, id)?.is_none() {
     tx.put(id, Row::new().with_field(1, Value::Int64(100)));
 }
-let ts = db.commit(tx)?;                                   // durable po powrocie
+let ts = db.commit(tx)?;                                   // durable when it returns
 
 let old = db.get_at(id, ts)?;                              // time travel
 let changes = db.read_changes(ChangeCursor::BEGINNING, 100, &ChangeFilter::entities([1]))?;
 db.vacuum()?;
-db.close()?;                                               // checkpoint (opcjonalny)
+db.close()?;                                               // checkpoint (optional)
 ```
 
-## Obsługiwany SQL (warstwa JVM, bez zmian względem 2.0)
+## Supported SQL (JVM layer, unchanged since 2.0)
 
 ```sql
 CREATE TABLE account (id BIGINT PRIMARY KEY, balance BIGINT NOT NULL, owner STRING);
 INSERT INTO account VALUES (1, 100, 'Alice');
 SELECT id, balance FROM account WHERE balance > 50 LIMIT 10;   -- EntityScan
-SELECT * FROM account AS OF VERSION 3 WHERE id = 1;            -- PointLookup w snapshocie
+SELECT * FROM account AS OF VERSION 3 WHERE id = 1;            -- PointLookup at a snapshot
 UPDATE account SET balance = 200 WHERE id = 1;
 DELETE FROM account WHERE id = 1;
 EXPLAIN SELECT * FROM account WHERE id = 1;
 ```
 
-## Budowanie i walidacja
+## Build and validation
 
 ```bash
-./build-milestone2.0.3.sh          # fmt, clippy -D warnings, testy, rustdoc, benchmark, smoke JVM
+./build-milestone2.0.3.sh          # fmt, clippy -D warnings, tests, rustdoc, benchmark, JVM smoke test
 ```
 
-Wymagania: Rust (stable), JDK 22+. Gradle 9 i dostęp do Maven Central są potrzebne tylko do
-testów i dema warstwy Scala/JVM (`cd jvm && gradle clean test`, `./demo/run-demo.sh`). Ścieżka
-Java FFM → Rust jest sprawdzana bez Gradle: `examples/jvm-cdc-smoke/run.sh`.
+Requirements: Rust (stable) and JDK 22+. Gradle 9 and access to Maven Central are needed only for
+the Scala/JVM tests and demo (`cd jvm && gradle clean test`, `./demo/run-demo.sh`). The Java
+FFM → Rust path is checked without Gradle by `examples/jvm-cdc-smoke/run.sh`.
 
-## Układ repozytorium
+## Repository layout
 
 ```text
-crates/        silnik Rust (core, journal, page, buffer, btree, storage, wal, tx, execution, engine, ffi)
+crates/        Rust engine (core, journal, page, buffer, btree, storage, wal, tx, execution, engine, ffi)
 include/adb.h  C ABI v3
-jvm/           Scala/Java: model, katalog, SQL, planowanie, FFM, gateway, CLI
-proto/         docelowy binarny kontrakt planu
-examples/      benchmark Rust, smoke test JVM CDC, wyniki
-demo/          przegląd funkcji przez CLI JVM
-docs/          architektura, niezmienniki, CDC, ABI; docs/history — artefakty starszych milestone'ów
+jvm/           Scala/Java: model, catalog, SQL, planning, FFM, gateway, CLI
+proto/         target binary plan contract
+examples/      Rust benchmark, JVM CDC smoke test, results
+demo/          feature tour through the JVM CLI
+docs/          architecture, invariants, CDC, ABI; docs/history holds artifacts of earlier milestones
 ```
