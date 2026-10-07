@@ -43,7 +43,10 @@ object SqlParser:
   val MaxOrderBy: Int = 4096
   /** Words that end a FROM item and therefore can never be an implicit alias. */
   private[sql] val ClauseKeywords: Set[String] =
-    Set("WHERE", "JOIN", "INNER", "LEFT", "OUTER", "CROSS", "ON", "GROUP", "ORDER", "LIMIT", "AS", "BY", "FROM")
+    Set(
+      "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "NATURAL", "OUTER", "CROSS", "ON", "USING",
+      "GROUP", "ORDER", "LIMIT", "AS", "BY", "FROM", "HAVING", "UNION"
+    )
 
 /** Mutable cursor over the token stream of one statement.
   *
@@ -171,7 +174,10 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
         else if acceptWord("INNER") then { expectWord("JOIN"); Some(JoinKind.Inner) }
         else if acceptWord("LEFT") then { acceptWord("OUTER"); expectWord("JOIN"); Some(JoinKind.Left) }
         else if acceptWord("CROSS") then { expectWord("JOIN"); Some(JoinKind.Cross) }
-        else None
+        else current match
+          case Token.Word(word) if Set("RIGHT", "FULL", "NATURAL").contains(word.toUpperCase) =>
+            throw error(s"${word.toUpperCase} JOIN is not supported; use LEFT JOIN with the tables swapped, or INNER JOIN")
+          case _ => None
       kind match
         case None => more = false
         case Some(kind) =>

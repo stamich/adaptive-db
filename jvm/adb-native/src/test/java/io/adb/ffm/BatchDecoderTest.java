@@ -42,6 +42,24 @@ class BatchDecoderTest {
         assertTrue(decoded.column(9).isEmpty());
     }
 
+    /** A column mixing NULL and non-NULL values decodes NULLs as {@code null} (LEFT JOIN output). */
+    @Test void decodesNullValuesInAColumn() {
+        ByteBuffer b = ByteBuffer.allocate(16 + (16 + 1 + 16) + (16 + 1 + 12 + 1)) // header, INT64 column, STRING column
+            .order(ByteOrder.LITTLE_ENDIAN);
+        b.putInt(0x41444242);
+        b.putShort((short) 2); b.putShort((short) 0); // version 2, no row ids
+        b.putInt(2); b.putInt(2); // two rows, two columns
+        b.putInt(0); b.put((byte) 2); b.put(new byte[]{0, 0, 0}); // slot 0, INT64
+        b.putInt(1); b.putInt(16);
+        b.put((byte) 0b10); b.putLong(5L); b.putLong(0L); // row 1 is NULL
+        b.putInt(1); b.put((byte) 4); b.put(new byte[]{0, 0, 0}); // slot 1, STRING
+        b.putInt(1); b.putInt(12 + 1);
+        b.put((byte) 0b01); b.putInt(0); b.putInt(0); b.putInt(1); b.put((byte) 'x'); // row 0 is NULL
+        var decoded = BatchDecoder.decode(b.array());
+        assertEquals(java.util.Arrays.asList(5L, null), decoded.column(0).orElseThrow().values());
+        assertEquals(java.util.Arrays.asList(null, "x"), decoded.column(1).orElseThrow().values());
+    }
+
     /** Version-1 batches and unknown flags are rejected. */
     @Test void rejectsOtherVersionsAndUnknownFlags() {
         byte[] v1 = oneRow(true);

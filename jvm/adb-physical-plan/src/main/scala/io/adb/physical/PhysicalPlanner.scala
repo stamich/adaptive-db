@@ -56,7 +56,7 @@ object PhysicalPlanner:
       case LPlan.Limit(LPlan.Project(LPlan.Sort(input, keys), attributes), limit) =>
         orderedLimit(input, keys, limit, Some(attributes))
       case LPlan.Sort(input, keys) => PPlan.Sort(translate(input), sortKeys(keys))
-      case LPlan.Project(input, attributes) => PPlan.Project(translate(input), attributes.map(_.slot))
+      case LPlan.Project(input, attributes) => PPlan.Project(translate(input), projectedSlots(attributes))
       case LPlan.Limit(input, limit) => PPlan.Limit(translate(input), limit)
 
     /** `LIMIT` over `ORDER BY`: TopK or Sort + Limit as the policy decides; a projection between
@@ -73,7 +73,7 @@ object PhysicalPlanner:
       val ordered =
         if topK then PPlan.TopK(translated, sortKeys(keys), limit)
         else PPlan.Limit(PPlan.Sort(translated, sortKeys(keys)), limit)
-      project.fold(ordered)(attributes => PPlan.Project(ordered, attributes.map(_.slot)))
+      project.fold(ordered)(attributes => PPlan.Project(ordered, projectedSlots(attributes)))
 
     /** Splits the join condition into equality keys and a residual and lets the policy choose. */
     private def translateJoin(join: LPlan.Join): PPlan =
@@ -113,6 +113,11 @@ object PhysicalPlanner:
         case ColumnOrigin.Stored(_, _, field) => ScanColumn(field, attribute.slot)
         case ColumnOrigin.Computed(_) => throw new IllegalStateException(s"scan of computed attribute ${attribute.display}")
     }
+
+  /** Slots of a projection, each once: `SELECT id, id` or a repeated aggregate shows one slot in
+    * several output columns, and the gateway maps output columns to batch columns by slot.
+    */
+  private def projectedSlots(attributes: Vector[Attribute]): Vector[SlotId] = attributes.map(_.slot).distinct
 
   /** Sort keys of ORDER BY items. */
   private def sortKeys(keys: Vector[BoundOrder]): Vector[SortKey] = keys.map(k => SortKey(k.attribute.slot, k.descending))

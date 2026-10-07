@@ -54,5 +54,9 @@ final class RelationalSqlParserTest:
   @Test def rejectsInvalidInput(): Unit =
     assertThrows(classOf[IllegalArgumentException], () => parser.parse("SELECT SUM(*) FROM t"))
     assertThrows(classOf[IllegalArgumentException], () => parser.parse("SELECT * FROM t JOIN u"))
+    // Unsupported join kinds must not be misread as an alias followed by an INNER JOIN.
+    for kind <- Vector("RIGHT", "RIGHT OUTER", "FULL", "NATURAL") do
+      val error = assertThrows(classOf[IllegalArgumentException], () => parser.parse(s"SELECT * FROM a $kind JOIN b ON a.id = b.id"))
+      assertTrue(error.getMessage.contains("not supported"), error.getMessage)
     val tooManyJoins = (1 to SqlParser.MaxJoins + 1).map(i => s"CROSS JOIN t$i").mkString("SELECT * FROM t0 ", " ", "")
     assertThrows(classOf[IllegalArgumentException], () => parser.parse(tooManyJoins))

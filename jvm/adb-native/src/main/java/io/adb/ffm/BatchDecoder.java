@@ -90,7 +90,7 @@ final class BatchDecoder {
                 byte[] value = Arrays.copyOfRange(payload, offsetBytes + start, offsetBytes + end);
                 values.add(type == PhysicalType.STRING ? new String(value, StandardCharsets.UTF_8) : value);
             }
-            return List.copyOf(values);
+            return Collections.unmodifiableList(values); // List.copyOf would reject NULL values
         }
 
         int width = switch (type) { case BOOL -> 1; case INT64, FLOAT64 -> 8; default -> throw new IllegalStateException(); };
@@ -99,7 +99,7 @@ final class BatchDecoder {
             Object value = switch (type) { case BOOL -> p.get() != 0; case INT64 -> p.getLong(); case FLOAT64 -> p.getDouble(); default -> throw new IllegalStateException(); };
             values.add(isNull(bitmap, i) ? null : value);
         }
-        return List.copyOf(values);
+        return Collections.unmodifiableList(values); // List.copyOf would reject NULL values
     }
 
     /** Returns whether the requested row is marked null in a validated bitmap. */

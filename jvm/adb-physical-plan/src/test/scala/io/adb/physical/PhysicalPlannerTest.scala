@@ -54,6 +54,15 @@ final class PhysicalPlannerTest:
     assertEquals(2, scan.columns.size, "id is never read")
     assertTrue(q.slotNames.values.exists(_ == "COUNT(*)"))
 
+  /** Selecting the same column or aggregate twice projects its slot once (the engine rejects
+    * duplicate projected slots; the gateway shows the value in both output columns).
+    */
+  @Test def repeatedOutputColumnsProjectTheirSlotOnce(): Unit =
+    for sql <- Vector("SELECT id, id FROM customer", "SELECT COUNT(*), COUNT(*) AS c2 FROM customer", "SELECT name AS a, name AS b FROM customer ORDER BY city LIMIT 3") do
+      val q = PlanningFixtures.planned(sql)
+      val slots = find(q.plan) { case Project(_, slots) => slots }.get
+      assertEquals(slots.distinct, slots, sql)
+
   /** A custom policy replaces the strategy choice without touching the planner (the seam for
     * statistics- or intent-driven planning).
     */

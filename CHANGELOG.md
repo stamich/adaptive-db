@@ -50,10 +50,14 @@ described in `docs/milestone-2.1.3.md`.
 - `build-milestone-2.1.3.sh` replaces `build-milestone2.0.3.sh`; `demo/run-demo.sh` uses the
   Gradle wrapper.
 - `include/adb.h`: removed an accidental second copy of the header.
+- Java `BatchDecoder`: columns that mix NULL and non-NULL values decode correctly (`List.copyOf`
+  rejected the NULLs; latent before 2.1, common with LEFT JOIN and NULL group keys).
+- `RIGHT` / `FULL` / `NATURAL JOIN` are rejected with a clear message instead of being misread as
+  an alias followed by an INNER JOIN; selecting a column or aggregate twice projects its slot once.
 
 ### Tests
-- Rust: 113 → 157 (plan validation, joins, aggregation/sort/TopK, memory tracker, profiles, plan
-  wire, ABI). JVM: 13 → 38. A shared fixture pins the plan wire format from both the Scala encoder
+- Rust: 113 → 158 (plan validation, joins, aggregation/sort/TopK, memory tracker, profiles, plan
+  wire, ABI). JVM: 13 → 40. A shared fixture pins the plan wire format from both the Scala encoder
   and the Rust decoder.
 
 ### Compatibility

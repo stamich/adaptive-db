@@ -5,8 +5,8 @@ use crate::{
     ExecRow, ExecutionContext, ExecutionError, SortKey,
 };
 
-/// Streams its input into a buffer of at most `2k` rows; whenever the buffer is full it is
-/// sorted and cut back to `k`. Memory is O(k) instead of O(input) and the work is
+/// Streams its input into a buffer of at most `2k` rows (and at most the materialized-row cap);
+/// whenever the buffer is full it is sorted and cut back to `k`. Memory is O(k) instead of O(input) and the work is
 /// O(n log k) amortized. Ties keep input order, exactly like `Limit(Sort)`.
 pub struct TopKOperator {
     /// Upstream operator.
@@ -60,8 +60,16 @@ impl TopKOperator {
     fn compute(&mut self, context: &ExecutionContext) -> Result<Vec<ExecRow>, ExecutionError> {
         let mut reservation = context.memory.reservation("top-k");
         let mut buffer: Vec<ExecRow> = Vec::new();
+        let max_rows = context.limits.max_materialized_rows;
+        if self.k > max_rows {
+            return Err(ExecutionError::ResourceLimit(format!(
+                "top-k would hold {} rows, more than {max_rows}",
+                self.k
+            )));
+        }
         if self.k > 0 {
-            let capacity = self.k.saturating_mul(2);
+            // The buffer never exceeds the materialized-row cap (k + 1 when k equals the cap).
+            let capacity = self.k.saturating_mul(2).min(max_rows).max(self.k + 1);
             while let Some(batch) = self.input.next_batch(context)? {
                 context.check_running()?;
                 self.rows_in += batch.len() as u64;

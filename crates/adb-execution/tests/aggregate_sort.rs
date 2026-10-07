@@ -326,6 +326,54 @@ fn top_k_equals_limit_over_sort() {
     );
 }
 
+/// TopK respects the materialized-row cap: k above it is refused, and the buffer stays within it
+/// while still producing the exact result.
+#[test]
+fn top_k_respects_the_row_cap() {
+    let limits = |rows| ExecutionLimits {
+        max_materialized_rows: rows,
+        ..ExecutionLimits::default()
+    };
+    let plan = |k| PhysicalPlan::TopK {
+        input: Box::new(scan(4, &[(1, 0), (2, 1)])),
+        keys: vec![key(0, true)],
+        limit: k,
+    };
+    let refused = run_with(
+        noisy(100),
+        plan(11),
+        ExecutionContext::new(CommitTs(1)).with_limits(limits(10)),
+    );
+    assert!(matches!(refused, Err(ExecutionError::ResourceLimit(_))));
+
+    let capped = run_with(
+        noisy(1000),
+        plan(10),
+        ExecutionContext::new(CommitTs(1)).with_limits(limits(10)),
+    )
+    .unwrap();
+    let rows: usize = capped.iter().map(|batch| batch.len()).sum();
+    assert_eq!(rows, 10);
+    let expected = rows_of(
+        noisy(1000),
+        PhysicalPlan::Limit {
+            input: Box::new(PhysicalPlan::Sort {
+                input: Box::new(scan(4, &[(1, 0), (2, 1)])),
+                keys: vec![key(0, true)],
+            }),
+            limit: 10,
+        },
+        &[0, 1],
+    );
+    let actual: Vec<Vec<Value>> = capped
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.len()).map(move |row| vec![batch.value(row, s(0)), batch.value(row, s(1))])
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
 /// `TopK` with k = 0 does not read its input at all.
 #[test]
 fn top_k_zero_reads_nothing() {

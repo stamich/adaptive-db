@@ -21,7 +21,7 @@ change stream and, since 2.1.3, relational query execution (joins, aggregation, 
 | Observability | — | **EXPLAIN ANALYZE** with the native per-operator **runtime profile** |
 | Boundary | plan JSON v1, batch v1, C ABI 3 | **plan wire v2** (`adb-plan-wire`, versioned, strict), **batch v2**, **C ABI 4** |
 | Version | engine 0.2.3 | engine, crates and JVM build **2.1.3** |
-| Tests | 113 Rust, 13 JVM | **157 Rust, 38 JVM** (plus a cross-language plan-wire contract) |
+| Tests | 113 Rust, 13 JVM | **158 Rust, 40 JVM** (plus a cross-language plan-wire contract) |
 
 The storage engine of 2.0.3 (log as source of truth, journaled checkpoints, group commit,
 serializable isolation, native CDC) is unchanged. How the 2.1.2 plan was adapted, and why:
