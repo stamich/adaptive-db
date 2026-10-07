@@ -14,7 +14,7 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
                          Database (adb-engine)
    begin/get/commit ─────────────┐        read_changes ─────────────┐
                                  ▼                                   ▼
-                  ┌─────────────────────────────┐      ┌──────────────────────────┐
+                  ┌──────────────────────────────┐      ┌──────────────────────────┐
                   │ commit pipeline              │      │ change feed (cdc)        │
                   │ validate → append → apply    │      │ WalCursor + TxAssembler  │
                   │ → group fsync → publish      │      │ durable prefix only      │
