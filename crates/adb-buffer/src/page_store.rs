@@ -1,19 +1,17 @@
-//! Module `page_store` for crate `adb-buffer`.
+//! Abstraction over the persistent location of fixed-size pages.
 use adb_core::PageId;
-use adb_page::{Page, PageKind};
+use adb_page::Page;
 
 use crate::BufferError;
 
-/// Defines the `PageStore` behavior contract for this subsystem.
+/// Random-access persistence of fixed-size pages. Allocation is the buffer pool's job.
 pub trait PageStore: Send + Sync {
-    /// Implements the `page_count` operation used by this subsystem.
+    /// Number of complete pages currently persisted.
     fn page_count(&self) -> Result<u64, BufferError>;
-    /// Implements the `allocate_page` operation used by this subsystem.
-    fn allocate_page(&self, kind: PageKind) -> Result<Page, BufferError>;
-    /// Implements the `read_page` operation used by this subsystem.
+    /// Reads and validates one persisted page.
     fn read_page(&self, page_id: PageId) -> Result<Page, BufferError>;
-    /// Implements the `write_page` operation used by this subsystem.
+    /// Seals and writes one page, extending the store when the page lies past its end.
     fn write_page(&self, page: &Page) -> Result<(), BufferError>;
-    /// Implements the `sync` operation used by this subsystem.
+    /// Makes all previous writes durable.
     fn sync(&self) -> Result<(), BufferError>;
 }

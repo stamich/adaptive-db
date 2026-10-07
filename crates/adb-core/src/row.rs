@@ -1,30 +1,30 @@
-//! Module `row` for crate `adb-core`.
+//! Logical row representation: a sparse map from field id to value.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{FieldId, Value};
 
-/// Represents `Row` state used by this subsystem.
+/// One logical row. Fields are kept ordered so encodings are deterministic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Row {
+    /// Field values by field id.
     pub fields: BTreeMap<FieldId, Value>,
 }
 
-/// Implements behavior for `Row`.
 impl Row {
-    /// Implements the `new` operation used by this subsystem.
+    /// Creates an empty row.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Implements the `with_field` operation used by this subsystem.
+    /// Builder-style setter used mostly by tests and examples.
     pub fn with_field(mut self, field_id: FieldId, value: Value) -> Self {
         self.fields.insert(field_id, value);
         self
     }
 
-    /// Implements the `get` operation used by this subsystem.
+    /// Returns the value of `field_id`, if present.
     pub fn get(&self, field_id: FieldId) -> Option<&Value> {
         self.fields.get(&field_id)
     }

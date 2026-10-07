@@ -242,6 +242,15 @@ impl Page {
                 let offset = PAGE_HEADER_SIZE + slot * 4;
                 let tuple = self.read_u16(offset) as usize;
                 let len = self.read_u16(offset + 2) as usize;
+                if tuple == 0 {
+                    // Free slot (see `SlottedPage`): offset 0 lies inside the header.
+                    if len != 0 {
+                        return Err(PageError::Corrupt(format!(
+                            "free slot {slot} has non-zero length"
+                        )));
+                    }
+                    continue;
+                }
                 let tuple_end = tuple
                     .checked_add(len)
                     .ok_or_else(|| PageError::Corrupt("slot range overflow".into()))?;
