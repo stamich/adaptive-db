@@ -6,16 +6,24 @@ import io.adb.logical.*
 import io.adb.model.*
 import io.adb.optimizer.RuleOptimizer
 import io.adb.physical.*
-import io.adb.sql.*
-import scala.jdk.CollectionConverters.*
+import io.adb.sql.SqlParser
 import java.util.Optional
+import scala.jdk.CollectionConverters.*
 
-/** SQL front door of the JVM control plane: parses, binds, optimizes and plans statements, then executes them through the native engine.
+/** SQL front door of the JVM control plane:
+  *
+  * {{{
+  * SQL -> SqlParser -> Binder/SelectBinder -> LogicalPlanner -> RuleOptimizer
+  *     -> PhysicalPlanner (+ PlanningPolicy) -> PlanJsonEncoder -> Java FFM -> Rust
+  * }}}
+  *
+  * DDL goes to the catalog, single-row DML to the native row API, queries through planning.
   *
   * @param catalog schema registry used for binding and DDL
   * @param native  open native database handle
+  * @param policy  physical strategy policy (the seam for statistics- or intent-driven planning)
   */
-final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
+final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase, policy: PlanningPolicy = DefaultPlanningPolicy):
   /** SQL text to AST parser. */
   private val parser = new SqlParser
   /** Resolves names and types against the catalog. */
@@ -26,13 +34,19 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
   /** Executes one SQL statement.
     *
     * @param sql statement text
-    * @return rows for queries, or a status message for DDL/DML
+    * @return rows for queries, plan text for EXPLAIN, or a status message for DDL/DML
     * @throws NativeException if the engine rejects the operation
     */
   def execute(sql: String): QueryResult =
     val ast = parser.parse(sql)
     val bound = binder.bind(ast)
     executeBound(bound)
+
+  /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
+  def plan(select: BoundSelect): AdaptiveDatabase.Plans =
+    val logical = LogicalPlanner.plan(select)
+    val optimized = optimizer.optimize(logical)
+    AdaptiveDatabase.Plans(logical, optimized, PhysicalPlanner.plan(optimized, policy))
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement): QueryResult = statement match
@@ -41,12 +55,10 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
 
     case BoundInsert(entity, values) =>
-      val pkField = entity.primaryKeyField
-      val pk = values.get(pkField.id) match
+      val pk = values.get(entity.primaryKeyField.id) match
         case Some(DbValue.Int64Value(value)) => value
         case _ => throw new IllegalArgumentException("BIGINT primary key value required")
-      val json = MutationJsonEncoder.row(entity, values)
-      val ts = native.insert(entity.id.value, pk, json)
+      val ts = native.insert(entity.id.value, pk, MutationJsonEncoder.row(entity, values))
       QueryResult(Vector.empty, Vector.empty, Some(s"INSERT 1 commitTs=$ts"))
 
     case BoundUpdate(entity, assignments, pk) =>
@@ -57,37 +69,34 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
       val ts = native.delete(entity.id.value, pk)
       QueryResult(Vector.empty, Vector.empty, Some(s"DELETE 1 commitTs=$ts"))
 
-    case select: BoundSelect => executeSelect(select)
+    case select: BoundSelect => run(select, plan(select))._1
 
     case BoundExplain(inner: BoundSelect, analyze) =>
-      val logical = LogicalPlanner.plan(inner)
-      val optimized = optimizer.optimize(logical)
-      val physical = PhysicalPlanner.plan(optimized)
-      if analyze then
-        val result = executeSelect(inner)
-        QueryResult(
-          Vector("plan"),
-          Vector(
-            Vector("Logical:\n" + logical),
-            Vector("Optimized:\n" + optimized),
-            Vector("Physical:\n" + physical),
-            Vector(s"Executed rows=${result.rows.size}")
-          )
-        )
-      else QueryResult(Vector("plan"), Vector(Vector("Logical:\n" + logical), Vector("Optimized:\n" + optimized), Vector("Physical:\n" + physical)))
+      val plans = plan(inner)
+      val sections = Vector(
+        "Logical:\n" + LogicalPlan.render(plans.logical),
+        "Optimized:\n" + LogicalPlan.render(plans.optimized),
+        "Physical:\n" + Explain.physical(plans.physical.plan, plans.physical.slotNames),
+        "Decisions:\n" + (if plans.physical.decisions.isEmpty then "(none)" else plans.physical.decisions.map("- " + _.display).mkString("\n"))
+      )
+      val analyzed =
+        if analyze then
+          val (result, profile) = run(inner, plans)
+          Vector(s"Executed rows=${result.rows.size}", "Runtime profile:\n" + ProfileRenderer.render(profile))
+        else Vector.empty
+      QueryResult(Vector("plan"), (sections ++ analyzed).map(section => Vector[Any](section)))
 
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
 
-  /** Plans a SELECT, sends the physical plan to the engine as JSON (optionally at an `AS OF` snapshot), and materializes the projected columns of every result batch.
+  /** Executes a planned SELECT: sends the physical plan to the engine as JSON (optionally at an
+    * `AS OF` snapshot), materializes the output columns of every batch by slot, and returns the
+    * rows together with the native runtime profile.
     *
     * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
     */
-  private def executeSelect(select: BoundSelect): QueryResult =
-    val logical = LogicalPlanner.plan(select)
-    val optimized = optimizer.optimize(logical)
-    val physical = PhysicalPlanner.plan(optimized)
-    val json = PlanJsonEncoder.encode(physical)
+  private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans): (QueryResult, String) =
+    val json = PlanJsonEncoder.encode(plans.physical.plan)
     val snapshot: Optional[java.lang.Long] = select.asOfVersion match
       case Some(v) => Optional.of(java.lang.Long.valueOf(v))
       case None => Optional.empty[java.lang.Long]()
@@ -98,22 +107,26 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
       var next = query.nextBatch()
       while next.isPresent do
         val batch = next.get()
-        val byField = batch.columns().asScala.map(c => c.slotId() -> c).toMap
+        val bySlot = batch.columns().asScala.map(c => c.slotId() -> c).toMap
+        val columns = select.output.map(column => bySlot.get(column.attribute.slot.value))
         for row <- 0 until batch.rowCount() do
           if materializedRows >= AdaptiveDatabase.MaxMaterializedResultRows then
             throw new IllegalStateException(s"result exceeds ${AdaptiveDatabase.MaxMaterializedResultRows} rows; use LIMIT")
-          rows += select.fields.map { field =>
-            byField.get(field.id.value) match
-              case Some(column) => column.values().get(row)
-              case None => null
-          }
+          rows += columns.map(_.fold(null: Any)(_.values().get(row)))
           materializedRows += 1
         next = query.nextBatch()
-      QueryResult(select.fields.map(_.name), rows.result())
+      (QueryResult(select.output.map(_.name), rows.result()), query.profileJson())
     finally query.close()
 
-
-/** Hard limits for the materializing Milestone 2 JVM gateway. */
+/** Plans of one query and the gateway's limits. */
 object AdaptiveDatabase:
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
+
+  /** The planning stages of one SELECT.
+    *
+    * @param logical   canonical plan built from the bound statement
+    * @param optimized plan after the rule optimizer
+    * @param physical  executable plan with decisions and slot names
+    */
+  final case class Plans(logical: LogicalPlan, optimized: LogicalPlan, physical: PlannedQuery)

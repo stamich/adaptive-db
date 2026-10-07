@@ -55,7 +55,7 @@ object BenchmarkMain:
     val optimized = optimizer.optimize(logical)
     val physicalNs = time(iterations) { PhysicalPlanner.plan(optimized) }
     val physical = PhysicalPlanner.plan(optimized)
-    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical) }
+    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan) }
     val totalNs = time(iterations) { pipeline(parser, binder, optimizer, sql) }
 
     report("sql_parse", iterations, parseNs)
@@ -71,7 +71,7 @@ object BenchmarkMain:
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
     val logical = LogicalPlanner.plan(bound)
     val optimized = optimizer.optimize(logical)
-    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized))
+    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan)
 
   /** Times end-to-end SQL execution through FFM against a 1000-row table: point lookups and a filtered scan with LIMIT. */
   private def benchmarkGateway(iterations: Int, dataDir: Path, nativeLib: Path): Unit =
