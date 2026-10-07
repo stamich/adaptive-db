@@ -1,4 +1,4 @@
-//! Module `ffi` for `adb-ffi` in Adaptive DB Milestone 2.0.1.
+//! Query lifecycle over the C ABI.
 use std::ptr;
 
 use adb_core::{RowId, Value};
@@ -10,7 +10,7 @@ use adb_ffi::{
 };
 use tempfile::tempdir;
 
-/// Documents `ffi_executes_point_lookup` and its role in the hardened Milestone 2.0.1 implementation.
+/// A point lookup plan runs through the full C ABI query lifecycle.
 #[test]
 fn ffi_executes_point_lookup() {
     let dir = tempdir().unwrap();

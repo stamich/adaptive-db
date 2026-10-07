@@ -5,11 +5,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /** Safe-ish Java ownership wrapper around one native Adaptive DB database handle. */
 public final class NativeDatabase implements AutoCloseable {
     private static final int MAX_PATH_BYTES = 64 * 1024;
     private static final int MAX_JSON_BYTES = 8 * 1024 * 1024;
+    private static final long MAX_CHANGES_JSON_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_CONSUMER_NAME_BYTES = 256;
 
     private final NativeLibrary library;
     private MemorySegment handle;
@@ -97,7 +100,83 @@ public final class NativeDatabase implements AutoCloseable {
         }
     }
 
-    /** Releases the native database exactly once and then closes the library arena. */
+    // ----- change data capture ------------------------------------------------------------
+
+    /**
+     * Reads up to {@code maxEvents} committed transactions after {@code cursor} as one JSON
+     * document ({@code {"next_cursor": "...", "events": [...]}}); see {@code include/adb.h}.
+     * Cursors are unsigned 64-bit log positions; {@code 0} is the beginning of the log.
+     * With no {@code entityIds} every entity is included.
+     */
+    public synchronized String readChangesJson(long cursor, int maxEvents, long... entityIds) {
+        ensureOpen();
+        Objects.requireNonNull(entityIds, "entityIds");
+        try (var arena = Arena.ofConfined()) {
+            var entities = entityIds.length == 0
+                ? MemorySegment.NULL
+                : arena.allocateFrom(ValueLayout.JAVA_LONG, entityIds);
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.readChanges, handle, cursor, maxEvents,
+                entities, (long) entityIds.length, out));
+            byte[] json = library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_CHANGES_JSON_BYTES);
+            return new String(json, StandardCharsets.UTF_8);
+        }
+    }
+
+    /** Cursor at the durable end of the log: start here to receive only new changes. */
+    public synchronized long changeFeedEnd() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.changeFeedEnd, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /** Durably stores the cursor of a named consumer. */
+    public synchronized void commitConsumerOffset(String consumer, long cursor) {
+        ensureOpen();
+        byte[] name = consumerName(consumer);
+        try (var arena = Arena.ofConfined()) {
+            var nameSegment = arena.allocateFrom(ValueLayout.JAVA_BYTE, name);
+            library.check(library.invokeInt(library.commitConsumerOffset, handle, nameSegment, (long) name.length, cursor));
+        }
+    }
+
+    /** Stored cursor of a named consumer, or empty if it never committed one. */
+    public synchronized OptionalLong consumerOffset(String consumer) {
+        ensureOpen();
+        byte[] name = consumerName(consumer);
+        try (var arena = Arena.ofConfined()) {
+            var nameSegment = arena.allocateFrom(ValueLayout.JAVA_BYTE, name);
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            int code = library.invokeInt(library.consumerOffset, handle, nameSegment, (long) name.length, out);
+            if (AdbStatus.fromCode(code) == AdbStatus.NOT_FOUND) return OptionalLong.empty();
+            library.check(code);
+            return OptionalLong.of(out.get(ValueLayout.JAVA_LONG, 0));
+        }
+    }
+
+    // ----- maintenance ----------------------------------------------------------------------
+
+    /** Persists all in-memory projection changes (also done automatically and on close). */
+    public synchronized void checkpoint() {
+        ensureOpen();
+        library.check(library.invokeInt(library.checkpoint, handle));
+    }
+
+    /** Removes expired delete tombstones; returns how many were removed. */
+    public synchronized long vacuum() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.vacuum, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /** Checkpoints and releases the native database exactly once, then closes the library arena. */
     @Override public synchronized void close() {
         if (handle != null && handle.address() != 0) {
             library.check(library.invokeInt(library.close, handle));
@@ -109,6 +188,14 @@ public final class NativeDatabase implements AutoCloseable {
     /** Rejects method calls after native ownership has been released. */
     private void ensureOpen() {
         if (handle == null || handle.address() == 0) throw new IllegalStateException("database is closed");
+    }
+
+    /** Validates a consumer name and encodes it as UTF-8. */
+    private static byte[] consumerName(String consumer) {
+        Objects.requireNonNull(consumer, "consumer");
+        byte[] bytes = consumer.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length == 0 || bytes.length > MAX_CONSUMER_NAME_BYTES) throw new IllegalArgumentException("consumer name length outside 1.." + MAX_CONSUMER_NAME_BYTES);
+        return bytes;
     }
 
     /** Converts a Java string to a bounded UTF-8 payload before native allocation/call. */

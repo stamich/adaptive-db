@@ -4,9 +4,9 @@ import io.adb.model.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Documents `PlanJsonEncoderTest` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Wire-format tests of [[PlanJsonEncoder]]. */
 class PlanJsonEncoderTest:
-  /** Documents `emitsRustSerdeTags` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Operator and expression tags match the Rust serde representation. */
   @Test def emitsRustSerdeTags(): Unit =
     val plan = PhysicalPlan.Filter(
       PhysicalPlan.Scan,
@@ -27,3 +27,8 @@ class PlanJsonEncoderTest:
     val rowId = (BigInt(7) << 64) | BigInt("18446744073709551615")
     val json = PlanJsonEncoder.encode(PhysicalPlan.PointLookup(rowId))
     assertTrue(json.contains(s"\"row_id\":\"$rowId\""))
+
+  /** Table scans are planned as native entity range scans, not filtered full scans (2.0.3). */
+  @Test def tableScanBecomesEntityScan(): Unit =
+    val json = PlanJsonEncoder.encode(PhysicalPlan.EntityScan(EntityId(7)))
+    assertEquals("{\"op\":\"entity_scan\",\"entity_id\":7}", json)

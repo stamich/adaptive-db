@@ -8,7 +8,7 @@ import java.nio.file.Path;
 final class NativeLibrary implements AutoCloseable {
     private static final long MAX_ERROR_BYTES = 1024 * 1024;
     private boolean closed;
-    static final int EXPECTED_ABI = 2;
+    static final int EXPECTED_ABI = 3;
 
     final Arena arena = Arena.ofShared();
     final Linker linker = Linker.nativeLinker();
@@ -31,6 +31,12 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle insertRow;
     final MethodHandle updateFields;
     final MethodHandle deleteRow;
+    final MethodHandle readChanges;
+    final MethodHandle changeFeedEnd;
+    final MethodHandle commitConsumerOffset;
+    final MethodHandle consumerOffset;
+    final MethodHandle checkpoint;
+    final MethodHandle vacuum;
 
     NativeLibrary(Path libraryPath) {
         lookup = SymbolLookup.libraryLookup(libraryPath, arena);
@@ -51,6 +57,13 @@ final class NativeLibrary implements AutoCloseable {
         insertRow = downcall("adb_insert_row_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         updateFields = downcall("adb_update_fields_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         deleteRow = downcall("adb_delete_row", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+
+        readChanges = downcall("adb_read_changes_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        changeFeedEnd = downcall("adb_change_feed_end", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        commitConsumerOffset = downcall("adb_commit_consumer_offset", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
+        consumerOffset = downcall("adb_consumer_offset", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        checkpoint = downcall("adb_checkpoint", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+        vacuum = downcall("adb_vacuum", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);
@@ -74,6 +87,20 @@ final class NativeLibrary implements AutoCloseable {
     MemorySegment invokeAddress(MethodHandle handle, Object... args) {
         try { return (MemorySegment) handle.invokeWithArguments(args); }
         catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Copies a native byte buffer ({@code AdbBatchHandle}) into Java and releases it. */
+    byte[] takeBuffer(MemorySegment bufferHandle, long maxBytes) {
+        if (bufferHandle.address() == 0) throw new IllegalStateException("native call returned OK without a buffer");
+        try {
+            long len = invokeLong(batchLen, bufferHandle);
+            if (len <= 0 || len > maxBytes) throw new IllegalStateException("invalid native buffer length " + len);
+            var dataPtr = invokeAddress(batchData, bufferHandle);
+            if (dataPtr.address() == 0) throw new IllegalStateException("null native buffer data pointer");
+            return dataPtr.reinterpret(len).toArray(ValueLayout.JAVA_BYTE);
+        } finally {
+            check(invokeInt(batchRelease, bufferHandle));
+        }
     }
 
     void check(int code) {

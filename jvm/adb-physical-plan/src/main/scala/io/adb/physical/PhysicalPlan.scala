@@ -2,34 +2,36 @@ package io.adb.physical
 
 import io.adb.model.*
 
-/** Documents `PhysicalPlan` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Physical plan understood by the native engine; mirrors the Rust `PhysicalPlan` enum. */
 sealed trait PhysicalPlan derives CanEqual
-/** Documents `PhysicalPlan` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Physical plan operators. */
 object PhysicalPlan:
-  /** Documents `PointLookup` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Reads one row by its 128-bit storage key `(entity << 64) | primary key`. */
   final case class PointLookup(rowId: BigInt) extends PhysicalPlan
-  /** Documents `Scan` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Scans every row of every entity (diagnostics only; planners emit `EntityScan`). */
   case object Scan extends PhysicalPlan
-  /** Documents `Filter` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Streams the rows of one entity as a native key-range scan (Milestone 2.0.3). */
+  final case class EntityScan(entityId: EntityId) extends PhysicalPlan
+  /** Keeps the rows of `input` for which `predicate` is true. */
   final case class Filter(input: PhysicalPlan, predicate: PhysicalExpr) extends PhysicalPlan
-  /** Documents `Project` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Restricts the rows of `input` to `fields`. */
   final case class Project(input: PhysicalPlan, fields: Vector[FieldId]) extends PhysicalPlan
-  /** Documents `Limit` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Stops after `limit` rows. */
   final case class Limit(input: PhysicalPlan, limit: Int) extends PhysicalPlan
 
-/** Documents `PhysicalExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Scalar expression evaluated by the native engine. */
 sealed trait PhysicalExpr derives CanEqual
-/** Documents `PhysicalExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Expression nodes. */
 object PhysicalExpr:
-  /** Documents `Column` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Value of a field of the current row (NULL if absent). */
   final case class Column(fieldId: FieldId) extends PhysicalExpr
-  /** Documents `Literal` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Constant value. */
   final case class Literal(value: DbValue) extends PhysicalExpr
-  /** Documents `Binary` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Comparison or boolean combination of two expressions. */
   final case class Binary(left: PhysicalExpr, op: PhysicalBinaryOp, right: PhysicalExpr) extends PhysicalExpr
-  /** Documents `Not` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Boolean negation. */
   final case class Not(expr: PhysicalExpr) extends PhysicalExpr
 
-/** Documents `PhysicalBinaryOp` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Binary operators; names map to the snake_case wire tags. */
 enum PhysicalBinaryOp derives CanEqual:
   case Eq, Ne, Lt, Le, Gt, Ge, And, Or

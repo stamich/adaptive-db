@@ -26,18 +26,8 @@ public final class NativeQuery implements AutoCloseable {
             var status = AdbStatus.fromCode(code);
             if (status == AdbStatus.END_OF_STREAM) return Optional.empty();
             library.check(code);
-            var batchHandle = out.get(ValueLayout.ADDRESS, 0);
-            if (batchHandle.address() == 0) throw new IllegalStateException("native query returned OK without a batch handle");
-            try {
-                long len = library.invokeLong(library.batchLen, batchHandle);
-                if (len <= 0 || len > MAX_BATCH_BYTES) throw new IllegalStateException("invalid native batch length " + len);
-                var dataPtr = library.invokeAddress(library.batchData, batchHandle);
-                if (dataPtr.address() == 0) throw new IllegalStateException("null native batch data pointer");
-                byte[] bytes = dataPtr.reinterpret(len).toArray(ValueLayout.JAVA_BYTE);
-                return Optional.of(BatchDecoder.decode(bytes));
-            } finally {
-                library.check(library.invokeInt(library.batchRelease, batchHandle));
-            }
+            byte[] bytes = library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_BATCH_BYTES);
+            return Optional.of(BatchDecoder.decode(bytes));
         }
     }
 

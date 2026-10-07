@@ -1,10 +1,10 @@
 package io.adb.physical
 
-/** Documents `Explain` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Human-readable EXPLAIN rendering of logical and physical plans. */
 object Explain:
-  /** Documents `logical` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Renders a logical plan, one operator argument per line. */
   def logical(plan: io.adb.logical.LogicalPlan): String = render(plan.toString)
-  /** Documents `physical` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Renders a physical plan, one operator argument per line. */
   def physical(plan: PhysicalPlan): String = render(plan.toString)
-  /** Documents `render` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Breaks a case-class rendering into lines. */
   private def render(value: String): String = value.replace(",", ",\n  ")

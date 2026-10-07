@@ -23,13 +23,20 @@ pub fn set_last_error(message: impl Into<String>) {
     LAST_ERROR.with(|slot| *slot.borrow_mut() = message.into().into_bytes());
 }
 
-/// Maps top-level engine errors into stable C status categories.
+/// Maximum CDC response accepted before a page is cut short (at least one event is returned).
+pub const MAX_CHANGES_JSON_BYTES: usize = 32 * 1024 * 1024;
+/// Maximum consumer-name length accepted by the C ABI.
+pub const MAX_CONSUMER_NAME_BYTES: usize = adb_engine::offsets::MAX_CONSUMER_NAME_BYTES;
+
+/// Maps engine errors onto stable C status categories.
 pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
     let status = match &error {
-        DbError::TransactionConflict => AdbStatus::Conflict,
+        DbError::TransactionConflict(_) => AdbStatus::Conflict,
+        DbError::Poisoned(_) | DbError::CommitOutcomeUnknown(_) => AdbStatus::Poisoned,
+        DbError::ChangeLogTruncated { .. } => AdbStatus::LogTruncated,
+        DbError::InvalidArgument(_) | DbError::TransactionClosed => AdbStatus::InvalidArgument,
+        _ if error.is_corruption() => AdbStatus::Corruption,
         DbError::Io(_) => AdbStatus::IoError,
-        DbError::Wal(adb_wal::WalError::Corrupt(_)) => AdbStatus::Corruption,
-        DbError::Storage(adb_storage::StorageError::Invalid(_)) => AdbStatus::Corruption,
         _ => AdbStatus::Internal,
     };
     (status, error.to_string())

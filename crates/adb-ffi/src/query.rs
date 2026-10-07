@@ -1,4 +1,4 @@
-//! C ABI query lifecycle for Milestone 2.0.1 with bounded plan input and panic containment.
+//! Query lifecycle over the C ABI: bounded plan input, snapshot selection, batch streaming.
 
 use std::slice;
 
@@ -75,7 +75,7 @@ fn execute_plan(
             Some(ts) => database.execute_at(plan, ts),
             None => database.execute(plan),
         }
-            .map_err(map_db_error)?;
+        .map_err(map_db_error)?;
 
         unsafe {
             *out_query = Box::into_raw(Box::new(AdbQueryHandle {

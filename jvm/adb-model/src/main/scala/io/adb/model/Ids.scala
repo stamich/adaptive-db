@@ -1,29 +1,29 @@
 package io.adb.model
 
-/** Documents `EntityId` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Identifier of an entity (table); the high 64 bits of every storage key of its rows. */
 opaque type EntityId = Long
-/** Documents `EntityId` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Constructors and accessors of [[EntityId]]. */
 object EntityId:
-  /** Documents `apply` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Wraps a raw id. */
   def apply(value: Long): EntityId = value
   extension (id: EntityId) def value: Long = id
 
-/** Documents `FieldId` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Identifier of a field (column) inside a row. */
 opaque type FieldId = Int
-/** Documents `FieldId` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Constructors and accessors of [[FieldId]]. */
 object FieldId:
-  /** Documents `apply` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Wraps a raw id. */
   def apply(value: Int): FieldId = value
   extension (id: FieldId) def value: Int = id
 
-/** Documents `SchemaVersion` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Version of a catalog schema. */
 opaque type SchemaVersion = Long
-/** Documents `SchemaVersion` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Constructors and accessors of [[SchemaVersion]]. */
 object SchemaVersion:
-  /** Documents `apply` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Wraps a raw version. */
   def apply(value: Long): SchemaVersion = value
   extension (version: SchemaVersion) def value: Long = version
 
-/** Documents `SystemFields` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Field ids reserved by the engine; never part of a user schema. */
 object SystemFields:
   val EntityIdField: FieldId = FieldId(0)

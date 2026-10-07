@@ -8,10 +8,13 @@ message PhysicalPlan {
     Filter filter = 3;
     Project project = 4;
     Limit limit = 5;
+    EntityScan entity_scan = 6;
   }
 }
 message PointLookup { bytes row_id_u128_be = 1; }
 message Scan {}
+// Milestone 2.0.3: rows of one entity, read as the key range [entity << 64, (entity + 1) << 64).
+message EntityScan { uint64 entity_id = 1; }
 message Filter { PhysicalPlan input = 1; Expr predicate = 2; }
 message Project { PhysicalPlan input = 1; repeated uint32 fields = 2; }
 message Limit { PhysicalPlan input = 1; uint64 limit = 2; }

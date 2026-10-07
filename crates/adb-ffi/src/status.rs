@@ -1,25 +1,29 @@
-//! Stable status codes returned across the Milestone 2 C ABI.
+//! Stable status codes of the C ABI.
 
-/// Enumerates C ABI completion and error categories.
+/// Completion and error categories. Values are part of the ABI and never reused.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdbStatus {
-    /// Operation completed successfully.
+    /// Success.
     Ok = 0,
-    /// Query cursor reached end of stream.
+    /// Query cursor reached its end.
     EndOfStream = 1,
-    /// Caller supplied an invalid pointer, length or serialized value.
+    /// Invalid pointer, length, cursor or serialized value.
     InvalidArgument = 2,
-    /// Optimistic transaction validation detected a conflict.
+    /// Commit-time validation detected a conflict; retry the transaction.
     Conflict = 3,
-    /// Filesystem or I/O operation failed.
+    /// Filesystem failure.
     IoError = 4,
-    /// Durable engine bytes or metadata were detected as corrupt.
+    /// Persistent bytes failed validation; projections can be rebuilt from the log.
     Corruption = 5,
-    /// Query execution was cooperatively cancelled.
+    /// Query was cancelled.
     Cancelled = 6,
-    /// Requested row or object was not found.
+    /// Row or object not found.
     NotFound = 7,
+    /// The instance is poisoned (or a commit's outcome is unknown); close and reopen it.
+    Poisoned = 8,
+    /// The requested change-log position is no longer retained.
+    LogTruncated = 9,
     /// Unexpected internal failure or contained panic.
     Internal = 255,
 }
