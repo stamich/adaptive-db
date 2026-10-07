@@ -1,68 +1,192 @@
-//! Module `heap` for crate `adb-storage`.
-use std::{path::Path, sync::Arc};
+//! Heap file: variable-length tuples in slotted pages.
+//!
+//! With [`SpaceReuse::Reclaim`] the heap keeps an in-memory free-space map (rebuilt from the
+//! pages on open), deletes free their slot, and inserts go to any page with enough room.
+//! With [`SpaceReuse::AppendOnly`] (immutable history) tuples are only ever appended.
+
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use adb_buffer::{BufferPool, FilePageStore};
 use adb_core::{Lsn, PageId, RowLocation};
-use adb_page::{PageError, PageKind, SlottedPage};
+use adb_journal::FileWrite;
+use adb_page::{PageError, PageKind, SlottedPage, SlottedView};
+use parking_lot::Mutex;
 
-use crate::StorageError;
+use crate::{Checkpointable, StorageError};
 
-/// Represents `HeapFile` state used by this subsystem.
-pub struct HeapFile {
-    pool: Arc<BufferPool>,
+/// Pages with less free space than this are not worth tracking.
+const MIN_TRACKED_FREE: usize = 64;
+
+/// Space-management policy of a heap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpaceReuse {
+    /// Tuples are never deleted; inserts append.
+    AppendOnly,
+    /// Deleted tuples free space that later inserts reuse.
+    Reclaim,
 }
 
-/// Implements behavior for `HeapFile`.
-impl HeapFile {
-    /// Implements the `open` operation used by this subsystem.
-    pub fn open(path: impl AsRef<Path>, buffer_pages: usize) -> Result<Self, StorageError> {
-        let store = Arc::new(FilePageStore::open(path)?);
-        Ok(Self {
-            pool: Arc::new(BufferPool::new(store, buffer_pages)),
-        })
+/// Free space per page, searchable by size.
+#[derive(Default)]
+struct FreeSpaceMap {
+    by_size: BTreeSet<(usize, PageId)>,
+    by_page: HashMap<PageId, usize>,
+}
+
+impl FreeSpaceMap {
+    fn set(&mut self, page: PageId, free: usize) {
+        if let Some(old) = self.by_page.remove(&page) {
+            self.by_size.remove(&(old, page));
+        }
+        if free >= MIN_TRACKED_FREE {
+            self.by_page.insert(page, free);
+            self.by_size.insert((free, page));
+        }
     }
 
-    /// Implements the `insert` operation used by this subsystem.
+    /// Smallest-fit page with at least `needed` bytes (keeps big holes for big tuples).
+    fn find(&self, needed: usize) -> Option<PageId> {
+        self.by_size
+            .range((needed, PageId(0))..)
+            .next()
+            .map(|(_, page)| *page)
+    }
+}
+
+/// Slotted-page heap backed by one page file.
+pub struct HeapFile {
+    pool: Arc<BufferPool>,
+    path: PathBuf,
+    policy: SpaceReuse,
+    free: Mutex<FreeSpaceMap>,
+}
+
+impl HeapFile {
+    /// Opens or creates a heap file.
+    pub fn open(
+        path: impl AsRef<Path>,
+        buffer_pages: usize,
+        policy: SpaceReuse,
+    ) -> Result<Self, StorageError> {
+        let path = path.as_ref().to_path_buf();
+        let store = Arc::new(FilePageStore::open(&path)?);
+        let heap = Self {
+            pool: Arc::new(BufferPool::new(store, buffer_pages)?),
+            path,
+            policy,
+            free: Mutex::new(FreeSpaceMap::default()),
+        };
+        if policy == SpaceReuse::Reclaim {
+            let mut free = heap.free.lock();
+            for id in 0..heap.pool.page_count() {
+                let page = PageId(id);
+                free.set(page, heap.available(page)?);
+            }
+        }
+        Ok(heap)
+    }
+
+    /// Stores a tuple and returns its location.
     pub fn insert(&self, bytes: &[u8], lsn: Lsn) -> Result<RowLocation, StorageError> {
-        let count = self.pool.page_count()?;
-        if count > 0 {
-            let page_id = PageId(count - 1);
-            let result = self.pool.write(page_id, |page| {
-                page.set_page_lsn(lsn);
-                SlottedPage::new(page).insert(bytes)
-            })?;
-            match result {
-                Ok(slot_id) => return Ok(RowLocation { page_id, slot_id }),
-                Err(PageError::Full) => {}
-                Err(e) => return Err(e.into()),
+        let mut free = self.free.lock();
+        let candidate = match self.policy {
+            SpaceReuse::Reclaim => free.find(bytes.len()),
+            SpaceReuse::AppendOnly => self.pool.page_count().checked_sub(1).map(PageId),
+        };
+        if let Some(page_id) = candidate {
+            if let Some(location) = self.try_insert(&mut free, page_id, bytes, lsn)? {
+                return Ok(location);
             }
         }
         let page_id = self.pool.allocate_page(PageKind::Heap)?;
-        let slot_id = self.pool.write(page_id, |page| {
+        self.try_insert(&mut free, page_id, bytes, lsn)?
+            .ok_or(StorageError::Page(PageError::PayloadTooLarge(bytes.len())))
+    }
+
+    /// Frees the tuple at `location`.
+    pub fn delete(&self, location: RowLocation, lsn: Lsn) -> Result<(), StorageError> {
+        if self.policy == SpaceReuse::AppendOnly {
+            return Err(StorageError::Invalid(
+                "delete on an append-only heap".into(),
+            ));
+        }
+        let mut free = self.free.lock();
+        let available = self.pool.write(location.page_id, |page| {
             page.set_page_lsn(lsn);
-            SlottedPage::new(page).insert(bytes)
+            let mut slotted = SlottedPage::new(page);
+            slotted.delete(location.slot_id)?;
+            slotted.available_for_insert()
         })??;
-        Ok(RowLocation { page_id, slot_id })
-    }
-
-    /// Implements the `read` operation used by this subsystem.
-    pub fn read(&self, location: RowLocation) -> Result<Vec<u8>, StorageError> {
-        let bytes = self.pool.read(location.page_id, |page| {
-            let mut clone = page.clone();
-            let slotted = SlottedPage::new(&mut clone);
-            slotted.get(location.slot_id).map(|v| v.to_vec())
-        })??;
-        Ok(bytes)
-    }
-
-    /// Implements the `flush` operation used by this subsystem.
-    pub fn flush(&self) -> Result<(), StorageError> {
-        self.pool.flush_all()?;
+        free.set(location.page_id, available);
         Ok(())
     }
 
-    /// Implements the `page_count` operation used by this subsystem.
-    pub fn page_count(&self) -> Result<u64, StorageError> {
-        Ok(self.pool.page_count()?)
+    /// Reads the tuple at `location`.
+    pub fn read(&self, location: RowLocation) -> Result<Vec<u8>, StorageError> {
+        Ok(self.pool.read(location.page_id, |page| {
+            SlottedView::new(page)
+                .get(location.slot_id)
+                .map(<[u8]>::to_vec)
+        })??)
+    }
+
+    /// Logical page count.
+    pub fn page_count(&self) -> u64 {
+        self.pool.page_count()
+    }
+
+    /// Persists all pages directly (not crash-atomic; standalone use only).
+    pub fn flush(&self) -> Result<(), StorageError> {
+        Ok(self.pool.flush_all()?)
+    }
+
+    fn try_insert(
+        &self,
+        free: &mut FreeSpaceMap,
+        page_id: PageId,
+        bytes: &[u8],
+        lsn: Lsn,
+    ) -> Result<Option<RowLocation>, StorageError> {
+        let (result, available) = self.pool.write(page_id, |page| {
+            let mut slotted = SlottedPage::new(page);
+            let result = slotted.insert(bytes);
+            let available = slotted.available_for_insert();
+            if result.is_ok() {
+                page.set_page_lsn(lsn);
+            }
+            (result, available)
+        })?;
+        if self.policy == SpaceReuse::Reclaim {
+            free.set(page_id, available?);
+        }
+        match result {
+            Ok(slot_id) => Ok(Some(RowLocation { page_id, slot_id })),
+            Err(PageError::Full) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn available(&self, page_id: PageId) -> Result<usize, StorageError> {
+        Ok(self.pool.read(page_id, |page| {
+            SlottedView::new(page).available_for_insert()
+        })??)
+    }
+}
+
+impl Checkpointable for HeapFile {
+    fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
+        Ok(self.pool.journal_writes(&self.path)?)
+    }
+
+    fn mark_clean(&self) {
+        self.pool.mark_clean();
+    }
+
+    fn dirty_pages(&self) -> usize {
+        self.pool.dirty_count()
     }
 }

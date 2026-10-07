@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 crc32fast.workspace = true
 adb-core = { path = "../adb-core" }
+adb-journal = { path = "../adb-journal" }
 adb-page = { path = "../adb-page" }
 adb-buffer = { path = "../adb-buffer" }
 parking_lot.workspace = true
