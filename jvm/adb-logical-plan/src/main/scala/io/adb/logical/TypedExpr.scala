@@ -2,47 +2,50 @@ package io.adb.logical
 
 import io.adb.model.*
 
-/** Documents `TypedExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** A bound scalar expression with a statically known type. */
 sealed trait TypedExpr derives CanEqual:
-  /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Static type of the expression; `None` for an untyped NULL literal. */
   def dataType: Option[DataType]
 
-/** Documents `TypedExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Typed expression nodes. */
 object TypedExpr:
-  /** Documents `Column` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Reference to a column of the scanned entity. */
   final case class Column(field: Field) extends TypedExpr:
-    /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+    /** The column's declared type. */
     def dataType = Some(field.dataType)
-  /** Documents `Literal` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Constant value. */
   final case class Literal(value: DbValue) extends TypedExpr:
-    /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+    /** The literal's type, or `None` for NULL. */
     def dataType = DbValue.dataType(value)
-  /** Documents `Binary` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Binary comparison or boolean connective.
+    *
+    * @param resultType type of the result (always BOOLEAN for the current operators)
+    */
   final case class Binary(left: TypedExpr, op: BinaryOp, right: TypedExpr, resultType: Option[DataType]) extends TypedExpr:
-    /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+    /** The precomputed result type. */
     def dataType = resultType
-  /** Documents `Not` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Boolean negation. */
   final case class Not(expr: TypedExpr) extends TypedExpr:
-    /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+    /** Always BOOLEAN. */
     def dataType = Some(DataType.Bool)
 
-/** Documents `BinaryOp` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Binary operator of a typed expression. */
 sealed trait BinaryOp derives CanEqual
-/** Documents `BinaryOp` and its role in the Milestone 2.0.1 JVM control plane. */
+/** The supported binary operators. */
 object BinaryOp:
-  /** Documents `Eq` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Equality (`=`). */
   case object Eq extends BinaryOp
-  /** Documents `Ne` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Inequality (`<>` / `!=`). */
   case object Ne extends BinaryOp
-  /** Documents `Lt` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Less than (`<`). */
   case object Lt extends BinaryOp
-  /** Documents `Le` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Less than or equal (`<=`). */
   case object Le extends BinaryOp
-  /** Documents `Gt` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Greater than (`>`). */
   case object Gt extends BinaryOp
-  /** Documents `Ge` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Greater than or equal (`>=`). */
   case object Ge extends BinaryOp
-  /** Documents `And` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Logical conjunction (`AND`). */
   case object And extends BinaryOp
-  /** Documents `Or` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Logical disjunction (`OR`). */
   case object Or extends BinaryOp

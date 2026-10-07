@@ -2,9 +2,13 @@ package io.adb.logical
 
 import io.adb.logical.LogicalPlan.*
 
-/** Documents `LogicalPlanner` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Turns bound SELECT statements into canonical logical plans. */
 object LogicalPlanner:
-  /** Documents `plan` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Builds `Limit(Project(Filter(TableScan)))`, omitting the filter and limit when absent.
+    *
+    * @param select bound SELECT
+    * @return the unoptimized logical plan
+    */
   def plan(select: BoundSelect): LogicalPlan =
     val base = TableScan(select.entity)
     val filtered = select.predicate.fold[LogicalPlan](base)(Filter(base, _))

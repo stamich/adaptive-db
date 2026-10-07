@@ -2,23 +2,27 @@ package io.adb.catalog
 
 import io.adb.model.*
 
-/** Documents `InMemoryCatalog` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Thread-safe, non-persistent [[Catalog]]; also the in-memory state behind [[FileCatalog]]. */
 final class InMemoryCatalog extends Catalog:
+  /** Current catalog version. */
   private var currentVersion: Long = 0L
+  /** Id assigned to the next created entity. */
   private var nextEntityId: Long = 1L
+  /** Entities by id. */
   private var byId = Map.empty[Long, Entity]
+  /** Entities by lower-cased name. */
   private var byName = Map.empty[String, Entity]
 
-  /** Documents `version` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Current catalog version. */
   override def version: SchemaVersion = SchemaVersion(currentVersion)
-  /** Documents `entity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Looks up an entity by lower-cased name. */
   override def entity(name: String): Option[Entity] = byName.get(name.toLowerCase)
-  /** Documents `entity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Looks up an entity by id. */
   override def entity(id: EntityId): Option[Entity] = byId.get(id.value)
-  /** Documents `entities` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** All entities sorted by id. */
   override def entities: Vector[Entity] = byId.values.toVector.sortBy(_.id.value)
 
-  /** Documents `createEntity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Validates the definition (name lengths, unique columns, BIGINT non-null primary key), assigns field ids by position, and registers the entity. */
   override def createEntity(
       name: String,
       fields: Vector[(String, DataType, Boolean)],
@@ -57,7 +61,12 @@ final class InMemoryCatalog extends Catalog:
     entity
   }
 
-  /** Documents `restore` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Replaces the whole state with a snapshot loaded from disk (used by [[FileCatalog]]).
+    *
+    * @param version0 catalog version to restore
+    * @param nextId0  next entity id to restore
+    * @param restored entities to restore
+    */
   private[catalog] def restore(version0: Long, nextId0: Long, restored: Vector[Entity]): Unit = synchronized {
     currentVersion = version0
     nextEntityId = nextId0

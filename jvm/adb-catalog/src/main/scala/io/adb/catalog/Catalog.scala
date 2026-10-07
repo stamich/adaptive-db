@@ -2,15 +2,22 @@ package io.adb.catalog
 
 import io.adb.model.*
 
-/** Documents `Catalog` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Registry of entity schemas used to bind SQL statements. */
 trait Catalog:
-  /** Documents `version` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Monotonic catalog version; incremented by every schema change. */
   def version: SchemaVersion
-  /** Documents `entity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Looks up an entity by name, case-insensitively. */
   def entity(name: String): Option[Entity]
-  /** Documents `entity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Looks up an entity by engine id. */
   def entity(id: EntityId): Option[Entity]
-  /** Documents `entities` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** All entities, ordered by id. */
   def entities: Vector[Entity]
-  /** Documents `createEntity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Creates an entity and bumps the catalog version.
+    *
+    * @param name       entity name (unique, case-insensitive)
+    * @param fields     `(name, type, nullable)` per column, in declaration order
+    * @param primaryKey name of the BIGINT, non-nullable primary-key column
+    * @return the created entity
+    * @throws IllegalArgumentException if the definition is invalid or the name is taken
+    */
   def createEntity(name: String, fields: Vector[(String, DataType, Boolean)], primaryKey: String): Entity

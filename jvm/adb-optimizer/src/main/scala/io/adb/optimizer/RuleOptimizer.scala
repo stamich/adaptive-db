@@ -2,9 +2,16 @@ package io.adb.optimizer
 
 import io.adb.logical.LogicalPlan
 
-/** Documents `RuleOptimizer` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Applies rewrite rules repeatedly until the plan reaches a fixed point.
+  *
+  * @param rules rules applied in order during each round
+  */
 final class RuleOptimizer(rules: Vector[Rule] = Vector(PointLookupRule)):
-  /** Documents `optimize` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Runs all rules in rounds until a round changes nothing, capped at 16 rounds to guarantee termination.
+    *
+    * @param plan bound logical plan
+    * @return the optimized plan
+    */
   def optimize(plan: LogicalPlan): LogicalPlan =
     var current = plan
     var changed = true

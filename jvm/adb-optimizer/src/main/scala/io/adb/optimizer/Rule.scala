@@ -2,9 +2,9 @@ package io.adb.optimizer
 
 import io.adb.logical.LogicalPlan
 
-/** Documents `Rule` and its role in the Milestone 2.0.1 JVM control plane. */
+/** A logical-plan rewrite applied by [[RuleOptimizer]]; must preserve query semantics. */
 trait Rule:
-  /** Documents `name` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Human-readable rule name. */
   def name: String
-  /** Documents `apply` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Rewrites `plan`; returns it unchanged (equal) when the rule does not apply. */
   def apply(plan: LogicalPlan): LogicalPlan

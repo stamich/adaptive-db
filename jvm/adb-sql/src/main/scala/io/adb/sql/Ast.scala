@@ -1,61 +1,71 @@
 package io.adb.sql
 
-/** Documents `Statement` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Parsed SQL statement, before name resolution and type checking. */
 sealed trait Statement derives CanEqual
 
-/** Documents `ColumnDef` and its role in the Milestone 2.0.1 JVM control plane. */
+/** One column definition of `CREATE TABLE`.
+  *
+  * @param name       column name
+  * @param dataType   type name as written (resolved later by the binder)
+  * @param nullable   false when `NOT NULL` (or `PRIMARY KEY`) was given
+  * @param primaryKey true when the column is declared `PRIMARY KEY`
+  */
 final case class ColumnDef(name: String, dataType: String, nullable: Boolean, primaryKey: Boolean) derives CanEqual
-/** Documents `CreateTable` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `CREATE TABLE name (columns...)`. */
 final case class CreateTable(name: String, columns: Vector[ColumnDef]) extends Statement derives CanEqual
-/** Documents `Insert` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `INSERT INTO table [(columns)] VALUES (values)`; without a column list the values follow declaration order. */
 final case class Insert(table: String, columns: Option[Vector[String]], values: Vector[SqlExpr]) extends Statement derives CanEqual
-/** Documents `Select` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `SELECT columns | * FROM table [AS OF VERSION ts] [WHERE ...] [LIMIT n]`.
+  *
+  * @param star        true for `SELECT *` (then `columns` is empty)
+  * @param asOfVersion snapshot timestamp of an `AS OF VERSION` clause
+  */
 final case class Select(columns: Vector[String], star: Boolean, table: String, where: Option[SqlExpr], limit: Option[Int], asOfVersion: Option[Long]) extends Statement derives CanEqual
-/** Documents `Update` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `UPDATE table SET column = value, ... WHERE ...`. */
 final case class Update(table: String, assignments: Vector[(String, SqlExpr)], where: SqlExpr) extends Statement derives CanEqual
-/** Documents `Delete` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `DELETE FROM table WHERE ...`. */
 final case class Delete(table: String, where: SqlExpr) extends Statement derives CanEqual
-/** Documents `Explain` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `EXPLAIN [ANALYZE] statement`. */
 final case class Explain(statement: Statement, analyze: Boolean) extends Statement derives CanEqual
 
-/** Documents `SqlExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Unresolved scalar expression as written in SQL. */
 sealed trait SqlExpr derives CanEqual
-/** Documents `SqlExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Expression nodes. */
 object SqlExpr:
-  /** Documents `Column` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Column reference by name. */
   final case class Column(name: String) extends SqlExpr
-  /** Documents `LongLiteral` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Integer literal. */
   final case class LongLiteral(value: Long) extends SqlExpr
-  /** Documents `DoubleLiteral` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Floating-point literal. */
   final case class DoubleLiteral(value: Double) extends SqlExpr
-  /** Documents `StringLiteral` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Single-quoted string literal. */
   final case class StringLiteral(value: String) extends SqlExpr
-  /** Documents `BoolLiteral` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `TRUE` or `FALSE`. */
   final case class BoolLiteral(value: Boolean) extends SqlExpr
-  /** Documents `NullLiteral` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `NULL`. */
   case object NullLiteral extends SqlExpr
-  /** Documents `Binary` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Binary comparison or boolean connective. */
   final case class Binary(left: SqlExpr, op: SqlBinaryOp, right: SqlExpr) extends SqlExpr
-  /** Documents `Not` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `NOT expr`. */
   final case class Not(expr: SqlExpr) extends SqlExpr
 
-/** Documents `SqlBinaryOp` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Binary operator as written in SQL. */
 sealed trait SqlBinaryOp derives CanEqual
-/** Documents `SqlBinaryOp` and its role in the Milestone 2.0.1 JVM control plane. */
+/** The binary operators recognized by the parser. */
 object SqlBinaryOp:
-  /** Documents `Eq` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `=` */
   case object Eq extends SqlBinaryOp
-  /** Documents `Ne` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `<>` or `!=` */
   case object Ne extends SqlBinaryOp
-  /** Documents `Lt` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `<` */
   case object Lt extends SqlBinaryOp
-  /** Documents `Le` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `<=` */
   case object Le extends SqlBinaryOp
-  /** Documents `Gt` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `>` */
   case object Gt extends SqlBinaryOp
-  /** Documents `Ge` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `>=` */
   case object Ge extends SqlBinaryOp
-  /** Documents `And` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `AND` */
   case object And extends SqlBinaryOp
-  /** Documents `Or` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** `OR` */
   case object Or extends SqlBinaryOp

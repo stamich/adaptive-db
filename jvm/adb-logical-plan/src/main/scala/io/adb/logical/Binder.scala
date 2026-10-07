@@ -5,9 +5,17 @@ import io.adb.model.*
 import io.adb.sql.*
 import io.adb.sql.SqlExpr.*
 
-/** Documents `Binder` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Semantic analysis: resolves table and column names against the catalog, type-checks expressions and literals, and enforces the Milestone 2 statement restrictions.
+  *
+  * @param catalog schema registry used for name resolution
+  */
 final class Binder(catalog: Catalog):
-  /** Documents `bind` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Binds one parsed statement.
+    *
+    * @param statement AST produced by the SQL parser
+    * @return the resolved, type-checked statement
+    * @throws IllegalArgumentException on unknown names, type mismatches, or unsupported statement shapes
+    */
   def bind(statement: Statement): BoundStatement = statement match
     case CreateTable(name, columns) =>
       val primaryKeys = columns.filter(_.primaryKey)
@@ -55,15 +63,15 @@ final class Binder(catalog: Catalog):
 
     case Explain(inner, analyze) => BoundExplain(bind(inner), analyze)
 
-  /** Documents `requireEntity` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Resolves a table name or fails with "unknown table". */
   private def requireEntity(name: String): Entity =
     catalog.entity(name).getOrElse(throw new IllegalArgumentException(s"unknown table $name"))
 
-  /** Documents `requireField` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Resolves a column of `entity` (case-insensitive) or fails with "unknown column". */
   private def requireField(entity: Entity, name: String): Field =
     entity.field(name).getOrElse(throw new IllegalArgumentException(s"unknown column ${entity.name}.$name"))
 
-  /** Documents `bindExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Binds a WHERE expression to typed columns and literals, checking operand types. */
   private def bindExpr(entity: Entity, expr: SqlExpr): TypedExpr = expr match
     case Column(name) => TypedExpr.Column(requireField(entity, name))
     case LongLiteral(v) => TypedExpr.Literal(DbValue.Int64Value(v))
@@ -85,7 +93,7 @@ final class Binder(catalog: Catalog):
         case _ => requireComparable(l, r)
       TypedExpr.Binary(l, mapped, r, Some(DataType.Bool))
 
-  /** Documents `literalFor` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Converts a mutation value to a literal of the column's type; only literals are accepted and NULL only for nullable columns. */
   private def literalFor(field: Field, expr: SqlExpr): DbValue =
     val value = expr match
       case LongLiteral(v) => DbValue.Int64Value(v)
@@ -98,17 +106,17 @@ final class Binder(catalog: Catalog):
     else require(DbValue.dataType(value).contains(field.dataType), s"type mismatch for ${field.name}")
     value
 
-  /** Documents `extractPkEquality` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Extracts the key from a `WHERE pk = <BIGINT>` clause (either operand order), the only filter UPDATE and DELETE support. */
   private def extractPkEquality(entity: Entity, expr: SqlExpr): Long = expr match
     case SqlExpr.Binary(Column(name), SqlBinaryOp.Eq, LongLiteral(v)) if requireField(entity, name).id == entity.primaryKey => v
     case SqlExpr.Binary(LongLiteral(v), SqlBinaryOp.Eq, Column(name)) if requireField(entity, name).id == entity.primaryKey => v
     case _ => throw new IllegalArgumentException("UPDATE/DELETE in Milestone 2 require WHERE primary_key = BIGINT")
 
-  /** Documents `requireBoolean` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Fails unless `expr` is boolean-typed. */
   private def requireBoolean(expr: TypedExpr): Unit =
     require(expr.dataType.contains(DataType.Bool), s"boolean expression required, got ${expr.dataType}")
 
-  /** Documents `requireComparable` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Fails unless both operands have the same type; NULL literals (untyped) compare with anything. */
   private def requireComparable(left: TypedExpr, right: TypedExpr): Unit =
     (left.dataType, right.dataType) match
       case (None, _) | (_, None) => ()

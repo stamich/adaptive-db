@@ -34,4 +34,5 @@ object PhysicalExpr:
 
 /** Binary operators; names map to the snake_case wire tags. */
 enum PhysicalBinaryOp derives CanEqual:
+  /** Comparisons (`Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge`) and boolean connectives (`And`, `Or`). */
   case Eq, Ne, Lt, Le, Gt, Ge, And, Or

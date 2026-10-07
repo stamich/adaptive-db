@@ -3,9 +3,14 @@ package io.adb.sql
 import io.adb.sql.SqlExpr.*
 import io.adb.sql.SqlBinaryOp.*
 
-/** Documents `SqlParser` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Hand-written recursive-descent parser for the Milestone 2 SQL subset (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE]). */
 final class SqlParser:
-  /** Documents `parse` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses exactly one statement, optionally terminated by `;`.
+    *
+    * @param sql statement text
+    * @return the parsed AST
+    * @throws IllegalArgumentException with the failing token position on any syntax error
+    */
   def parse(sql: String): Statement =
     val p = ParserState(Tokenizer.tokenize(sql))
     val statement = p.parseStatement()
@@ -13,14 +18,18 @@ final class SqlParser:
     p.expectEnd()
     statement
 
-/** Documents `ParserState` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Mutable cursor over the token stream of one statement.
+  *
+  * @param tokens tokens ending with `Token.End`
+  * @param pos    index of the current token
+  */
 private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
-  /** Documents `current` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** The token at the cursor. */
   private def current: Token = tokens(pos)
-  /** Documents `advance` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes and returns the current token. */
   private def advance(): Token = { val t = current; pos += 1; t }
 
-  /** Documents `parseStatement` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses an optional chain of `EXPLAIN [ANALYZE]` prefixes (at most 64) followed by one base statement. */
   def parseStatement(): Statement =
     val explainModes = Vector.newBuilder[Boolean]
     var explainDepth = 0
@@ -39,7 +48,7 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
 
     explainModes.result().reverse.foldLeft(base) { case (inner, analyze) => Explain(inner, analyze) }
 
-  /** Documents `parseCreate` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses the rest of `CREATE TABLE name (column type [NOT NULL] [PRIMARY KEY], ...)`. */
   private def parseCreate(): Statement =
     expectWord("TABLE")
     val name = expectIdentifier()
@@ -60,7 +69,7 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       if acceptSymbol(",") then () else { expectSymbol(")"); done = true }
     CreateTable(name, columns.result())
 
-  /** Documents `parseInsert` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses the rest of `INSERT INTO table [(columns)] VALUES (values)`. */
   private def parseInsert(): Statement =
     expectWord("INTO")
     val table = expectIdentifier()
@@ -76,7 +85,7 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     expectSymbol(")")
     Insert(table, columns, values)
 
-  /** Documents `parseSelect` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses the rest of `SELECT ... FROM table [AS OF VERSION n] [WHERE expr] [LIMIT n]`; LIMIT must fit in an `Int`. */
   private def parseSelect(): Statement =
     val (columns, star) =
       if acceptSymbol("*") then (Vector.empty, true)
@@ -95,7 +104,7 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       else None
     Select(columns, star, table, where, limit, asOf)
 
-  /** Documents `parseUpdate` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses the rest of `UPDATE table SET column = value, ... WHERE expr`. */
   private def parseUpdate(): Statement =
     val table = expectIdentifier()
     expectWord("SET")
@@ -109,26 +118,26 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     expectWord("WHERE")
     Update(table, assignments.result(), parseExpr())
 
-  /** Documents `parseDelete` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses the rest of `DELETE FROM table WHERE expr`. */
   private def parseDelete(): Statement =
     expectWord("FROM")
     val table = expectIdentifier()
     expectWord("WHERE")
     Delete(table, parseExpr())
 
-  /** Documents `parseExpr` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses an expression (entry point of the precedence chain OR < AND < comparison < primary). */
   private def parseExpr(): SqlExpr = parseOr()
-  /** Documents `parseOr` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses left-associative `OR` chains. */
   private def parseOr(): SqlExpr =
     var left = parseAnd()
     while acceptWord("OR") do left = Binary(left, Or, parseAnd())
     left
-  /** Documents `parseAnd` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses left-associative `AND` chains. */
   private def parseAnd(): SqlExpr =
     var left = parseComparison()
     while acceptWord("AND") do left = Binary(left, And, parseComparison())
     left
-  /** Documents `parseComparison` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses an optional single comparison between two primaries (comparisons do not chain). */
   private def parseComparison(): SqlExpr =
     var left = parsePrimary()
     current match
@@ -140,7 +149,7 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
         left = Binary(left, mapped, parsePrimary())
       case _ => ()
     left
-  /** Documents `parsePrimary` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses a literal, column reference, `NOT` primary, or parenthesized expression. */
   private def parsePrimary(): SqlExpr = current match
     case Token.Number(value) =>
       advance(); if value.contains('.') then DoubleLiteral(value.toDouble) else LongLiteral(value.toLong)
@@ -153,43 +162,49 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     case Token.Symbol("(") => advance(); val e = parseExpr(); expectSymbol(")"); e
     case other => throw error(s"expected expression, got $other")
 
-  /** Documents `parseIdentifierList` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses a non-empty comma-separated identifier list. */
   private def parseIdentifierList(): Vector[String] =
     val out = Vector.newBuilder[String]
     out += expectIdentifier()
     while acceptSymbol(",") do out += expectIdentifier()
     out.result()
 
-  /** Documents `parseExprList` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses a non-empty comma-separated list of value expressions. */
   private def parseExprList(): Vector[SqlExpr] =
     val out = Vector.newBuilder[SqlExpr]
     out += parsePrimary()
     while acceptSymbol(",") do out += parsePrimary()
     out.result()
 
-  /** Documents `acceptWord` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes the current token if it is the keyword `word` (case-insensitive).
+    *
+    * @return whether the keyword was consumed
+    */
   def acceptWord(word: String): Boolean = current match
     case Token.Word(value) if value.equalsIgnoreCase(word) => advance(); true
     case _ => false
-  /** Documents `expectWord` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes the keyword `word` or fails. */
   def expectWord(word: String): Unit = if !acceptWord(word) then throw error(s"expected $word")
-  /** Documents `acceptSymbol` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes the current token if it is the symbol `symbol`.
+    *
+    * @return whether the symbol was consumed
+    */
   def acceptSymbol(symbol: String): Boolean = current match
     case Token.Symbol(value) if value == symbol => advance(); true
     case _ => false
-  /** Documents `expectSymbol` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes the symbol `symbol` or fails. */
   def expectSymbol(symbol: String): Unit = if !acceptSymbol(symbol) then throw error(s"expected '$symbol'")
-  /** Documents `expectIdentifier` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes and returns an identifier (any word token) or fails. */
   def expectIdentifier(): String = current match
     case Token.Word(value) => advance(); value
     case other => throw error(s"expected identifier, got $other")
-  /** Documents `expectLong` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Consumes and returns an integer literal or fails. */
   def expectLong(): Long = current match
     case Token.Number(value) if !value.contains('.') => advance(); value.toLong
     case other => throw error(s"expected integer, got $other")
-  /** Documents `expectEnd` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Fails unless the whole input has been consumed. */
   def expectEnd(): Unit = current match
     case Token.End => ()
     case other => throw error(s"unexpected trailing token $other")
-  /** Documents `error` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Builds a parse error that names the current token position. */
   private def error(message: String): IllegalArgumentException = new IllegalArgumentException(s"SQL parse error at token $pos: $message")
