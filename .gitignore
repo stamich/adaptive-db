@@ -1,2 +1,6 @@
 .idea
 /target
+.gradle/
+**/build/
+.demo-data/
+.bench-data/

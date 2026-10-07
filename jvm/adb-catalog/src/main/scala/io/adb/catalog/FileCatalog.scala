@@ -15,6 +15,7 @@ import scala.jdk.CollectionConverters.*
  * catalog shape, and publishes updates using file fsync, atomic rename and directory fsync.
  */
 final class FileCatalog(path: Path) extends Catalog:
+  /** In-memory state; every mutation is persisted before it is acknowledged. */
   private val delegate = new InMemoryCatalog
   load()
 

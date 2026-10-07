@@ -1,25 +1,28 @@
-//! Module `execution` for crate `adb-execution`.
-use std::sync::Arc;
+//! Operator pipelines over an in-memory data source.
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
-use adb_core::{CommitTs, Row, RowId, Value};
+use adb_core::{CommitTs, KeyRange, Row, RowId, Value};
 use adb_execution::{
     BinaryOp, DataSource, ExecutionContext, ExecutionError, Executor, Expr, PhysicalPlan,
 };
 
-/// Represents `MemorySource` state used by this subsystem.
+/// In-memory data source that counts the scan pages it serves.
 #[derive(Clone)]
 struct MemorySource {
     rows: Vec<(RowId, Row)>,
+    pages_served: Arc<AtomicUsize>,
 }
 
-/// Implements behavior for `DataSource`.
 impl DataSource for MemorySource {
-    /// Implements the `latest_committed_ts` operation used by this subsystem.
+    /// Fixed snapshot of the in-memory source.
     fn latest_committed_ts(&self) -> CommitTs {
         CommitTs(1)
     }
 
-    /// Implements the `point_lookup` operation used by this subsystem.
+    /// Linear search for `row_id`.
     fn point_lookup(
         &self,
         row_id: RowId,
@@ -32,29 +35,49 @@ impl DataSource for MemorySource {
             .map(|(_, row)| row.clone()))
     }
 
-    /// Implements the `scan_rows` operation used by this subsystem.
-    fn scan_rows(&self, _snapshot_ts: CommitTs) -> Result<Vec<(RowId, Row)>, ExecutionError> {
-        Ok(self.rows.clone())
+    /// Rows of `range` after `after`, at most `limit`; counts served pages.
+    fn scan_page(
+        &self,
+        range: &KeyRange,
+        after: Option<RowId>,
+        limit: usize,
+        _snapshot_ts: CommitTs,
+    ) -> Result<Vec<(RowId, Row)>, ExecutionError> {
+        self.pages_served.fetch_add(1, Ordering::Relaxed);
+        Ok(self
+            .rows
+            .iter()
+            .filter(|(id, _)| range.contains(*id) && after.is_none_or(|after| *id > after))
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }
 
-/// Implements the `source` operation used by this subsystem.
-fn source() -> Arc<dyn DataSource> {
-    Arc::new(MemorySource {
-        rows: (1..=100)
+/// Rows 1..=100 of entity 0.
+fn memory(rows: impl IntoIterator<Item = RowId>) -> MemorySource {
+    MemorySource {
+        rows: rows
+            .into_iter()
             .map(|id| {
                 (
-                    RowId(id),
+                    id,
                     Row::new()
-                        .with_field(1, Value::Int64(id as i64))
-                        .with_field(2, Value::String(format!("row-{id}"))),
+                        .with_field(1, Value::Int64(id.primary_key() as i64))
+                        .with_field(2, Value::String(format!("row-{}", id.0))),
                 )
             })
             .collect(),
-    })
+        pages_served: Arc::new(AtomicUsize::new(0)),
+    }
 }
 
-/// Implements the `scan_filter_project_limit_pipeline` operation used by this subsystem.
+/// Rows 1..=100 of entity 0.
+fn source() -> Arc<dyn DataSource> {
+    Arc::new(memory((1..=100).map(RowId)))
+}
+
+/// Scan, filter, project and limit compose into one bounded batch.
 #[test]
 fn scan_filter_project_limit_pipeline() {
     let plan = PhysicalPlan::Limit {
@@ -82,7 +105,7 @@ fn scan_filter_project_limit_pipeline() {
     assert!(cursor.next_batch().unwrap().is_none());
 }
 
-/// Implements the `cancellation_is_observed` operation used by this subsystem.
+/// A cancelled cursor fails its next pull.
 #[test]
 fn cancellation_is_observed() {
     let mut cursor = Executor::execute(
@@ -90,11 +113,62 @@ fn cancellation_is_observed() {
         PhysicalPlan::Scan,
         ExecutionContext::new(CommitTs(1)),
     )
-        .unwrap();
+    .unwrap();
 
     cursor.cancel();
     assert!(matches!(
         cursor.next_batch(),
         Err(ExecutionError::Cancelled)
     ));
+}
+
+/// `EntityScan` reads exactly one entity's key range.
+#[test]
+fn entity_scan_returns_only_that_entity() {
+    let rows = (1..=3u64).flat_map(|entity| (0..10u64).map(move |pk| RowId::compose(entity, pk)));
+    let mut cursor = Executor::execute(
+        Arc::new(memory(rows)),
+        PhysicalPlan::EntityScan { entity_id: 2 },
+        ExecutionContext::new(CommitTs(1)),
+    )
+    .unwrap();
+    let batch = cursor.next_batch().unwrap().unwrap();
+    assert_eq!(batch.len(), 10);
+    assert!(cursor.next_batch().unwrap().is_none());
+}
+
+/// Scans pull pages lazily: a LIMIT that is satisfied by the first page never reads the rest,
+/// and a full scan is served in batch-sized pages instead of one materialized vector.
+#[test]
+fn scans_are_paged_and_lazy() {
+    let source = memory((1..=1000).map(RowId));
+    let pages = Arc::clone(&source.pages_served);
+    let mut context = ExecutionContext::new(CommitTs(1));
+    context.batch_size = 100;
+
+    let mut limited = Executor::execute(
+        Arc::new(source.clone()),
+        PhysicalPlan::Limit {
+            input: Box::new(PhysicalPlan::Scan),
+            limit: 5,
+        },
+        context.clone(),
+    )
+    .unwrap();
+    while limited.next_batch().unwrap().is_some() {}
+    assert_eq!(pages.load(Ordering::Relaxed), 1);
+
+    pages.store(0, Ordering::Relaxed);
+    let mut full = Executor::execute(Arc::new(source), PhysicalPlan::Scan, context).unwrap();
+    let mut rows = 0;
+    while let Some(batch) = full.next_batch().unwrap() {
+        assert!(batch.len() <= 100);
+        rows += batch.len();
+    }
+    assert_eq!(rows, 1000);
+    assert_eq!(
+        pages.load(Ordering::Relaxed),
+        11,
+        "10 full pages + 1 empty terminator"
+    );
 }

@@ -10,19 +10,31 @@ import io.adb.sql.*
 import scala.jdk.CollectionConverters.*
 import java.util.Optional
 
-/** Documents `AdaptiveDatabase` and its role in the Milestone 2.0.1 JVM control plane. */
+/** SQL front door of the JVM control plane: parses, binds, optimizes and plans statements, then executes them through the native engine.
+  *
+  * @param catalog schema registry used for binding and DDL
+  * @param native  open native database handle
+  */
 final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
+  /** SQL text to AST parser. */
   private val parser = new SqlParser
+  /** Resolves names and types against the catalog. */
   private val binder = new Binder(catalog)
+  /** Logical-plan rewriter. */
   private val optimizer = new RuleOptimizer()
 
-  /** Documents `execute` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Executes one SQL statement.
+    *
+    * @param sql statement text
+    * @return rows for queries, or a status message for DDL/DML
+    * @throws NativeException if the engine rejects the operation
+    */
   def execute(sql: String): QueryResult =
     val ast = parser.parse(sql)
     val bound = binder.bind(ast)
     executeBound(bound)
 
-  /** Documents `executeBound` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement): QueryResult = statement match
     case BoundCreateTable(name, fields, pk) =>
       val entity = catalog.createEntity(name, fields, pk)
@@ -67,7 +79,10 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
 
-  /** Documents `executeSelect` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Plans a SELECT, sends the physical plan to the engine as JSON (optionally at an `AS OF` snapshot), and materializes the projected columns of every result batch.
+    *
+    * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
+    */
   private def executeSelect(select: BoundSelect): QueryResult =
     val logical = LogicalPlanner.plan(select)
     val optimized = optimizer.optimize(logical)

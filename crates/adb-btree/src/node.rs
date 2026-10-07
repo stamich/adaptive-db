@@ -1,41 +1,49 @@
-//! Module `node` for crate `adb-btree`.
-use adb_core::{PageId, RowId, RowLocation};
+//! In-memory representation of B+Tree nodes.
+use adb_core::{PageId, RowLocation};
 
-/// Defines the `MAX_LEAF_ENTRIES` constant used by this subsystem.
-pub const MAX_LEAF_ENTRIES: usize = 96;
-/// Defines the `MAX_INTERNAL_KEYS` constant used by this subsystem.
-pub const MAX_INTERNAL_KEYS: usize = 96;
-
-/// Enumerates `Node` alternatives used by this subsystem.
+/// A decoded node.
 #[derive(Debug, Clone)]
-pub enum Node {
-    Leaf(LeafNode),
-    Internal(InternalNode),
+pub enum Node<K> {
+    /// Leaf with ordered entries and a right-sibling link.
+    Leaf(LeafNode<K>),
+    /// Internal node with `keys.len() + 1` children.
+    Internal(InternalNode<K>),
 }
 
-/// Represents `LeafNode` state used by this subsystem.
+/// Leaf node: `keys[i] -> values[i]`, strictly increasing keys.
 #[derive(Debug, Clone)]
-pub struct LeafNode {
-    pub keys: Vec<RowId>,
+pub struct LeafNode<K> {
+    /// Ordered keys.
+    pub keys: Vec<K>,
+    /// Heap locations, parallel to `keys`.
     pub values: Vec<RowLocation>,
+    /// Next leaf in key order.
     pub next: Option<PageId>,
 }
 
-/// Represents `InternalNode` state used by this subsystem.
+/// Internal node: child `i` holds keys `< keys[i]`, child `i + 1` holds keys `>= keys[i]`.
 #[derive(Debug, Clone)]
-pub struct InternalNode {
-    pub keys: Vec<RowId>,
+pub struct InternalNode<K> {
+    /// Separator keys.
+    pub keys: Vec<K>,
+    /// Child pages.
     pub children: Vec<PageId>,
 }
 
-/// Implements behavior for `LeafNode`.
-impl LeafNode {
-    /// Implements the `empty` operation used by this subsystem.
+impl<K> LeafNode<K> {
+    /// An empty leaf with no sibling.
     pub fn empty() -> Self {
         Self {
             keys: Vec::new(),
             values: Vec::new(),
             next: None,
         }
+    }
+}
+
+impl<K: Ord> InternalNode<K> {
+    /// Index of the child that may contain `key`.
+    pub fn route(&self, key: &K) -> usize {
+        self.keys.partition_point(|separator| separator <= key)
     }
 }

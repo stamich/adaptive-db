@@ -14,8 +14,16 @@ import scala.util.Using
 
 /** Milestone 2.0.2 benchmark separating JVM planning cost from native end-to-end execution. */
 object BenchmarkMain:
+  /** Command-line options.
+    *
+    * @param iterations        iterations of each planner micro-benchmark
+    * @param gatewayIterations iterations of the SQL-to-native gateway benchmark
+    * @param dataDir           database directory for the gateway benchmark
+    * @param nativeLib         path of the native library for the gateway benchmark
+    */
   private final case class Config(iterations: Int = 10000, gatewayIterations: Int = 1000, dataDir: Option[Path] = None, nativeLib: Option[Path] = None)
 
+  /** Runs the planner benchmark, then the gateway benchmark when both `--data` and `--native-lib` are given. */
   def main(args: Array[String]): Unit =
     val cfg = parseArgs(args.toList, Config())
     println(s"Adaptive DB 2.0.2 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
@@ -24,6 +32,7 @@ object BenchmarkMain:
       case (Some(data), Some(lib)) => benchmarkGateway(cfg.gatewayIterations, data, lib)
       case _ => println("gateway/FFM benchmark skipped; pass --data DIR --native-lib FILE to enable it")
 
+  /** Times each planning stage (parse, bind, logical plan, optimize, physical plan, JSON encoding) and the whole pipeline for a point-lookup query, after a warm-up. */
   private def benchmarkPlanner(iterations: Int): Unit =
     val catalog = new InMemoryCatalog
     val parser = new SqlParser
@@ -57,12 +66,14 @@ object BenchmarkMain:
     report("plan_json_encode", iterations, wireNs)
     report("planner_pipeline", iterations, totalNs)
 
+  /** Runs the full planning pipeline for one SELECT and returns the native plan JSON. */
   private def pipeline(parser: SqlParser, binder: Binder, optimizer: RuleOptimizer, sql: String): String =
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
     val logical = LogicalPlanner.plan(bound)
     val optimized = optimizer.optimize(logical)
     PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized))
 
+  /** Times end-to-end SQL execution through FFM against a 1000-row table: point lookups and a filtered scan with LIMIT. */
   private def benchmarkGateway(iterations: Int, dataDir: Path, nativeLib: Path): Unit =
     Files.createDirectories(dataDir)
     val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
@@ -80,6 +91,10 @@ object BenchmarkMain:
       report("gateway_scan_filter_limit_sql_to_rust", math.max(1, iterations / 10), scanNs)
     finally native.close()
 
+  /** Runs `body` `iterations` times, keeping its result alive so the JIT cannot elide it.
+    *
+    * @return elapsed wall-clock nanoseconds
+    */
   private def time(iterations: Int)(body: => Any): Long =
     val start = System.nanoTime()
     var i = 0
@@ -90,11 +105,13 @@ object BenchmarkMain:
     if sink == null then ()
     System.nanoTime() - start
 
+  /** Prints throughput and per-operation latency of one benchmark. */
   private def report(name: String, iterations: Int, totalNs: Long): Unit =
     val nsOp = totalNs.toDouble / math.max(1, iterations)
     val ops = if totalNs == 0 then 0.0 else iterations.toDouble / (totalNs.toDouble / 1e9)
     println(f"$name%-38s ops/s=$ops%12.0f ns/op=$nsOp%12.1f")
 
+  /** Parses `--iterations`, `--gateway-iterations`, `--data` and `--native-lib` into `cfg`. */
   @tailrec
   private def parseArgs(args: List[String], cfg: Config): Config = args match
     case Nil => cfg

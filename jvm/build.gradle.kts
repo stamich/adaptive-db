@@ -4,7 +4,7 @@ plugins {
 
 allprojects {
     group = "io.adb"
-    version = "0.2.0+hardening.1"
+    version = "0.2.3"
 
     repositories {
         mavenCentral()

@@ -1,29 +1,33 @@
 package io.adb.model
 
-/** Documents `DataType` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Logical column type known to the SQL layer; each maps to one engine physical type. */
 sealed trait DataType derives CanEqual:
-  /** Documents `sqlName` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Canonical SQL spelling of the type, used in DDL output and error messages. */
   def sqlName: String
 
-/** Documents `DataType` and its role in the Milestone 2.0.1 JVM control plane. */
+/** The supported column types and a parser for their SQL names. */
 object DataType:
-  /** Documents `Bool` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Boolean column (`BOOLEAN`). */
   case object Bool extends DataType:
     val sqlName = "BOOLEAN"
-  /** Documents `Int64` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Signed 64-bit integer column (`BIGINT`); the only primary-key type. */
   case object Int64 extends DataType:
     val sqlName = "BIGINT"
-  /** Documents `Float64` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** IEEE-754 double column (`DOUBLE`). */
   case object Float64 extends DataType:
     val sqlName = "DOUBLE"
-  /** Documents `StringType` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** UTF-8 string column (`STRING`). */
   case object StringType extends DataType:
     val sqlName = "STRING"
-  /** Documents `Bytes` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Opaque byte-array column (`BYTES`). */
   case object Bytes extends DataType:
     val sqlName = "BYTES"
 
-  /** Documents `parse` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Parses a SQL type name, case-insensitively, accepting common aliases.
+    *
+    * @param name type name as written in DDL
+    * @return the type, or `None` if the name is unknown
+    */
   def parse(name: String): Option[DataType] =
     name.toUpperCase match
       case "BOOLEAN" | "BOOL" => Some(Bool)

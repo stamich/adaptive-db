@@ -1,7 +1,0 @@
-Adaptive DB Milestone 2.0.2 demo/benchmark package
-Base: adaptive-db-milestone2.0.1-with-demo-buildfix
-Scope: benchmark/demo packaging; no 2.1+ feature import
-Native ABI: 2
-Added: examples/rust-benchmark, jvm/adb-benchmark, TASKS-2.0.2.md, build-milestone2.0.2.sh
-Environment note: this packaging environment does not provide cargo/gradle, so compiler/test execution
-must be performed with build-milestone2.0.2.sh on a Rust + JDK22 + Gradle host.

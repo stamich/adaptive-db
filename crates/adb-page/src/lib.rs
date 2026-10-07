@@ -1,8 +1,8 @@
-//! Module `lib` for crate `adb-page`.
+//! Fixed-size checksummed pages and the slotted heap-page layout.
 pub mod error;
 pub mod page;
 pub mod slotted;
 
 pub use error::PageError;
 pub use page::{Page, PageKind, PAGE_FORMAT_VERSION, PAGE_HEADER_SIZE, PAGE_MAGIC, PAGE_SIZE};
-pub use slotted::SlottedPage;
+pub use slotted::{SlottedPage, SlottedView};

@@ -2,17 +2,17 @@ package io.adb.logical
 
 import io.adb.model.*
 
-/** Documents `BoundStatement` and its role in the Milestone 2.0.1 JVM control plane. */
+/** A statement whose names are resolved against the catalog and whose expressions are type-checked. */
 sealed trait BoundStatement derives CanEqual
-/** Documents `BoundCreateTable` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `CREATE TABLE`: entity name, `(column, type, nullable)` definitions, and primary-key column name. */
 final case class BoundCreateTable(name: String, fields: Vector[(String, DataType, Boolean)], primaryKey: String) extends BoundStatement
-/** Documents `BoundInsert` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `INSERT` of one row: values keyed by field id. */
 final case class BoundInsert(entity: Entity, values: Map[FieldId, DbValue]) extends BoundStatement
-/** Documents `BoundSelect` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `SELECT`: projected fields, optional predicate and limit, and optional `AS OF` snapshot timestamp. */
 final case class BoundSelect(entity: Entity, fields: Vector[Field], predicate: Option[TypedExpr], limit: Option[Int], asOfVersion: Option[Long]) extends BoundStatement
-/** Documents `BoundUpdate` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `UPDATE` of one row identified by its primary key: new values keyed by field id. */
 final case class BoundUpdate(entity: Entity, assignments: Map[FieldId, DbValue], primaryKeyValue: Long) extends BoundStatement
-/** Documents `BoundDelete` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `DELETE` of one row identified by its primary key. */
 final case class BoundDelete(entity: Entity, primaryKeyValue: Long) extends BoundStatement
-/** Documents `BoundExplain` and its role in the Milestone 2.0.1 JVM control plane. */
+/** `EXPLAIN [ANALYZE]` of an inner statement. */
 final case class BoundExplain(statement: BoundStatement, analyze: Boolean) extends BoundStatement

@@ -1,16 +1,22 @@
-//! Regression tests for temporal B+Tree corruption handling.
+//! Corruption handling of the node codec.
 
-use adb_btree::version_codec::decode_version_node;
-use adb_core::PageId;
+use adb_btree::codec::decode_node;
+use adb_core::{PageId, RowId, VersionKey};
 use adb_page::{Page, PageKind, PAGE_HEADER_SIZE};
 
-/// Verifies that an attacker- or corruption-controlled temporal leaf count
-/// returns a typed error instead of panicking while slicing the page payload.
+/// A corrupted leaf count must yield an error, never a panic or out-of-bounds read.
 #[test]
-fn huge_version_leaf_count_is_rejected() {
+fn huge_leaf_count_is_rejected_for_every_key_type() {
     let mut page = Page::new(PageId(1), PageKind::BTreeLeaf);
     page.bytes_mut()[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + 2]
         .copy_from_slice(&u16::MAX.to_le_bytes());
+    assert!(decode_node::<VersionKey>(&page).is_err());
+    assert!(decode_node::<RowId>(&page).is_err());
+}
 
-    assert!(decode_version_node(&page).is_err());
+/// Heap pages are not B+Tree nodes.
+#[test]
+fn wrong_page_kind_is_rejected() {
+    let page = Page::new(PageId(1), PageKind::Heap);
+    assert!(decode_node::<RowId>(&page).is_err());
 }

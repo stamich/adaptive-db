@@ -24,12 +24,14 @@
 
 ## Reserved physical field
 
-`FieldId(0)` is `_entity_id` and never appears in user schema. General table scans are physically:
+`FieldId(0)` is `_entity_id` and never appears in user schema. Since Milestone 2.0.3 a table scan
+is physically a native key-range scan of the entity:
 
 ```text
-Filter(Column(0) == EntityId)
-  Scan
+EntityScan(EntityId)        -- reads [EntityId << 64, (EntityId + 1) << 64)
 ```
+
+(Milestones 2.0–2.0.2 used `Filter(Column(0) == EntityId)` over a scan of every table.)
 
 Primary-key point lookup uses:
 

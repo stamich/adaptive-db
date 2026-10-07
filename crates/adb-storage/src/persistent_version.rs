@@ -1,122 +1,153 @@
-//! Module `persistent_version` for crate `adb-storage`.
-use std::path::Path;
+//! Version projection: immutable history indexed by `(RowId, begin_ts)`.
+use std::{ops::Bound, path::Path};
 
 use adb_btree::VersionBTree;
-use adb_core::{CommitTs, Lsn, RowId, RowLocation, VersionKey};
+use adb_core::{CommitTs, KeyRange, Lsn, RowId, VersionKey};
+use adb_journal::FileWrite;
 
-use crate::{HeapFile, HistoricalVersion, StorageError};
+use crate::{Checkpointable, HeapFile, HistoricalVersion, SpaceReuse, StorageError};
 
-/// Represents `PersistentVersionStore` state used by this subsystem.
+/// Temporal B+Tree over an append-only heap.
 pub struct PersistentVersionStore {
+    /// Serialized `HistoricalVersion`s.
     heap: HeapFile,
+    /// `(RowId, begin_ts)` to heap location.
     index: VersionBTree,
 }
 
-/// Implements behavior for `PersistentVersionStore`.
 impl PersistentVersionStore {
-    /// Implements the `open` operation used by this subsystem.
-    pub fn open(dir: impl AsRef<Path>) -> Result<Self, StorageError> {
+    /// Opens the store in `dir`.
+    pub fn open(dir: impl AsRef<Path>, buffer_pages: usize) -> Result<Self, StorageError> {
         let dir = dir.as_ref();
         std::fs::create_dir_all(dir)?;
-
         Ok(Self {
-            heap: HeapFile::open(dir.join("versions.heap"), 128)?,
+            heap: HeapFile::open(
+                dir.join("versions.heap"),
+                buffer_pages,
+                SpaceReuse::AppendOnly,
+            )?,
             index: VersionBTree::open(
                 dir.join("versions.idx"),
                 dir.join("versions.idx.meta"),
-                128,
+                buffer_pages,
             )?,
         })
     }
 
-    /// Implements the `put_at_lsn` operation used by this subsystem.
+    /// Records a historical version. Idempotent: a version that already exists is kept.
     pub fn put_at_lsn(
         &self,
         row_id: RowId,
         version: &HistoricalVersion,
         lsn: Lsn,
-    ) -> Result<RowLocation, StorageError> {
+    ) -> Result<(), StorageError> {
         let key = VersionKey::new(row_id, version.begin_ts);
-
-        // Logical idempotence: when the version key already exists, the
-        // history fact has already been materialized.
-        if let Some(location) = self.index.get(key)? {
-            return Ok(location);
+        if self.index.get(key)?.is_some() {
+            return Ok(());
         }
-
-        let bytes = bincode::serialize(version)?;
-        let location = self.heap.insert(&bytes, lsn)?;
+        let location = self.heap.insert(&bincode::serialize(version)?, lsn)?;
         self.index.insert_at_lsn(key, location, lsn)?;
-
-        Ok(location)
+        Ok(())
     }
 
-    /// Implements the `get_at` operation used by this subsystem.
+    /// Version of `row_id` visible at `ts`, if any.
     pub fn get_at(
         &self,
         row_id: RowId,
         ts: CommitTs,
     ) -> Result<Option<HistoricalVersion>, StorageError> {
-        let search_key = VersionKey::new(row_id, ts);
-
-        let Some((key, location)) = self.index.get_floor(search_key)? else {
+        let Some((key, location)) = self.index.get_floor(VersionKey::new(row_id, ts))? else {
             return Ok(None);
         };
-
         if key.row_id != row_id {
             return Ok(None);
         }
-
-        let bytes = self.heap.read(location)?;
-        let version: HistoricalVersion = bincode::deserialize(&bytes)?;
-
+        let version: HistoricalVersion = bincode::deserialize(&self.heap.read(location)?)?;
         Ok(version.visible_at(ts).then_some(version))
     }
 
-    /// Implements the `history` operation used by this subsystem.
+    /// All versions of `row_id`, oldest first.
     pub fn history(&self, row_id: RowId) -> Result<Vec<HistoricalVersion>, StorageError> {
         self.index
-            .range_for_row(row_id)?
+            .scan(
+                Bound::Included(VersionKey::new(row_id, CommitTs(0))),
+                Bound::Included(VersionKey::new(row_id, CommitTs(u64::MAX))),
+                usize::MAX,
+            )?
             .into_iter()
-            .map(|(_, location)| {
-                let bytes = self.heap.read(location)?;
-                Ok(bincode::deserialize(&bytes)?)
-            })
+            .map(|(_, location)| Ok(bincode::deserialize(&self.heap.read(location)?)?))
             .collect()
     }
 
-    /// Implements the `scan_all` operation used by this subsystem.
+    /// Up to `limit` distinct rows of `range` that have history, strictly after `after`.
+    ///
+    /// Each step is one index seek, so rows with long histories cost no more than short ones.
+    pub fn row_ids(
+        &self,
+        range: &KeyRange,
+        after: Option<RowId>,
+        limit: usize,
+    ) -> Result<Vec<RowId>, StorageError> {
+        let end = range.end.map_or(Bound::Unbounded, |end| {
+            Bound::Excluded(VersionKey::new(end, CommitTs(0)))
+        });
+        let mut start = match range.bounds_after(after).0 {
+            Bound::Excluded(row) => Bound::Excluded(VersionKey::new(row, CommitTs(u64::MAX))),
+            _ => Bound::Included(VersionKey::new(range.start, CommitTs(0))),
+        };
+        let mut rows = Vec::new();
+        while rows.len() < limit {
+            let Some((key, _)) = self.index.scan(start, end, 1)?.into_iter().next() else {
+                break;
+            };
+            rows.push(key.row_id);
+            start = Bound::Excluded(VersionKey::new(key.row_id, CommitTs(u64::MAX)));
+        }
+        Ok(rows)
+    }
+
+    /// Every version (diagnostics and integrity checks only).
     pub fn scan_all(&self) -> Result<Vec<(VersionKey, HistoricalVersion)>, StorageError> {
         self.index
             .scan_all()?
             .into_iter()
-            .map(|(key, location)| {
-                let bytes = self.heap.read(location)?;
-                let version = bincode::deserialize(&bytes)?;
-                Ok((key, version))
-            })
+            .map(|(key, location)| Ok((key, bincode::deserialize(&self.heap.read(location)?)?)))
             .collect()
     }
 
-    /// Implements the `flush` operation used by this subsystem.
+    /// Index pages.
+    pub fn index_page_count(&self) -> u64 {
+        self.index.page_count()
+    }
+
+    /// Heap pages.
+    pub fn heap_page_count(&self) -> u64 {
+        self.heap.page_count()
+    }
+
+    /// Persists everything directly (standalone use; the engine checkpoints via the journal).
     pub fn flush(&self) -> Result<(), StorageError> {
         self.heap.flush()?;
-        self.index.flush()?;
-        Ok(())
+        Ok(self.index.flush()?)
+    }
+}
+
+impl Checkpointable for PersistentVersionStore {
+    /// Dirty heap and index pages plus the index root.
+    fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
+        let mut writes = self.heap.journal_writes()?;
+        writes.extend(self.index.journal_writes()?);
+        Ok(writes)
     }
 
-    /// Implements the `root_page_id` operation used by this subsystem.
-    pub fn root_page_id(&self) -> adb_core::PageId {
-        self.index.root_page_id()
+    /// Marks heap and index persisted.
+    fn mark_clean(&self) {
+        self.heap.mark_clean();
+        self.index.mark_clean();
     }
 
-    /// Implements the `index_page_count` operation used by this subsystem.
-    pub fn index_page_count(&self) -> Result<u64, StorageError> {
-        Ok(self.index.page_count()?)
-    }
-
-    /// Implements the `heap_page_count` operation used by this subsystem.
-    pub fn heap_page_count(&self) -> Result<u64, StorageError> {
-        self.heap.page_count()
+    /// Dirty heap and index pages.
+    fn dirty_pages(&self) -> usize {
+        self.heap.dirty_pages() + self.index.dirty_page_count()
     }
 }

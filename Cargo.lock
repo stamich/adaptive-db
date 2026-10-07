@@ -3,8 +3,8 @@
 version = 4
 
 [[package]]
-name = "adb-benchmark-2-0-2-rust"
-version = "0.2.0+hardening.1"
+name = "adb-benchmark-2-0-3-rust"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "adb-engine",
@@ -15,10 +15,11 @@ dependencies = [
 
 [[package]]
 name = "adb-btree"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-buffer",
  "adb-core",
+ "adb-journal",
  "adb-page",
  "bincode",
  "crc32fast",
@@ -30,9 +31,10 @@ dependencies = [
 
 [[package]]
 name = "adb-buffer"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
+ "adb-journal",
  "adb-page",
  "parking_lot",
  "tempfile",
@@ -41,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "adb-core"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "serde",
  "thiserror",
@@ -49,21 +51,24 @@ dependencies = [
 
 [[package]]
 name = "adb-engine"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "adb-execution",
+ "adb-journal",
  "adb-storage",
  "adb-tx",
  "adb-wal",
+ "bincode",
  "parking_lot",
+ "serde",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
 name = "adb-execution"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "parking_lot",
@@ -74,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "adb-ffi"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "adb-engine",
@@ -82,13 +87,23 @@ dependencies = [
  "adb-storage",
  "adb-wal",
  "parking_lot",
+ "serde",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
+name = "adb-journal"
+version = "0.2.3"
+dependencies = [
+ "crc32fast",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-page"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "crc32fast",
@@ -97,14 +112,15 @@ dependencies = [
 
 [[package]]
 name = "adb-storage"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-btree",
  "adb-buffer",
  "adb-core",
+ "adb-journal",
  "adb-page",
  "bincode",
- "crc32fast",
+ "parking_lot",
  "serde",
  "tempfile",
  "thiserror",
@@ -112,16 +128,15 @@ dependencies = [
 
 [[package]]
 name = "adb-tx"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
- "adb-storage",
- "thiserror",
+ "parking_lot",
 ]
 
 [[package]]
 name = "adb-wal"
-version = "0.2.0+hardening.1"
+version = "0.2.3"
 dependencies = [
  "adb-core",
  "bincode",

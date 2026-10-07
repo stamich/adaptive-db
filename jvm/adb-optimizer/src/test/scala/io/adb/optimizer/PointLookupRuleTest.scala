@@ -7,9 +7,9 @@ import io.adb.sql.SqlParser
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Documents `PointLookupRuleTest` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Unit tests of [[PointLookupRule]]. */
 class PointLookupRuleTest:
-  /** Documents `rewritesPkEquality` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** An equality on the primary key is rewritten into a `PointLookup`. */
   @Test def rewritesPkEquality(): Unit =
     val catalog = new InMemoryCatalog
     catalog.createEntity("account", Vector(("id", DataType.Int64, false), ("balance", DataType.Int64, false)), "id")

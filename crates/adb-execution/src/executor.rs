@@ -1,6 +1,7 @@
-//! Module `executor` for crate `adb-execution`.
+//! Turns a physical plan into a pull-based operator tree and exposes it as a cursor.
 use std::sync::Arc;
 
+use adb_core::KeyRange;
 use parking_lot::Mutex;
 
 use crate::{
@@ -11,12 +12,11 @@ use crate::{
     DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch,
 };
 
-/// Represents `Executor` state used by this subsystem.
+/// Plan validation and operator-tree construction.
 pub struct Executor;
 
-/// Implements behavior for `Executor`.
 impl Executor {
-    /// Implements the `execute` operation used by this subsystem.
+    /// Validates `plan` and returns a cursor that produces its batches lazily.
     pub fn execute(
         source: Arc<dyn DataSource>,
         plan: PhysicalPlan,
@@ -33,16 +33,18 @@ impl Executor {
     }
 }
 
-/// Represents `QueryCursor` state used by this subsystem.
+/// A running query: pull batches until `None`, cancel from any thread.
 pub struct QueryCursor {
+    /// Root of the operator tree.
     root: Box<dyn Operator>,
+    /// Snapshot, limits and cancellation of the query.
     context: ExecutionContext,
+    /// Counters updated on every batch.
     metrics: Mutex<QueryMetrics>,
 }
 
-/// Implements behavior for `QueryCursor`.
 impl QueryCursor {
-    /// Implements the `next_batch` operation used by this subsystem.
+    /// Next columnar batch, or `None` at the end; enforces the per-batch memory limit.
     pub fn next_batch(&mut self) -> Result<Option<RecordBatch>, ExecutionError> {
         self.context.check_running()?;
         let Some(rows) = self.root.next_batch(&self.context)? else {
@@ -63,23 +65,23 @@ impl QueryCursor {
         Ok(Some(batch))
     }
 
-    /// Implements the `cancel` operation used by this subsystem.
+    /// Requests cooperative cancellation; the next pull fails with `Cancelled`.
     pub fn cancel(&self) {
         self.context.cancellation.cancel();
     }
 
-    /// Implements the `metrics` operation used by this subsystem.
+    /// Counters accumulated so far.
     pub fn metrics(&self) -> QueryMetrics {
         *self.metrics.lock()
     }
 
-    /// Implements the `cancellation_token` operation used by this subsystem.
+    /// Token that cancels this query from another thread.
     pub fn cancellation_token(&self) -> crate::CancellationToken {
         self.context.cancellation.clone()
     }
 }
 
-/// Implements the `build_operator` operation used by this subsystem.
+/// Recursively instantiates the operator for each plan node.
 fn build_operator(
     source: Arc<dyn DataSource>,
     plan: PhysicalPlan,
@@ -87,7 +89,11 @@ fn build_operator(
     Ok(match plan {
         PhysicalPlan::PointLookup { row_id } => Box::new(PointLookupOperator::new(source, row_id)),
 
-        PhysicalPlan::Scan => Box::new(ScanOperator::new(source)),
+        PhysicalPlan::Scan => Box::new(ScanOperator::new(source, KeyRange::all())),
+
+        PhysicalPlan::EntityScan { entity_id } => {
+            Box::new(ScanOperator::new(source, KeyRange::entity(entity_id)))
+        }
 
         PhysicalPlan::Filter { input, predicate } => Box::new(FilterOperator::new(
             build_operator(source, *input)?,

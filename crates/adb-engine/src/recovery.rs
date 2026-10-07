@@ -1,134 +1,132 @@
-//! Logical WAL recovery analysis with transaction-state validation.
+//! Opening a database: finish an interrupted checkpoint, then replay the log tail.
+//!
+//! 1. A committed checkpoint journal left by a crash is re-applied ([`Journal::recover`]), so
+//!    the projections and the checkpoint record are exactly the last checkpointed state.
+//! 2. The log is read from the checkpoint's `replay_from` position and every committed
+//!    transaction is applied to the projections (the buffer pool is no-steal, so nothing after
+//!    the checkpoint ever reached the projection files).
+//! 3. A fresh checkpoint is written if anything was replayed.
+//!
+//! Recovery cost is therefore proportional to the log written since the last checkpoint.
 
-use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
-use adb_core::{CommitTs, Lsn, RowId, TxId};
-use adb_storage::HistoricalVersion;
-use adb_tx::Mutation;
-use adb_wal::{WalError, WalRecord};
+use adb_core::{CommitTs, Lsn};
+use adb_journal::Journal;
+use adb_storage::{Checkpoint, CheckpointStore, Checkpointable};
+use adb_wal::{earliest_lsn, WalCursor, WalRecord};
 
-/// Accumulates not-yet-committed history and current-state mutations for one begun transaction.
-#[derive(Debug, Default)]
-pub struct PendingTx {
-    /// Historical before-images emitted by the transaction.
-    pub versions: Vec<(RowId, HistoricalVersion)>,
-    /// Current-state mutations emitted by the transaction.
-    pub mutations: Vec<(RowId, Mutation)>,
+use crate::{committed::TxAssembler, projections::Projections, DatabaseOptions, DbError};
+
+/// State reconstructed by [`recover`].
+pub(crate) struct Recovered {
+    /// Projections brought up to the end of the log.
+    pub projections: Projections,
+    /// Highest commit timestamp found.
+    pub last_commit_ts: CommitTs,
+    /// Highest transaction id found (committed or not).
+    pub last_tx_id: u64,
+    /// Vacuum horizon restored from the checkpoint.
+    pub vacuumed_through: CommitTs,
 }
 
-/// Captures the highest durable transaction/timestamp ids observed during recovery analysis.
-#[derive(Debug, Default)]
-pub struct RecoverySummary {
-    /// Highest transaction id observed.
-    pub max_tx_id: u64,
-    /// Highest committed timestamp observed.
-    pub max_commit_ts: u64,
+/// Publishes the projections' dirty pages and `checkpoint` atomically.
+pub(crate) fn write_checkpoint(
+    journal: &Journal,
+    store: &CheckpointStore,
+    projections: &Projections,
+    checkpoint: &Checkpoint,
+) -> Result<(), DbError> {
+    let mut writes = projections.journal_writes()?;
+    writes.push(store.journal_write(checkpoint)?);
+    journal.commit(&writes)?;
+    projections.mark_clean();
+    Ok(())
 }
 
-/// Computes monotonic id/timestamp maxima from already frame-validated WAL records.
-pub fn analyze(records: impl IntoIterator<Item = WalRecord>) -> RecoverySummary {
-    let mut summary = RecoverySummary::default();
-    for record in records {
-        match record {
-            WalRecord::Begin { tx_id, .. }
-            | WalRecord::Version { tx_id, .. }
-            | WalRecord::Put { tx_id, .. }
-            | WalRecord::Delete { tx_id, .. }
-            | WalRecord::Abort { tx_id } => {
-                summary.max_tx_id = summary.max_tx_id.max(tx_id.0);
-            }
-            WalRecord::Commit { tx_id, commit_ts } => {
-                summary.max_tx_id = summary.max_tx_id.max(tx_id.0);
-                summary.max_commit_ts = summary.max_commit_ts.max(commit_ts.0);
-            }
+/// Brings the projections of the database in `dir` up to the end of its log.
+pub(crate) fn recover(
+    dir: &Path,
+    wal_dir: &Path,
+    options: &DatabaseOptions,
+    journal: &Journal,
+    store: &CheckpointStore,
+) -> Result<Recovered, DbError> {
+    journal.recover()?;
+    let checkpoint = store.load()?;
+    let projections = Projections::open(dir, options.buffer_pages)?;
+
+    // Databases migrated from format 2 re-read the whole retained log and skip what is applied.
+    let start = match checkpoint.applied_through {
+        Some(_) => earliest_lsn(wal_dir)?.unwrap_or(Lsn(0)),
+        None => checkpoint.replay_from,
+    };
+    let mut cursor = WalCursor::open(wal_dir, start)?;
+    let mut assembler = TxAssembler::tolerating_orphans_through(checkpoint.applied_through);
+    let mut state = Recovered {
+        projections,
+        last_commit_ts: checkpoint.last_commit_ts,
+        last_tx_id: checkpoint.last_tx_id,
+        vacuumed_through: checkpoint.vacuumed_through,
+    };
+    let mut replayed = checkpoint.applied_through.is_some();
+    let mut end = start;
+
+    while let Some(entry) = cursor.next_before(Lsn(u64::MAX))? {
+        end = entry.next;
+        state.last_tx_id = state.last_tx_id.max(tx_id_of(&entry.record));
+        let Some(logged) = assembler.push(entry)? else {
+            continue;
+        };
+        if checkpoint
+            .applied_through
+            .is_some_and(|applied| logged.commit_lsn <= applied)
+        {
+            continue;
+        }
+        state.projections.apply(&logged.tx, logged.commit_lsn)?;
+        state.last_commit_ts = state.last_commit_ts.max(logged.tx.commit_ts);
+        replayed = true;
+
+        if state.projections.dirty_pages() > options.checkpoint_dirty_pages
+            && !assembler.is_mid_transaction()
+        {
+            write_checkpoint(
+                journal,
+                store,
+                &state.projections,
+                &state.checkpoint(logged.end),
+            )?;
         }
     }
-    summary
+
+    if replayed {
+        write_checkpoint(journal, store, &state.projections, &state.checkpoint(end))?;
+    }
+    Ok(state)
 }
 
-/// Reconstructs committed transactions while rejecting impossible logical WAL state transitions.
-pub fn collect_committed(
-    entries: &[(Lsn, WalRecord)],
-) -> Result<Vec<(Lsn, TxId, CommitTs, PendingTx)>, WalError> {
-    let mut pending: HashMap<TxId, PendingTx> = HashMap::new();
-    let mut finished_ids = HashSet::new();
-    let mut committed = Vec::new();
-
-    for (lsn, record) in entries {
-        match record {
-            WalRecord::Begin { tx_id, .. } => {
-                if finished_ids.contains(tx_id)
-                    || pending.insert(*tx_id, PendingTx::default()).is_some()
-                {
-                    return Err(WalError::Corrupt(format!(
-                        "duplicate/reused BEGIN for tx {}",
-                        tx_id.0
-                    )));
-                }
-            }
-            WalRecord::Version {
-                tx_id,
-                row_id,
-                begin_ts,
-                end_ts,
-                value,
-            } => {
-                if begin_ts >= end_ts {
-                    return Err(WalError::Corrupt(format!(
-                        "invalid historical interval for tx {}",
-                        tx_id.0
-                    )));
-                }
-                let tx = pending.get_mut(tx_id).ok_or_else(|| {
-                    WalError::Corrupt(format!("VERSION without BEGIN for tx {}", tx_id.0))
-                })?;
-                tx.versions.push((
-                    *row_id,
-                    HistoricalVersion {
-                        begin_ts: *begin_ts,
-                        end_ts: *end_ts,
-                        value: value.clone(),
-                    },
-                ));
-            }
-            WalRecord::Put {
-                tx_id,
-                row_id,
-                value,
-            } => {
-                let tx = pending.get_mut(tx_id).ok_or_else(|| {
-                    WalError::Corrupt(format!("PUT without BEGIN for tx {}", tx_id.0))
-                })?;
-                tx.mutations.push((*row_id, Mutation::Put(value.clone())));
-            }
-            WalRecord::Delete { tx_id, row_id } => {
-                let tx = pending.get_mut(tx_id).ok_or_else(|| {
-                    WalError::Corrupt(format!("DELETE without BEGIN for tx {}", tx_id.0))
-                })?;
-                tx.mutations.push((*row_id, Mutation::Delete));
-            }
-            WalRecord::Abort { tx_id } => {
-                if pending.remove(tx_id).is_none() {
-                    return Err(WalError::Corrupt(format!(
-                        "ABORT without BEGIN for tx {}",
-                        tx_id.0
-                    )));
-                }
-                finished_ids.insert(*tx_id);
-            }
-            WalRecord::Commit { tx_id, commit_ts } => {
-                let tx = pending.remove(tx_id).ok_or_else(|| {
-                    WalError::Corrupt(format!("COMMIT without BEGIN for tx {}", tx_id.0))
-                })?;
-                if !finished_ids.insert(*tx_id) {
-                    return Err(WalError::Corrupt(format!(
-                        "duplicate COMMIT for tx {}",
-                        tx_id.0
-                    )));
-                }
-                committed.push((*lsn, *tx_id, *commit_ts, tx));
-            }
+impl Recovered {
+    /// Checkpoint record describing this state with recovery restarting at `replay_from`.
+    fn checkpoint(&self, replay_from: Lsn) -> Checkpoint {
+        Checkpoint {
+            replay_from,
+            last_commit_ts: self.last_commit_ts,
+            last_tx_id: self.last_tx_id,
+            vacuumed_through: self.vacuumed_through,
+            ..Checkpoint::default()
         }
     }
-    Ok(committed)
+}
+
+/// Transaction id carried by any log record.
+fn tx_id_of(record: &WalRecord) -> u64 {
+    match record {
+        WalRecord::Begin { tx_id, .. }
+        | WalRecord::Version { tx_id, .. }
+        | WalRecord::Put { tx_id, .. }
+        | WalRecord::Delete { tx_id, .. }
+        | WalRecord::Commit { tx_id, .. }
+        | WalRecord::Abort { tx_id } => tx_id.0,
+    }
 }

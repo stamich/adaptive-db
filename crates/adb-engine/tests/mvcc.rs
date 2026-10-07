@@ -1,11 +1,11 @@
-//! Module `mvcc` for crate `adb-engine`.
+//! Snapshot reads and time travel.
 mod common;
 use adb_core::RowId;
 use adb_engine::Database;
 use common::{read_i64, row_with_i64};
 use tempfile::tempdir;
 
-/// Implements the `snapshot_read_is_repeatable` operation used by this subsystem.
+/// An older transaction keeps reading its snapshot after newer commits.
 #[test]
 fn snapshot_read_is_repeatable() {
     let dir = tempdir().unwrap();
@@ -13,18 +13,18 @@ fn snapshot_read_is_repeatable() {
     let mut seed = db.begin();
     seed.put(RowId(1), row_with_i64(100));
     db.commit(seed).unwrap();
-    let old = db.begin();
+    let mut old = db.begin();
     let mut newer = db.begin();
     newer.put(RowId(1), row_with_i64(200));
     db.commit(newer).unwrap();
     assert_eq!(
-        read_i64(&db.get_in_tx(&old, RowId(1)).unwrap().unwrap()),
+        read_i64(&db.get_in_tx(&mut old, RowId(1)).unwrap().unwrap()),
         100
     );
     assert_eq!(read_i64(&db.get(RowId(1)).unwrap().unwrap()), 200);
 }
 
-/// Implements the `historical_versions_are_queryable` operation used by this subsystem.
+/// `get_at` returns the version visible at each commit timestamp.
 #[test]
 fn historical_versions_are_queryable() {
     let dir = tempdir().unwrap();

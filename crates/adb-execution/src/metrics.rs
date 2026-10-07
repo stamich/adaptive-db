@@ -1,8 +1,11 @@
-//! Module `metrics` for crate `adb-execution`.
-/// Represents `QueryMetrics` state used by this subsystem.
+//! Query counters.
+/// Rows and batches produced by a cursor.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct QueryMetrics {
+    /// Rows read from the data source (reserved; not yet maintained).
     pub source_rows: u64,
+    /// Rows returned to the caller.
     pub output_rows: u64,
+    /// Batches returned to the caller.
     pub batches: u64,
 }

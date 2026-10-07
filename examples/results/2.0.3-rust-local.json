@@ -1,0 +1,39 @@
+{
+  "cdc_read": {
+    "events": 150,
+    "ms": 44
+  },
+  "churn_heap_pages": {
+    "after": 1,
+    "before": 1
+  },
+  "commit_single_row": {
+    "n_threads_ops_s": 9872.913683031014,
+    "one_thread_ops_s": 3413.573520740886
+  },
+  "entity_scan": {
+    "ms": 3.433537,
+    "rows": 5000
+  },
+  "full_scan_filter": {
+    "ms": 10.196836000000001,
+    "rows": 15000
+  },
+  "iters": 1000,
+  "load": {
+    "ms": 307,
+    "rows": 15000,
+    "rows_s": 48702.75804465583
+  },
+  "milestone": "2.0.3",
+  "plan_json_parse_ops_s": 1789728.3908194092,
+  "point_lookup": {
+    "ops_s": 445546.8263031242,
+    "p50_ns": 1844,
+    "p95_ns": 3543,
+    "p99_ns": 4943
+  },
+  "recovery_ms": 72,
+  "rows": 5000,
+  "threads": 8
+}

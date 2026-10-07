@@ -1,4 +1,4 @@
-//! Module `mod` for crate `src`.
+//! Physical operators. Each pulls batches from its input on demand.
 pub mod filter;
 pub mod limit;
 pub mod point_lookup;
@@ -9,12 +9,12 @@ use adb_core::{Row, RowId};
 
 use crate::{ExecutionContext, ExecutionError};
 
-/// Defines the `RowBatch` type alias used by this subsystem.
+/// Row-oriented batch exchanged between operators.
 pub type RowBatch = Vec<(RowId, Row)>;
 
-/// Defines the `Operator` behavior contract for this subsystem.
+/// A pull-based operator.
 pub trait Operator: Send {
-    /// Implements the `next_batch` operation used by this subsystem.
+    /// Next batch, or `None` when the operator is exhausted.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

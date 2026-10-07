@@ -1,123 +1,292 @@
-use std::{collections::BTreeMap, env, fs, hint::black_box, path::PathBuf, time::{Duration, Instant}};
+//! Milestone 2.0.3 data-plane benchmark.
+//!
+//! Sections comparable with 2.0.2 (bulk load, point lookup, scan, plan parsing) plus the
+//! behaviours introduced in 2.0.3: single-row commit throughput with and without concurrency
+//! (group commit), heap size under update churn, entity scan, change-feed throughput and
+//! recovery time.
 
-use adb_core::{FieldId, Row, RowId, Value};
-use adb_engine::Database;
+use std::{
+    env,
+    hint::black_box,
+    path::PathBuf,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
+
+use adb_core::{Row, RowId, Value};
+use adb_engine::{ChangeCursor, ChangeFilter, Database};
 use adb_execution::{BinaryOp, Expr, PhysicalPlan};
+use serde_json::json;
 use tempfile::tempdir;
 
-fn row(id: u128) -> Row {
-    let mut fields = BTreeMap::new();
-    fields.insert(1 as FieldId, Value::Int64(id as i64));
-    fields.insert(2 as FieldId, Value::String(format!("row-{id}")));
-    Row { fields }
+/// Result type of the benchmark (any error aborts it).
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Command-line options.
+struct Args {
+    /// Rows per entity.
+    rows: u64,
+    /// Iterations of the point-lookup and plan-parse sections.
+    iters: usize,
+    /// Writer threads of the concurrent-commit section.
+    threads: u64,
+    /// Optional JSON report path.
+    output: Option<PathBuf>,
 }
 
-fn percentile(ns: &mut [u128], pct: f64) -> u128 {
-    ns.sort_unstable();
-    if ns.is_empty() { return 0; }
-    let idx = (((ns.len() - 1) as f64) * pct).round() as usize;
-    ns[idx]
-}
-
-fn measure<F: FnMut()>(iters: usize, mut f: F) -> (Duration, u128, u128, u128) {
-    let start = Instant::now();
-    let mut samples = Vec::with_capacity(iters);
-    for _ in 0..iters {
-        let s = Instant::now();
-        f();
-        samples.push(s.elapsed().as_nanos());
-    }
-    let total = start.elapsed();
-    let mut p = samples.clone();
-    let p50 = percentile(&mut p, 0.50);
-    let p95 = percentile(&mut p, 0.95);
-    let p99 = percentile(&mut p, 0.99);
-    (total, p50, p95, p99)
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut rows = 5_000usize;
-    let mut iters = 1_000usize;
-    let mut output: Option<PathBuf> = None;
-    let args: Vec<String> = env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--rows" => { i += 1; rows = args[i].parse()?; }
-            "--iters" => { i += 1; iters = args[i].parse()?; }
-            "--output" => { i += 1; output = Some(PathBuf::from(&args[i])); }
+/// Parses `--rows`, `--iters`, `--threads` and `--output`.
+fn parse_args() -> Result<Args> {
+    let mut args = Args {
+        rows: 5_000,
+        iters: 1_000,
+        threads: 8,
+        output: None,
+    };
+    let raw: Vec<String> = env::args().skip(1).collect();
+    let mut i = 0;
+    while i < raw.len() {
+        let value = raw.get(i + 1).ok_or("missing argument value")?;
+        match raw[i].as_str() {
+            "--rows" => args.rows = value.parse()?,
+            "--iters" => args.iters = value.parse()?,
+            "--threads" => args.threads = value.parse()?,
+            "--output" => args.output = Some(PathBuf::from(value)),
             other => return Err(format!("unknown argument: {other}").into()),
         }
-        i += 1;
+        i += 2;
     }
+    Ok(args)
+}
 
-    println!("Adaptive DB 2.0.2 Rust benchmark — engine/execution baseline");
-    println!("rows={rows} iters={iters}");
+/// Benchmark row: field 1 = value, field 2 = its string form.
+fn row(value: u64) -> Row {
+    Row::new()
+        .with_field(1, Value::Int64(value as i64))
+        .with_field(2, Value::String(format!("row-{value}")))
+}
+
+/// Throughput of `count` operations in `elapsed`.
+fn per_second(count: u64, elapsed: Duration) -> f64 {
+    count as f64 / elapsed.as_secs_f64()
+}
+
+/// p50/p95/p99 of latency samples in nanoseconds.
+fn percentiles(mut samples: Vec<u128>) -> (u128, u128, u128) {
+    samples.sort_unstable();
+    let at = |p: f64| samples[((samples.len() - 1) as f64 * p).round() as usize];
+    (at(0.50), at(0.95), at(0.99))
+}
+
+/// Executes `plan` and counts the rows it returns.
+fn count_rows(db: &Database, plan: PhysicalPlan) -> Result<usize> {
+    let mut cursor = db.execute(plan)?;
+    let mut rows = 0;
+    while let Some(batch) = cursor.next_batch()? {
+        rows += batch.len();
+        black_box(&batch);
+    }
+    Ok(rows)
+}
+
+/// Runs every benchmark section and optionally writes a JSON report.
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    println!("Adaptive DB 2.0.3 Rust benchmark");
+    println!(
+        "rows={} iters={} threads={}",
+        args.rows, args.iters, args.threads
+    );
+
+    // ---- bulk load: 100 rows per transaction, 3 entities ------------------------------------
     let dir = tempdir()?;
     let db = Database::open(dir.path())?;
-
-    let load_start = Instant::now();
-    let batch = 100usize.max(1);
-    for base in (0..rows).step_by(batch) {
-        let mut tx = db.begin();
-        for n in base..(base + batch).min(rows) {
-            tx.put(RowId((n + 1) as u128), row((n + 1) as u128));
+    let start = Instant::now();
+    for entity in 1..=3u64 {
+        for base in (0..args.rows).step_by(100) {
+            let mut tx = db.begin();
+            for pk in base..(base + 100).min(args.rows) {
+                tx.put(RowId::compose(entity, pk), row(pk));
+            }
+            db.commit(tx)?;
         }
-        db.commit(tx)?;
     }
-    let load = load_start.elapsed();
+    let load = start.elapsed();
+    let loaded = 3 * args.rows;
+    println!(
+        "load rows={loaded} ms={} rows_s={:.0}",
+        load.as_millis(),
+        per_second(loaded, load)
+    );
 
-    for _ in 0..100.min(iters) {
-        black_box(db.get(RowId(1))?);
+    // ---- point lookup -------------------------------------------------------------------------
+    let mut key = 0u64;
+    let mut samples = Vec::with_capacity(args.iters);
+    let start = Instant::now();
+    for _ in 0..args.iters {
+        key = (key + 7919) % args.rows;
+        let t = Instant::now();
+        black_box(db.get(RowId::compose(2, key))?);
+        samples.push(t.elapsed().as_nanos());
     }
+    let lookup = start.elapsed();
+    let (p50, p95, p99) = percentiles(samples);
+    println!(
+        "point_lookup ops_s={:.0} p50_ns={p50} p95_ns={p95} p99_ns={p99}",
+        per_second(args.iters as u64, lookup)
+    );
 
-    let mut key = 0usize;
-    let (point_total, p50, p95, p99) = measure(iters, || {
-        key = (key + 7919) % rows.max(1);
-        black_box(db.get(RowId((key + 1) as u128)).expect("point lookup"));
-    });
-
-    let scan_plan = PhysicalPlan::Scan;
-    let scan_start = Instant::now();
-    let mut scan_cursor = db.execute(scan_plan)?;
-    let mut scan_rows = 0usize;
-    while let Some(batch) = scan_cursor.next_batch()? { scan_rows += batch.len(); black_box(batch); }
-    let scan = scan_start.elapsed();
-
-    let filter_plan = PhysicalPlan::Limit {
-        input: Box::new(PhysicalPlan::Filter {
+    // ---- entity scan vs full scan + filter (the 2.0.2 plan shape) -----------------------------
+    let start = Instant::now();
+    let entity_rows = count_rows(&db, PhysicalPlan::EntityScan { entity_id: 2 })?;
+    let entity_scan = start.elapsed();
+    let start = Instant::now();
+    let filtered_rows = count_rows(
+        &db,
+        PhysicalPlan::Filter {
             input: Box::new(PhysicalPlan::Scan),
             predicate: Expr::Binary {
                 left: Box::new(Expr::Column { field_id: 1 }),
                 op: BinaryOp::Ge,
-                right: Box::new(Expr::Literal { value: Value::Int64((rows / 2) as i64) }),
+                right: Box::new(Expr::Literal {
+                    value: Value::Int64(0),
+                }),
             },
-        }),
+        },
+    )?;
+    let full_scan = start.elapsed();
+    println!(
+        "entity_scan rows={entity_rows} ms={:.2} | full_scan+filter rows={filtered_rows} ms={:.2}",
+        entity_scan.as_secs_f64() * 1e3,
+        full_scan.as_secs_f64() * 1e3
+    );
+
+    // ---- plan JSON parsing ----------------------------------------------------------------------
+    let plan_json = serde_json::to_string(&PhysicalPlan::Limit {
+        input: Box::new(PhysicalPlan::EntityScan { entity_id: 2 }),
         limit: 100,
-    };
-    let plan_json = serde_json::to_string(&filter_plan)?;
-    let plan_parse_start = Instant::now();
-    for _ in 0..iters { let p: PhysicalPlan = serde_json::from_str(&plan_json)?; black_box(p); }
-    let plan_parse = plan_parse_start.elapsed();
+    })?;
+    let start = Instant::now();
+    for _ in 0..args.iters {
+        black_box(serde_json::from_str::<PhysicalPlan>(&plan_json)?);
+    }
+    let parse = per_second(args.iters as u64, start.elapsed());
+    println!("physical_plan_json_parse ops_s={parse:.0}");
 
-    println!("load_ms={} throughput_rows_s={:.0}", load.as_millis(), rows as f64 / load.as_secs_f64());
-    println!("point_lookup ops_s={:.0} p50_ns={} p95_ns={} p99_ns={}", iters as f64 / point_total.as_secs_f64(), p50, p95, p99);
-    println!("scan rows={} ms={} rows_s={:.0}", scan_rows, scan.as_millis(), scan_rows as f64 / scan.as_secs_f64());
-    println!("physical_plan_json_parse ops_s={:.0}", iters as f64 / plan_parse.as_secs_f64());
+    // ---- change feed ----------------------------------------------------------------------------
+    let start = Instant::now();
+    let mut cursor = ChangeCursor::BEGINNING;
+    let mut events = 0u64;
+    loop {
+        let batch = db.read_changes(cursor, 1_000, &ChangeFilter::all())?;
+        if batch.events.is_empty() {
+            break;
+        }
+        events += batch.events.len() as u64;
+        cursor = batch.next;
+    }
+    let feed = start.elapsed();
+    println!(
+        "cdc_read events={events} ms={} events_s={:.0}",
+        feed.as_millis(),
+        per_second(events, feed)
+    );
 
-    if let Some(path) = output {
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
-        let json = serde_json::json!({
-            "milestone":"2.0.2",
-            "layer":"rust",
-            "rows":rows,
-            "iters":iters,
-            "load_ms":load.as_millis(),
-            "point_lookup":{"total_ms":point_total.as_millis(),"p50_ns":p50,"p95_ns":p95,"p99_ns":p99},
-            "scan":{"rows":scan_rows,"ms":scan.as_millis()},
-            "physical_plan_json_parse_ms":plan_parse.as_millis()
+    // ---- single-row commits: 1 thread vs N threads (group commit) ----------------------------
+    let single_n = args.rows.min(2_000);
+    let dir = tempdir()?;
+    let db = Database::open(dir.path())?;
+    let start = Instant::now();
+    for pk in 0..single_n {
+        let mut tx = db.begin();
+        tx.put(RowId::compose(1, pk), row(pk));
+        db.commit(tx)?;
+    }
+    let commit_1 = per_second(single_n, start.elapsed());
+
+    let dir = tempdir()?;
+    let db = Arc::new(Database::open(dir.path())?);
+    let per_thread = single_n / args.threads.max(1);
+    let start = Instant::now();
+    let handles: Vec<_> = (0..args.threads)
+        .map(|t| {
+            let db = Arc::clone(&db);
+            thread::spawn(move || -> std::result::Result<(), String> {
+                for pk in 0..per_thread {
+                    let mut tx = db.begin();
+                    tx.put(RowId::compose(t, pk), row(pk));
+                    db.commit(tx).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().map_err(|_| "worker panicked")??;
+    }
+    let commit_n = per_second(per_thread * args.threads, start.elapsed());
+    println!(
+        "commit_single_row 1_thread_ops_s={commit_1:.0} {}_threads_ops_s={commit_n:.0}",
+        args.threads
+    );
+
+    // ---- update churn: current heap must stay bounded ------------------------------------------
+    let dir = tempdir()?;
+    let db = Database::open(dir.path())?;
+    let mut tx = db.begin();
+    for pk in 0..100 {
+        tx.put(RowId::compose(1, pk), row(0));
+    }
+    db.commit(tx)?;
+    let pages_before = db.storage_stats()?.current_heap_pages;
+    for round in 0..20 {
+        let mut tx = db.begin();
+        for pk in 0..100 {
+            tx.put(RowId::compose(1, pk), row(round));
+        }
+        db.commit(tx)?;
+    }
+    let pages_after = db.storage_stats()?.current_heap_pages;
+    println!("churn_heap_pages before={pages_before} after_2000_updates={pages_after}");
+
+    // ---- recovery: crash after the load, reopen ------------------------------------------------
+    let dir = tempdir()?;
+    {
+        let db = Database::open(dir.path())?;
+        for base in (0..args.rows).step_by(100) {
+            let mut tx = db.begin();
+            for pk in base..(base + 100).min(args.rows) {
+                tx.put(RowId::compose(1, pk), row(pk));
+            }
+            db.commit(tx)?;
+        }
+    } // dropped without close(): everything since the last checkpoint is replayed
+    let start = Instant::now();
+    let db = Database::open(dir.path())?;
+    let recovery = start.elapsed();
+    black_box(db.get(RowId::compose(1, 0))?);
+    println!("recovery rows={} ms={}", args.rows, recovery.as_millis());
+
+    if let Some(path) = args.output {
+        let report = json!({
+            "milestone": "2.0.3",
+            "rows": args.rows, "iters": args.iters, "threads": args.threads,
+            "load": {"rows": loaded, "ms": load.as_millis(), "rows_s": per_second(loaded, load)},
+            "point_lookup": {"ops_s": per_second(args.iters as u64, lookup),
+                              "p50_ns": p50, "p95_ns": p95, "p99_ns": p99},
+            "entity_scan": {"rows": entity_rows, "ms": entity_scan.as_secs_f64() * 1e3},
+            "full_scan_filter": {"rows": filtered_rows, "ms": full_scan.as_secs_f64() * 1e3},
+            "plan_json_parse_ops_s": parse,
+            "cdc_read": {"events": events, "ms": feed.as_millis()},
+            "commit_single_row": {"one_thread_ops_s": commit_1, "n_threads_ops_s": commit_n},
+            "churn_heap_pages": {"before": pages_before, "after": pages_after},
+            "recovery_ms": recovery.as_millis(),
         });
-        fs::write(path, serde_json::to_vec_pretty(&json)?)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+        println!("wrote {}", path.display());
     }
     Ok(())
 }

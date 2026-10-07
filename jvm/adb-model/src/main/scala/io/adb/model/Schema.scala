@@ -1,6 +1,12 @@
 package io.adb.model
 
-/** Documents `Field` and its role in the Milestone 2.0.1 JVM control plane. */
+/** One column of an entity.
+  *
+  * @param id       stable engine field identifier (1-based position at creation)
+  * @param name     column name as declared
+  * @param dataType logical column type
+  * @param nullable whether the column accepts NULL
+  */
 final case class Field(
     id: FieldId,
     name: String,
@@ -8,7 +14,14 @@ final case class Field(
     nullable: Boolean
 ) derives CanEqual
 
-/** Documents `Entity` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Schema of one entity (table).
+  *
+  * @param id            engine entity identifier; the high 64 bits of every row key
+  * @param name          entity name as declared
+  * @param fields        columns in declaration order
+  * @param primaryKey    field id of the BIGINT primary-key column
+  * @param schemaVersion catalog version that created this entity
+  */
 final case class Entity(
     id: EntityId,
     name: String,
@@ -16,13 +29,19 @@ final case class Entity(
     primaryKey: FieldId,
     schemaVersion: SchemaVersion
 ) derives CanEqual:
+  /** Columns indexed by lower-cased name, for case-insensitive lookup. */
   lazy val fieldsByName: Map[String, Field] =
     fields.map(field => field.name.toLowerCase -> field).toMap
 
+  /** Columns indexed by field id. */
   lazy val fieldsById: Map[FieldId, Field] =
     fields.map(field => field.id -> field).toMap
 
-  /** Documents `field` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Looks up a column by name, case-insensitively.
+    *
+    * @param name column name
+    * @return the column, if it exists
+    */
   def field(name: String): Option[Field] = fieldsByName.get(name.toLowerCase)
-  /** Documents `primaryKeyField` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** The primary-key column. */
   def primaryKeyField: Field = fieldsById(primaryKey)

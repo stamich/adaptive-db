@@ -1,26 +1,26 @@
-//! Module `filter` for crate `src`.
+//! Row filter.
 use crate::{
     operator::{Operator, RowBatch},
     ExecutionContext, ExecutionError, Expr,
 };
 
-/// Represents `FilterOperator` state used by this subsystem.
+/// Keeps rows for which the predicate is true; never returns an empty batch.
 pub struct FilterOperator {
+    /// Upstream operator.
     input: Box<dyn Operator>,
+    /// Rows for which this is true are kept.
     predicate: Expr,
 }
 
-/// Implements behavior for `FilterOperator`.
 impl FilterOperator {
-    /// Implements the `new` operation used by this subsystem.
+    /// Filters `input` with `predicate`.
     pub fn new(input: Box<dyn Operator>, predicate: Expr) -> Self {
         Self { input, predicate }
     }
 }
 
-/// Implements behavior for `Operator`.
 impl Operator for FilterOperator {
-    /// Implements the `next_batch` operation used by this subsystem.
+    /// Pulls input batches until one has matching rows or the input ends.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

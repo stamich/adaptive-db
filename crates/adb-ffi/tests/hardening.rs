@@ -20,7 +20,7 @@ fn oversized_path_is_rejected_before_slice_creation() {
 #[test]
 fn oversized_plan_is_rejected_before_slice_creation() {
     let byte = b'{';
-    let mut query = 1usize as *mut _;
+    let mut query = std::ptr::dangling_mut();
     assert_eq!(
         adb_execute_plan_json(ptr::null_mut(), &byte, usize::MAX, &mut query),
         AdbStatus::InvalidArgument

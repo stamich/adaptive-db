@@ -1,23 +1,27 @@
 package io.adb.model
 
-/** Documents `DbValue` and its role in the Milestone 2.0.1 JVM control plane. */
+/** A single SQL value as seen by the JVM control plane. */
 sealed trait DbValue derives CanEqual
-/** Documents `DbValue` and its role in the Milestone 2.0.1 JVM control plane. */
+/** The value variants and their type mapping. */
 object DbValue:
-  /** Documents `NullValue` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** SQL NULL; compatible with every nullable column. */
   case object NullValue extends DbValue
-  /** Documents `BoolValue` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** A `BOOLEAN` value. */
   final case class BoolValue(value: Boolean) extends DbValue
-  /** Documents `Int64Value` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** A `BIGINT` value. */
   final case class Int64Value(value: Long) extends DbValue
-  /** Documents `Float64Value` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** A `DOUBLE` value. */
   final case class Float64Value(value: Double) extends DbValue
-  /** Documents `StringValue` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** A `STRING` value. */
   final case class StringValue(value: String) extends DbValue
-  /** Documents `BytesValue` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** A `BYTES` value. */
   final case class BytesValue(value: Array[Byte]) extends DbValue
 
-  /** Documents `dataType` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Returns the type of a value.
+    *
+    * @param value the value
+    * @return its data type, or `None` for NULL (which has no type of its own)
+    */
   def dataType(value: DbValue): Option[DataType] = value match
     case NullValue => None
     case BoolValue(_) => Some(DataType.Bool)

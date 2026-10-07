@@ -2,17 +2,17 @@ package io.adb.logical
 
 import io.adb.model.*
 
-/** Documents `LogicalPlan` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Relational operator tree produced from a bound SELECT; input to the optimizer. */
 sealed trait LogicalPlan derives CanEqual
-/** Documents `LogicalPlan` and its role in the Milestone 2.0.1 JVM control plane. */
+/** Logical operators. */
 object LogicalPlan:
-  /** Documents `TableScan` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Reads every row of one entity. */
   final case class TableScan(entity: Entity) extends LogicalPlan
-  /** Documents `PointLookup` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Reads one row of an entity by primary key (produced by [[io.adb.optimizer.PointLookupRule]]). */
   final case class PointLookup(entity: Entity, primaryKey: Long) extends LogicalPlan
-  /** Documents `Filter` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Keeps the rows of `input` for which `predicate` is true. */
   final case class Filter(input: LogicalPlan, predicate: TypedExpr) extends LogicalPlan
-  /** Documents `Project` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Restricts the rows of `input` to `fields`. */
   final case class Project(input: LogicalPlan, fields: Vector[Field]) extends LogicalPlan
-  /** Documents `Limit` and its role in the Milestone 2.0.1 JVM control plane. */
+  /** Stops after `limit` rows. */
   final case class Limit(input: LogicalPlan, limit: Int) extends LogicalPlan

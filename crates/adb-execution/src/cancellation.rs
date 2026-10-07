@@ -1,28 +1,28 @@
-//! Module `cancellation` for crate `adb-execution`.
+//! Cooperative query cancellation.
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
-/// Represents `CancellationToken` state used by this subsystem.
+/// Shared flag checked by operators between batches.
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
+    /// Flag shared by every clone of the token.
     cancelled: Arc<AtomicBool>,
 }
 
-/// Implements behavior for `CancellationToken`.
 impl CancellationToken {
-    /// Implements the `new` operation used by this subsystem.
+    /// A token that is not cancelled.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Implements the `cancel` operation used by this subsystem.
+    /// Marks the query cancelled.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    /// Implements the `is_cancelled` operation used by this subsystem.
+    /// Whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }

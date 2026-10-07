@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 adb-core = { path = "../adb-core" }
+adb-journal = { path = "../adb-journal" }
 adb-page = { path = "../adb-page" }
 parking_lot.workspace = true
 thiserror.workspace = true

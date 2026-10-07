@@ -1,0 +1,18 @@
+{
+  "milestone": "1.6.2",
+  "engine_base": "1.6.1-hardened",
+  "measurements": [
+    {"name":"version_btree_insert","operations":1000,"elapsed_ns":1557713,"ops_per_sec":641966.781,"ns_per_op":1557.713},
+    {"name":"version_btree_get_floor","operations":5000,"elapsed_ns":6720624,"ops_per_sec":743978.535,"ns_per_op":1344.125},
+    {"name":"persistent_version_put","operations":300,"elapsed_ns":1214925,"ops_per_sec":246928.823,"ns_per_op":4049.750},
+    {"name":"persistent_version_get_at","operations":5000,"elapsed_ns":9294517,"ops_per_sec":537951.569,"ns_per_op":1858.903},
+    {"name":"durable_batched_insert","operations":1000,"elapsed_ns":5480104,"ops_per_sec":182478.289,"ns_per_op":5480.104},
+    {"name":"durable_temporal_updates","operations":300,"elapsed_ns":3413685,"ops_per_sec":87881.571,"ns_per_op":11378.950},
+    {"name":"database_current_get","operations":5000,"elapsed_ns":7630997,"ops_per_sec":655222.378,"ns_per_op":1526.199},
+    {"name":"database_get_at_persistent","operations":5000,"elapsed_ns":17605707,"ops_per_sec":283998.819,"ns_per_op":3521.141},
+    {"name":"database_history","operations":5000,"elapsed_ns":24992430,"ops_per_sec":200060.578,"ns_per_op":4998.486},
+    {"name":"database_reopen_temporal","operations":1,"elapsed_ns":5805524,"ops_per_sec":172.250,"ns_per_op":5805524.000},
+    {"name":"segmented_wal_append_sync","operations":1000,"elapsed_ns":1685533,"ops_per_sec":593284.142,"ns_per_op":1685.533},
+    {"name":"segmented_wal_read_all","operations":1000,"elapsed_ns":1552907,"ops_per_sec":643953.566,"ns_per_op":1552.907}
+  ]
+}

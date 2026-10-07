@@ -1,53 +1,70 @@
-//! Module `physical_plan` for crate `adb-execution`.
+//! Physical plans accepted by the native engine (JSON wire form, see docs/plan-wire-format.md).
 use adb_core::{FieldId, RowId};
 use serde::{Deserialize, Serialize};
 
 use crate::Expr;
 
-/// Enumerates `PhysicalPlan` alternatives used by this subsystem.
+/// One node of a physical plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum PhysicalPlan {
+    /// Reads one row by storage key.
     PointLookup {
+        /// `(entity << 64) | primary key`; a decimal string on the wire.
         #[serde(with = "row_id_json")]
         row_id: RowId,
     },
 
+    /// Every row of every entity (diagnostics; prefer `EntityScan`).
     Scan,
 
+    /// Every row of one entity, read as a key-range scan over `(entity << 64, (entity+1) << 64)`.
+    EntityScan {
+        /// Entity (table) id.
+        entity_id: u64,
+    },
+
+    /// Keeps rows matching a predicate.
     Filter {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Boolean expression; NULL counts as false.
         predicate: Expr,
     },
 
+    /// Keeps only some fields.
     Project {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Fields to keep.
         fields: Vec<FieldId>,
     },
 
+    /// Stops after a number of rows.
     Limit {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Maximum number of rows.
         limit: usize,
     },
 }
 
-/// Implements behavior for `PhysicalPlan`.
 impl PhysicalPlan {
-    /// Implements the `validate` operation used by this subsystem.
+    /// Rejects plans and expressions beyond the hardened depth/size limits.
     pub fn validate(&self) -> Result<(), String> {
         self.validate_depth(0)
     }
 
-    /// Implements the `validate_depth` operation used by this subsystem.
+    /// Depth-bounded validation helper.
     fn validate_depth(&self, depth: usize) -> Result<(), String> {
-        /// Defines the `MAX_PLAN_DEPTH` constant used by this subsystem.
+        /// Deepest plan accepted.
         const MAX_PLAN_DEPTH: usize = 128;
         if depth > MAX_PLAN_DEPTH {
             return Err(format!("physical plan depth exceeds {MAX_PLAN_DEPTH}"));
         }
 
         match self {
-            Self::PointLookup { .. } | Self::Scan => Ok(()),
+            Self::PointLookup { .. } | Self::Scan | Self::EntityScan { .. } => Ok(()),
             Self::Filter { input, predicate } => {
                 predicate.validate()?;
                 input.validate_depth(depth + 1)

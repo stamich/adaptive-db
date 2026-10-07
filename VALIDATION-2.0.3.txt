@@ -1,0 +1,42 @@
+Adaptive DB Milestone 2.0.3 — validation record
+Date: 2026-10-06
+Base: 2.0.2 (master 9ec7597)
+
+Environment
+  rustc 1.97.0 (2d8144b78 2026-07-07)
+  cargo 1.97.0 (c980f4866 2026-06-30)
+  openjdk version "22.0.2" 2024-07-16
+  OS: Linux 6.18.44-fc-v70
+
+Command: ./build-milestone2.0.3.sh (Gradle removed from PATH, see below)
+
+Results
+  cargo fmt --check ............................. OK
+  cargo clippy --all-targets -D warnings ......... OK
+  cargo test --workspace ........................ 113 passed, 0 failed
+  rustdoc -D warnings ........................... OK
+  release build of libadb_ffi .................... OK
+  examples/jvm-cdc-smoke (Java FFM -> ABI v3) .... PASS (11 checks)
+  include/adb.h compiled from C with -Wall -Werror and called ... OK
+
+Benchmark (examples/rust-benchmark, --rows 5000 --iters 1000 --threads 8)
+  load rows=15000 ms=307 rows_s=48703
+  point_lookup ops_s=445547 p50_ns=1844 p95_ns=3543 p99_ns=4943
+  entity_scan rows=5000 ms=3.43 | full_scan+filter rows=15000 ms=10.20
+  physical_plan_json_parse ops_s=1789728
+  cdc_read events=150 ms=44 events_s=3364
+  commit_single_row 1_thread_ops_s=3414 8_threads_ops_s=9873
+  churn_heap_pages before=1 after_2000_updates=1
+  recovery rows=5000 ms=72
+
+Same machine, 2.0.2 engine (comparable sections)
+  load rows_s=21147 | point_lookup ops_s=375091
+  commit_single_row 1_thread_ops_s=522 8_threads_ops_s=459
+  entity scan (3 entities x 5000, Filter(Scan, _entity_id)) ms=71.17
+  churn_heap_pages before=1 after_2000_updates=7
+
+Not executed here
+  Scala/JVM Gradle tests and the SQL demo: Maven Central is blocked by the network policy of the
+  environment that produced this milestone, so Scala dependencies cannot be resolved. The Scala
+  change is limited to the physical-plan module (EntityScan + encoder + one test) and Scaladoc.
+  Run ./build-milestone2.0.3.sh on a host with Gradle to execute them.

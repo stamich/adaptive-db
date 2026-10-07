@@ -1,7 +1,7 @@
-//! Module `batch` for crate `adb-ffi`.
+//! Access to library-owned byte buffers (record batches and JSON documents).
 use crate::{error::ffi_guard, handle::AdbBatchHandle, AdbStatus};
 
-/// Implements the `adb_batch_data` operation used by this subsystem.
+/// Borrowed pointer to the buffer bytes; valid until `adb_batch_release`.
 #[no_mangle]
 pub extern "C" fn adb_batch_data(batch: *const AdbBatchHandle) -> *const u8 {
     if batch.is_null() {
@@ -10,7 +10,7 @@ pub extern "C" fn adb_batch_data(batch: *const AdbBatchHandle) -> *const u8 {
     unsafe { (&*batch).bytes.as_ptr() }
 }
 
-/// Implements the `adb_batch_len` operation used by this subsystem.
+/// Buffer length in bytes (0 for a null handle).
 #[no_mangle]
 pub extern "C" fn adb_batch_len(batch: *const AdbBatchHandle) -> usize {
     if batch.is_null() {
@@ -19,7 +19,7 @@ pub extern "C" fn adb_batch_len(batch: *const AdbBatchHandle) -> usize {
     unsafe { (&*batch).bytes.len() }
 }
 
-/// Implements the `adb_batch_release` operation used by this subsystem.
+/// Frees a buffer exactly once.
 #[no_mangle]
 pub extern "C" fn adb_batch_release(batch: *mut AdbBatchHandle) -> AdbStatus {
     ffi_guard(|| {

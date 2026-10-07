@@ -1,4 +1,4 @@
-//! Module `point_lookup` for crate `src`.
+//! Single-row lookup by storage key.
 use std::sync::Arc;
 
 use adb_core::RowId;
@@ -8,16 +8,18 @@ use crate::{
     DataSource, ExecutionContext, ExecutionError,
 };
 
-/// Represents `PointLookupOperator` state used by this subsystem.
+/// Emits at most one row: `row_id` as of the query snapshot.
 pub struct PointLookupOperator {
+    /// Where the row is read from.
     source: Arc<dyn DataSource>,
+    /// Key of the row.
     row_id: RowId,
+    /// Whether the lookup already ran.
     done: bool,
 }
 
-/// Implements behavior for `PointLookupOperator`.
 impl PointLookupOperator {
-    /// Implements the `new` operation used by this subsystem.
+    /// Looks up `row_id` in `source`.
     pub fn new(source: Arc<dyn DataSource>, row_id: RowId) -> Self {
         Self {
             source,
@@ -27,9 +29,8 @@ impl PointLookupOperator {
     }
 }
 
-/// Implements behavior for `Operator`.
 impl Operator for PointLookupOperator {
-    /// Implements the `next_batch` operation used by this subsystem.
+    /// Returns the row once (if visible), then `None`.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,
