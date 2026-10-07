@@ -1,4 +1,4 @@
-//! Module `milestone_1_7` for crate `adb-engine`.
+//! Physical-plan execution through the engine.
 mod common;
 
 use adb_core::{RowId, Value};
@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use common::row_with_i64;
 
-/// Implements the `database_executes_physical_plan_in_batches` operation used by this subsystem.
+/// Scan + filter + limit return exactly the limited rows in one batch.
 #[test]
 fn database_executes_physical_plan_in_batches() {
     let dir = tempdir().unwrap();

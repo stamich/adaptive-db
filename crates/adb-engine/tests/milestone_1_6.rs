@@ -1,4 +1,4 @@
-//! Module `milestone_1_6` for crate `adb-engine`.
+//! Persistent MVCC history across restarts.
 mod common;
 
 use adb_core::RowId;
@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 use common::{read_i64, row_with_i64};
 
-/// Implements the `persistent_history_survives_restart` operation used by this subsystem.
+/// Every historical version stays readable across two restarts.
 #[test]
 fn persistent_history_survives_restart() {
     let dir = tempdir().unwrap();
@@ -58,7 +58,7 @@ fn persistent_history_survives_restart() {
     }
 }
 
-/// Implements the `delete_is_temporal` operation used by this subsystem.
+/// A delete hides the row from later snapshots only.
 #[test]
 fn delete_is_temporal() {
     let dir = tempdir().unwrap();
