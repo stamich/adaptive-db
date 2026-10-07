@@ -7,13 +7,15 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 /**
- * Runs the Milestone 2.0.1 feature tour.
+ * Runs the Adaptive DB feature tour (Milestone 2.1.3).
  *
- * The demo deliberately executes on one current 2.0.1 engine while presenting features in the
- * order in which they entered the project: WAL/recovery, persistent current storage, persistent
- * history, native batch execution, and finally the Scala SQL/control plane.
+ * The demo executes on one current engine while presenting features in the order in which they
+ * entered the project: WAL/recovery, persistent current storage, persistent history, native
+ * batch execution, the Scala SQL/control plane, and finally relational execution (joins,
+ * aggregation, sorting) with explained planning decisions and runtime profiles.
  */
 object DemoMain:
+  /** Extracts the commit timestamp from a mutation result message. */
   private val CommitTs = raw"commitTs=(\d+)".r
 
   /** Executes the complete chronological feature tour. */
@@ -29,7 +31,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.0.1 — chronological feature tour")
+    banner("Adaptive DB 2.1.3 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -76,10 +78,40 @@ object DemoMain:
       execute(db, "SELECT id, owner, balance FROM account WHERE balance > 200 LIMIT 10;")
       execute(db, "EXPLAIN SELECT * FROM account WHERE id = 3;")
       println("Feature shown: end-to-end SQL is parsed and bound in Scala, planned/optimized, then executed by the Rust engine.")
+
+      relationalPhase(db)
     }
 
     banner("Demo completed successfully")
     println("Re-run demo/run-demo.sh to recreate the database from scratch.")
+
+  /** Milestone 2.1.3: joins, aggregation, sorting, explained decisions and runtime profiles. */
+  private def relationalPhase(db: AdaptiveDatabase): Unit =
+    phase("2.1.3", "relational execution: joins, GROUP BY, ORDER BY, TopK, explained decisions")
+    execute(db, "CREATE TABLE customer (id BIGINT PRIMARY KEY, name STRING NOT NULL, city STRING);")
+    execute(db, "CREATE TABLE orders (id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL, amount BIGINT NOT NULL);")
+    for (id, name, city) <- Vector((1, "Ada", "Krakow"), (2, "Ben", "Gdansk"), (3, "Cy", "Krakow"), (4, "Dee", "Poznan")) do
+      execute(db, s"INSERT INTO customer VALUES ($id, '$name', '$city');")
+    for (id, customer, amount) <- Vector((10, 1, 120), (11, 1, 80), (12, 2, 300), (13, 3, 40), (14, 3, 60), (15, 3, 500)) do
+      execute(db, s"INSERT INTO orders VALUES ($id, $customer, $amount);")
+
+    execute(db, "SELECT c.name, o.id, o.amount FROM customer c JOIN orders o ON o.customer_id = c.id ORDER BY o.amount DESC;")
+    println("Feature shown: HashJoin over slot-addressed rows; ORDER BY runs as a native Sort.")
+
+    execute(db, "SELECT c.name, COUNT(o.id) AS orders FROM customer c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.name ORDER BY c.name;")
+    println("Feature shown: LEFT JOIN null-fills customers without orders (Dee); COUNT(x) skips the NULLs.")
+
+    execute(db, "SELECT c.city, SUM(o.amount) AS total, AVG(o.amount) FROM customer c JOIN orders o ON o.customer_id = c.id GROUP BY c.city ORDER BY total DESC LIMIT 2;")
+    println("Feature shown: GROUP BY with checked SUM and AVG; LIMIT over ORDER BY runs as TopK.")
+
+    execute(db, "SELECT a.id, b.id FROM orders a JOIN orders b ON a.customer_id = b.customer_id AND a.id < b.id;")
+    println("Feature shown: a self-join; both instances of 'orders' read field ids into different slots.")
+
+    execute(db, "SELECT c.name, o.id, o.amount FROM customer c JOIN orders o ON o.customer_id <> c.id AND o.amount >= 300 ORDER BY c.name, o.id;")
+    println("Feature shown: without an equality key the join falls back to the bounded NestedLoopJoin; o.amount >= 300 is pushed below it.")
+
+    execute(db, "EXPLAIN ANALYZE SELECT c.city, SUM(o.amount) AS total FROM customer c JOIN orders o ON o.customer_id = c.id WHERE o.amount >= 50 GROUP BY c.city ORDER BY total DESC LIMIT 2;")
+    println("Feature shown: EXPLAIN ANALYZE prints the optimized plan, the planner's decisions with reasons, and the native per-operator profile.")
 
   /** Opens one native database and matching persistent JVM catalog for a demo phase. */
   private def withDatabase(dataDir: Path, nativeLib: Path)(body: AdaptiveDatabase => Unit): Unit =
@@ -120,7 +152,7 @@ object DemoMain:
   private def phase(milestone: String, capability: String): Unit =
     println()
     println("=" * 78)
-    println(s"Milestone $milestone — $capability")
+    println(s"Milestone $milestone - $capability")
     println("=" * 78)
 
   /** Prints a top-level demo banner. */

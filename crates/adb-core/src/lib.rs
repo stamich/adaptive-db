@@ -11,7 +11,7 @@ pub mod value;
 pub mod version_key;
 
 pub use error::CoreError;
-pub use ids::{CommitTs, FieldId, Lsn, PageId, RowId, SlotId, TxId};
+pub use ids::{CommitTs, FieldId, Lsn, PageId, RowId, TupleSlot, TxId};
 pub use key_range::KeyRange;
 pub use location::RowLocation;
 pub use row::Row;

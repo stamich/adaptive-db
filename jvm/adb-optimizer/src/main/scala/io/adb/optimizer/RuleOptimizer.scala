@@ -6,7 +6,7 @@ import io.adb.logical.LogicalPlan
   *
   * @param rules rules applied in order during each round
   */
-final class RuleOptimizer(rules: Vector[Rule] = Vector(PointLookupRule)):
+final class RuleOptimizer(rules: Vector[Rule] = RuleOptimizer.DefaultRules):
   /** Runs all rules in rounds until a round changes nothing, capped at 16 rounds to guarantee termination.
     *
     * @param plan bound logical plan
@@ -22,3 +22,8 @@ final class RuleOptimizer(rules: Vector[Rule] = Vector(PointLookupRule)):
       current = next
       rounds += 1
     current
+
+/** The default rule set. */
+object RuleOptimizer:
+  /** Pushdown first, so point lookups also apply to the inputs of joins. */
+  val DefaultRules: Vector[Rule] = Vector(PredicatePushdownRule, PointLookupRule)

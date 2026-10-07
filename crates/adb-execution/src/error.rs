@@ -32,6 +32,10 @@ pub enum ExecutionError {
     #[error("wire format error: {0}")]
     Wire(String),
 
+    /// An exact computation (e.g. an INT64 SUM) does not fit its result type.
+    #[error("arithmetic overflow: {0}")]
+    ArithmeticOverflow(String),
+
     /// Query execution exceeded a configured in-memory resource boundary.
     #[error("resource limit exceeded: {0}")]
     ResourceLimit(String),

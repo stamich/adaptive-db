@@ -42,8 +42,9 @@ pub struct Lsn(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageId(pub u64);
 
-/// Index of a tuple slot inside one slotted heap page.
-pub type SlotId = u16;
+/// Index of a tuple slot inside one slotted heap page (not to be confused with the execution
+/// `adb_execution::SlotId`, which names a column of an operator row).
+pub type TupleSlot = u16;
 /// Column identifier inside a row.
 pub type FieldId = u32;
 

@@ -12,7 +12,7 @@
 //! later inserts, and freed tuple bytes are reclaimed by compaction, so slot ids stay stable for
 //! live tuples while the page never leaks space.
 
-use adb_core::SlotId;
+use adb_core::TupleSlot;
 
 use crate::{Page, PageError, PAGE_HEADER_SIZE, PAGE_SIZE};
 
@@ -34,7 +34,7 @@ impl<'a> SlottedView<'a> {
     }
 
     /// Returns the bytes of a live tuple.
-    pub fn get(&self, slot_id: SlotId) -> Result<&'a [u8], PageError> {
+    pub fn get(&self, slot_id: TupleSlot) -> Result<&'a [u8], PageError> {
         if slot_id >= self.page.slot_count() {
             return Err(PageError::InvalidSlot(slot_id));
         }
@@ -81,7 +81,7 @@ impl<'a> SlottedView<'a> {
 }
 
 /// Raw `(offset, len)` of a slot-directory entry.
-fn read_slot(page: &Page, slot_id: SlotId) -> (u16, u16) {
+fn read_slot(page: &Page, slot_id: TupleSlot) -> (u16, u16) {
     let at = PAGE_HEADER_SIZE + slot_id as usize * SLOT_SIZE;
     let bytes = page.bytes();
     (
@@ -103,7 +103,7 @@ impl<'a> SlottedPage<'a> {
     }
 
     /// Stores `bytes` and returns its slot. Reuses free slots and compacts when needed.
-    pub fn insert(&mut self, bytes: &[u8]) -> Result<SlotId, PageError> {
+    pub fn insert(&mut self, bytes: &[u8]) -> Result<TupleSlot, PageError> {
         if bytes.len() > PAGE_SIZE - PAGE_HEADER_SIZE - SLOT_SIZE {
             return Err(PageError::PayloadTooLarge(bytes.len()));
         }
@@ -139,13 +139,13 @@ impl<'a> SlottedPage<'a> {
     }
 
     /// Returns the bytes of a live tuple.
-    pub fn get(&self, slot_id: SlotId) -> Result<&[u8], PageError> {
+    pub fn get(&self, slot_id: TupleSlot) -> Result<&[u8], PageError> {
         SlottedView::new(self.page).get(slot_id)
     }
 
     /// Frees a live tuple. Its slot id may be reused by a later insert; its bytes are reclaimed
     /// lazily by compaction. Trailing free slots are trimmed from the directory immediately.
-    pub fn delete(&mut self, slot_id: SlotId) -> Result<(), PageError> {
+    pub fn delete(&mut self, slot_id: TupleSlot) -> Result<(), PageError> {
         self.live_slot(slot_id)?;
         self.write_slot(slot_id, FREE_SLOT, 0);
         while let Some(last) = self.page.slot_count().checked_sub(1) {
@@ -193,12 +193,12 @@ impl<'a> SlottedPage<'a> {
     }
 
     /// Lowest free slot id, if any.
-    fn first_free_slot(&self) -> Option<SlotId> {
+    fn first_free_slot(&self) -> Option<TupleSlot> {
         (0..self.page.slot_count()).find(|slot| self.read_slot(*slot).0 == FREE_SLOT)
     }
 
     /// `(offset, len)` of a live slot, or `InvalidSlot`.
-    fn live_slot(&self, slot_id: SlotId) -> Result<(usize, usize), PageError> {
+    fn live_slot(&self, slot_id: TupleSlot) -> Result<(usize, usize), PageError> {
         if slot_id >= self.page.slot_count() {
             return Err(PageError::InvalidSlot(slot_id));
         }
@@ -210,12 +210,12 @@ impl<'a> SlottedPage<'a> {
     }
 
     /// Raw `(offset, len)` of a slot-directory entry.
-    fn read_slot(&self, slot_id: SlotId) -> (u16, u16) {
+    fn read_slot(&self, slot_id: TupleSlot) -> (u16, u16) {
         read_slot(self.page, slot_id)
     }
 
     /// Overwrites a slot-directory entry.
-    fn write_slot(&mut self, slot_id: SlotId, offset: u16, len: u16) {
+    fn write_slot(&mut self, slot_id: TupleSlot, offset: u16, len: u16) {
         let at = PAGE_HEADER_SIZE + slot_id as usize * SLOT_SIZE;
         let bytes = self.page.bytes_mut();
         bytes[at..at + 2].copy_from_slice(&offset.to_le_bytes());

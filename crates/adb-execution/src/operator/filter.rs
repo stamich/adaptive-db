@@ -10,12 +10,18 @@ pub struct FilterOperator {
     input: Box<dyn Operator>,
     /// Rows for which this is true are kept.
     predicate: Expr,
+    /// Rows evaluated (the profile's selectivity is `rows_out / rows_in`).
+    rows_in: u64,
 }
 
 impl FilterOperator {
     /// Filters `input` with `predicate`.
     pub fn new(input: Box<dyn Operator>, predicate: Expr) -> Self {
-        Self { input, predicate }
+        Self {
+            input,
+            predicate,
+            rows_in: 0,
+        }
     }
 }
 
@@ -31,10 +37,11 @@ impl Operator for FilterOperator {
                 return Ok(None);
             };
 
+            self.rows_in += batch.len() as u64;
             let mut out = Vec::with_capacity(batch.len());
-            for (row_id, row) in batch {
+            for row in batch {
                 if self.predicate.evaluate_bool(&row)? {
-                    out.push((row_id, row));
+                    out.push(row);
                 }
             }
 
@@ -42,5 +49,20 @@ impl Operator for FilterOperator {
                 return Ok(Some(out));
             }
         }
+    }
+
+    /// `filter`.
+    fn name(&self) -> &'static str {
+        "filter"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
+    }
+
+    /// Rows evaluated.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        vec![("rows_in", self.rows_in)]
     }
 }

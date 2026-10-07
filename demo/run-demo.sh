@@ -8,8 +8,12 @@ if ! command -v cargo >/dev/null 2>&1; then
   echo "ERROR: cargo is required." >&2
   exit 1
 fi
-if ! command -v gradle >/dev/null 2>&1; then
-  echo "ERROR: gradle is required." >&2
+if [[ -x "$ROOT/jvm/gradlew" ]]; then
+  GRADLE=(./gradlew)
+elif command -v gradle >/dev/null 2>&1; then
+  GRADLE=(gradle)
+else
+  echo "ERROR: jvm/gradlew or gradle is required." >&2
   exit 1
 fi
 
@@ -36,4 +40,4 @@ export ADB_DATA="$DATA_DIR"
 export ADB_NATIVE_LIBRARY="$LIB"
 
 printf 'Running JVM feature tour...\n'
-(cd "$ROOT/jvm" && gradle :adb-cli:run --args='--demo')
+(cd "$ROOT/jvm" && "${GRADLE[@]}" :adb-cli:run --args='--demo')

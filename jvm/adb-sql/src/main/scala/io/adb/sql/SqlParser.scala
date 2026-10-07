@@ -3,13 +3,26 @@ package io.adb.sql
 import io.adb.sql.SqlExpr.*
 import io.adb.sql.SqlBinaryOp.*
 
-/** Hand-written recursive-descent parser for the Milestone 2 SQL subset (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE]). */
+/** Hand-written recursive-descent parser for the Adaptive DB SQL subset.
+  *
+  * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE and EXPLAIN [ANALYZE]. Since 2.1 a
+  * SELECT may join tables (INNER / LEFT / CROSS), alias them, qualify columns, aggregate with
+  * COUNT / SUM / MIN / MAX / AVG, GROUP BY and ORDER BY:
+  *
+  * {{{
+  * SELECT c.name, SUM(o.amount) AS total
+  * FROM customer c JOIN orders o ON o.customer_id = c.id
+  * WHERE o.amount > 10
+  * GROUP BY c.name ORDER BY total DESC LIMIT 3
+  * }}}
+  */
 final class SqlParser:
   /** Parses exactly one statement, optionally terminated by `;`.
     *
     * @param sql statement text
     * @return the parsed AST
-    * @throws IllegalArgumentException with the failing token position on any syntax error
+    * @throws IllegalArgumentException with the failing token position on any syntax error or
+    *         exceeded parser budget
     */
   def parse(sql: String): Statement =
     val p = ParserState(Tokenizer.tokenize(sql))
@@ -17,6 +30,23 @@ final class SqlParser:
     p.acceptSymbol(";")
     p.expectEnd()
     statement
+
+/** Size budgets of one statement (on top of the tokenizer's limits). */
+object SqlParser:
+  /** Select-list entries per SELECT. */
+  val MaxSelectItems: Int = 4096
+  /** JOIN clauses per SELECT (so at most 64 relations). */
+  val MaxJoins: Int = 63
+  /** GROUP BY entries per SELECT. */
+  val MaxGroupBy: Int = 4096
+  /** ORDER BY entries per SELECT. */
+  val MaxOrderBy: Int = 4096
+  /** Words that end a FROM item and therefore can never be an implicit alias. */
+  private[sql] val ClauseKeywords: Set[String] =
+    Set(
+      "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "NATURAL", "OUTER", "CROSS", "ON", "USING",
+      "GROUP", "ORDER", "LIMIT", "AS", "BY", "FROM", "HAVING", "UNION"
+    )
 
 /** Mutable cursor over the token stream of one statement.
   *
@@ -26,6 +56,8 @@ final class SqlParser:
 private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
   /** The token at the cursor. */
   private def current: Token = tokens(pos)
+  /** The token `offset` positions after the cursor (`Token.End` past the end). */
+  private def peek(offset: Int): Token = tokens.lift(pos + offset).getOrElse(Token.End)
   /** Consumes and returns the current token. */
   private def advance(): Token = { val t = current; pos += 1; t }
 
@@ -85,24 +117,94 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     expectSymbol(")")
     Insert(table, columns, values)
 
-  /** Parses the rest of `SELECT ... FROM table [AS OF VERSION n] [WHERE expr] [LIMIT n]`; LIMIT must fit in an `Int`. */
+  /** Parses the rest of a SELECT: select list, FROM with joins, `AS OF VERSION n`, WHERE,
+    * GROUP BY, ORDER BY and LIMIT (which must fit in an `Int`).
+    */
   private def parseSelect(): Statement =
-    val (columns, star) =
+    val (items, star) =
       if acceptSymbol("*") then (Vector.empty, true)
-      else (parseIdentifierList(), false)
+      else (commaSeparated("select list", SqlParser.MaxSelectItems)(parseSelectItem()), false)
     expectWord("FROM")
-    val table = expectIdentifier()
+    val from = parseFrom()
     val asOf =
       if acceptWord("AS") then { expectWord("OF"); expectWord("VERSION"); Some(expectLong()) }
       else None
     val where = if acceptWord("WHERE") then Some(parseExpr()) else None
+    val groupBy =
+      if acceptWord("GROUP") then
+        expectWord("BY")
+        commaSeparated("GROUP BY", SqlParser.MaxGroupBy)(parseColumnRef())
+      else Vector.empty
+    val orderBy =
+      if acceptWord("ORDER") then
+        expectWord("BY")
+        commaSeparated("ORDER BY", SqlParser.MaxOrderBy) {
+          val expr = parsePrimary()
+          val descending = if acceptWord("DESC") then true else { acceptWord("ASC"); false }
+          OrderItem(expr, descending)
+        }
+      else Vector.empty
     val limit =
       if acceptWord("LIMIT") then
         val value = expectLong()
         if value < 0 || value > Int.MaxValue then throw error("LIMIT must be between 0 and 2147483647")
         Some(value.toInt)
       else None
-    Select(columns, star, table, where, limit, asOf)
+    Select(items, star, from, where, groupBy, orderBy, limit, asOf)
+
+  /** Parses one select-list entry: an expression with an optional `[AS] alias`. */
+  private def parseSelectItem(): SelectItem =
+    val expr = parsePrimary()
+    val alias =
+      if acceptWord("AS") then Some(expectIdentifier())
+      else current match
+        case Token.Word(word) if !SqlParser.ClauseKeywords.contains(word.toUpperCase) => advance(); Some(word)
+        case _ => None
+    SelectItem(expr, alias)
+
+  /** Parses `table [alias] { [INNER|LEFT [OUTER]|CROSS] JOIN table [alias] [ON expr] }`. */
+  private def parseFrom(): FromClause =
+    val base = parseTableRef()
+    val joins = Vector.newBuilder[JoinClause]
+    var count = 0
+    var more = true
+    while more do
+      val kind =
+        if acceptWord("JOIN") then Some(JoinKind.Inner)
+        else if acceptWord("INNER") then { expectWord("JOIN"); Some(JoinKind.Inner) }
+        else if acceptWord("LEFT") then { acceptWord("OUTER"); expectWord("JOIN"); Some(JoinKind.Left) }
+        else if acceptWord("CROSS") then { expectWord("JOIN"); Some(JoinKind.Cross) }
+        else current match
+          case Token.Word(word) if Set("RIGHT", "FULL", "NATURAL").contains(word.toUpperCase) =>
+            throw error(s"${word.toUpperCase} JOIN is not supported; use LEFT JOIN with the tables swapped, or INNER JOIN")
+          case _ => None
+      kind match
+        case None => more = false
+        case Some(kind) =>
+          count += 1
+          if count > SqlParser.MaxJoins then throw error(s"more than ${SqlParser.MaxJoins} joins")
+          val table = parseTableRef()
+          val on =
+            if kind == JoinKind.Cross then None
+            else { expectWord("ON"); Some(parseExpr()) }
+          joins += JoinClause(kind, table, on)
+    FromClause(base, joins.result())
+
+  /** Parses `table [AS alias | alias]`; `AS OF` is left for the snapshot clause. */
+  private def parseTableRef(): TableRef =
+    val table = expectIdentifier()
+    val alias = (current, peek(1)) match
+      case (Token.Word(as), Token.Word(next)) if as.equalsIgnoreCase("AS") && !next.equalsIgnoreCase("OF") =>
+        advance(); Some(expectIdentifier())
+      case (Token.Word(word), _) if !SqlParser.ClauseKeywords.contains(word.toUpperCase) =>
+        advance(); Some(word)
+      case _ => None
+    TableRef(table, alias)
+
+  /** Parses `name` or `qualifier.name`. */
+  private def parseColumnRef(): Column =
+    val first = expectIdentifier()
+    if acceptSymbol(".") then Column(expectIdentifier(), Some(first)) else Column(first)
 
   /** Parses the rest of `UPDATE table SET column = value, ... WHERE expr`. */
   private def parseUpdate(): Statement =
@@ -149,7 +251,9 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
         left = Binary(left, mapped, parsePrimary())
       case _ => ()
     left
-  /** Parses a literal, column reference, `NOT` primary, or parenthesized expression. */
+  /** Parses a literal, (qualified) column reference, aggregate call, `NOT` primary, or
+    * parenthesized expression.
+    */
   private def parsePrimary(): SqlExpr = current match
     case Token.Number(value) =>
       advance(); if value.contains('.') then DoubleLiteral(value.toDouble) else LongLiteral(value.toLong)
@@ -158,9 +262,23 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     case Token.Word(value) if value.equalsIgnoreCase("FALSE") => advance(); BoolLiteral(false)
     case Token.Word(value) if value.equalsIgnoreCase("NULL") => advance(); NullLiteral
     case Token.Word(value) if value.equalsIgnoreCase("NOT") => advance(); Not(parsePrimary())
-    case Token.Word(value) => advance(); Column(value)
+    case Token.Word(value) if peek(1) == Token.Symbol("(") && SqlAggregate.named(value).isDefined =>
+      parseAggregateCall(SqlAggregate.named(value).get)
+    case Token.Word(_) => parseColumnRef()
     case Token.Symbol("(") => advance(); val e = parseExpr(); expectSymbol(")"); e
     case other => throw error(s"expected expression, got $other")
+
+  /** Parses `FUNCTION(*)` (COUNT only) or `FUNCTION(argument)`. */
+  private def parseAggregateCall(function: SqlAggregate): SqlExpr =
+    advance()
+    expectSymbol("(")
+    val argument =
+      if acceptSymbol("*") then
+        if function != SqlAggregate.Count then throw error(s"${function.toString.toUpperCase}(*) is not valid")
+        None
+      else Some(parseExpr())
+    expectSymbol(")")
+    AggregateCall(function, argument)
 
   /** Parses a non-empty comma-separated identifier list. */
   private def parseIdentifierList(): Vector[String] =
@@ -174,6 +292,17 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     val out = Vector.newBuilder[SqlExpr]
     out += parsePrimary()
     while acceptSymbol(",") do out += parsePrimary()
+    out.result()
+
+  /** Parses a non-empty comma-separated list of at most `max` entries produced by `item`. */
+  private def commaSeparated[A](what: String, max: Int)(item: => A): Vector[A] =
+    val out = Vector.newBuilder[A]
+    var count = 1
+    out += item
+    while acceptSymbol(",") do
+      count += 1
+      if count > max then throw error(s"$what has more than $max entries")
+      out += item
     out.result()
 
   /** Consumes the current token if it is the keyword `word` (case-insensitive).

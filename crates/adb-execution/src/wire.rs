@@ -1,16 +1,22 @@
-//! ADB Batch Format v1 encoder with checked lengths and bounded output size.
+//! ADB Batch Format v2 encoder with checked lengths and bounded output size.
+//!
+//! v2 (Milestone 2.1) differs from v1 only in the header: the former reserved `u16` is now a
+//! flags word, and row ids are present only when [`FLAG_ROW_IDS`] is set. The `u32` column id of
+//! each column header is the output [`crate::SlotId`] (in v1 it was a storage field id).
 
 use crate::{ColumnVector, ExecutionError, RecordBatch};
 
 /// Magic word beginning each encoded batch.
 pub const BATCH_MAGIC: u32 = 0x4144_4242;
 /// Batch wire format version.
-pub const BATCH_FORMAT_VERSION: u16 = 1;
+pub const BATCH_FORMAT_VERSION: u16 = 2;
+/// Header flag: one 16-byte little-endian row id per row follows the header.
+pub const FLAG_ROW_IDS: u16 = 0x0001;
 /// Maximum encoded batch accepted by the hardened FFI boundary.
 pub const MAX_BATCH_WIRE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Encodes a record batch after validating row/column lengths and all `u32` wire lengths.
-pub fn encode_batch_v1(batch: &RecordBatch) -> Result<Vec<u8>, ExecutionError> {
+pub fn encode_batch(batch: &RecordBatch) -> Result<Vec<u8>, ExecutionError> {
     let rows = u32::try_from(batch.len())
         .map_err(|_| ExecutionError::Wire("row count exceeds u32".into()))?;
     let columns = u32::try_from(batch.columns.len())
@@ -24,19 +30,36 @@ pub fn encode_batch_v1(batch: &RecordBatch) -> Result<Vec<u8>, ExecutionError> {
         }
     }
 
+    if batch
+        .row_ids
+        .as_ref()
+        .is_some_and(|row_ids| row_ids.len() != batch.len())
+    {
+        return Err(ExecutionError::Wire(
+            "row id count differs from row count".into(),
+        ));
+    }
+
     let mut out = Vec::new();
     put_u32(&mut out, BATCH_MAGIC);
     put_u16(&mut out, BATCH_FORMAT_VERSION);
-    put_u16(&mut out, 0);
+    put_u16(
+        &mut out,
+        if batch.row_ids.is_some() {
+            FLAG_ROW_IDS
+        } else {
+            0
+        },
+    );
     put_u32(&mut out, rows);
     put_u32(&mut out, columns);
 
-    for row_id in &batch.row_ids {
+    for row_id in batch.row_ids.iter().flatten() {
         extend(&mut out, &row_id.0.to_le_bytes())?;
     }
 
     for column in &batch.columns {
-        put_u32(&mut out, column.field_id());
+        put_u32(&mut out, column.slot().0);
         out.push(column.physical_type() as u8);
         extend(&mut out, &[0, 0, 0])?;
 

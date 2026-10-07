@@ -5,7 +5,10 @@ import io.adb.model.*
 import io.adb.sql.*
 import io.adb.sql.SqlExpr.*
 
-/** Semantic analysis: resolves table and column names against the catalog, type-checks expressions and literals, and enforces the Milestone 2 statement restrictions.
+/** Semantic analysis: resolves table and column names against the catalog, type-checks
+  * expressions and literals, and enforces the statement restrictions of the engine.
+  *
+  * SELECT statements are bound by [[SelectBinder]]; this class handles DDL, DML and EXPLAIN.
   *
   * @param catalog schema registry used for name resolution
   */
@@ -19,7 +22,7 @@ final class Binder(catalog: Catalog):
   def bind(statement: Statement): BoundStatement = statement match
     case CreateTable(name, columns) =>
       val primaryKeys = columns.filter(_.primaryKey)
-      require(primaryKeys.size == 1, "Milestone 2 requires exactly one inline PRIMARY KEY")
+      require(primaryKeys.size == 1, "CREATE TABLE requires exactly one inline PRIMARY KEY")
       val fields = columns.map { c =>
         val tpe = DataType.parse(c.dataType).getOrElse(throw new IllegalArgumentException(s"unsupported type ${c.dataType}"))
         (c.name, tpe, c.nullable)
@@ -40,19 +43,14 @@ final class Binder(catalog: Catalog):
       }
       BoundInsert(entity, resolved)
 
-    case Select(columns, star, table, where, limit, asOf) =>
-      val entity = requireEntity(table)
-      val fields = if star then entity.fields else columns.map(requireField(entity, _))
-      val predicate = where.map(bindExpr(entity, _))
-      predicate.foreach(requireBoolean)
-      BoundSelect(entity, fields, predicate, limit, asOf)
+    case select: Select => new SelectBinder(catalog).bind(select)
 
     case Update(table, assignments, where) =>
       val entity = requireEntity(table)
       val pk = extractPkEquality(entity, where)
       val resolved = assignments.map { case (name, expr) =>
         val field = requireField(entity, name)
-        require(field.id != entity.primaryKey, "updating primary key is not supported in Milestone 2")
+        require(field.id != entity.primaryKey, "updating the primary key is not supported")
         field.id -> literalFor(field, expr)
       }.toMap
       BoundUpdate(entity, resolved, pk)
@@ -71,28 +69,6 @@ final class Binder(catalog: Catalog):
   private def requireField(entity: Entity, name: String): Field =
     entity.field(name).getOrElse(throw new IllegalArgumentException(s"unknown column ${entity.name}.$name"))
 
-  /** Binds a WHERE expression to typed columns and literals, checking operand types. */
-  private def bindExpr(entity: Entity, expr: SqlExpr): TypedExpr = expr match
-    case Column(name) => TypedExpr.Column(requireField(entity, name))
-    case LongLiteral(v) => TypedExpr.Literal(DbValue.Int64Value(v))
-    case DoubleLiteral(v) => TypedExpr.Literal(DbValue.Float64Value(v))
-    case StringLiteral(v) => TypedExpr.Literal(DbValue.StringValue(v))
-    case BoolLiteral(v) => TypedExpr.Literal(DbValue.BoolValue(v))
-    case NullLiteral => TypedExpr.Literal(DbValue.NullValue)
-    case SqlExpr.Not(inner) =>
-      val e = bindExpr(entity, inner); requireBoolean(e); TypedExpr.Not(e)
-    case SqlExpr.Binary(left, op, right) =>
-      val l = bindExpr(entity, left); val r = bindExpr(entity, right)
-      val mapped = op match
-        case SqlBinaryOp.Eq => BinaryOp.Eq; case SqlBinaryOp.Ne => BinaryOp.Ne
-        case SqlBinaryOp.Lt => BinaryOp.Lt; case SqlBinaryOp.Le => BinaryOp.Le
-        case SqlBinaryOp.Gt => BinaryOp.Gt; case SqlBinaryOp.Ge => BinaryOp.Ge
-        case SqlBinaryOp.And => BinaryOp.And; case SqlBinaryOp.Or => BinaryOp.Or
-      mapped match
-        case BinaryOp.And | BinaryOp.Or => requireBoolean(l); requireBoolean(r)
-        case _ => requireComparable(l, r)
-      TypedExpr.Binary(l, mapped, r, Some(DataType.Bool))
-
   /** Converts a mutation value to a literal of the column's type; only literals are accepted and NULL only for nullable columns. */
   private def literalFor(field: Field, expr: SqlExpr): DbValue =
     val value = expr match
@@ -101,23 +77,40 @@ final class Binder(catalog: Catalog):
       case StringLiteral(v) => DbValue.StringValue(v)
       case BoolLiteral(v) => DbValue.BoolValue(v)
       case NullLiteral => DbValue.NullValue
-      case _ => throw new IllegalArgumentException(s"Milestone 2 mutation values must be literals: $expr")
+      case _ => throw new IllegalArgumentException(s"mutation values must be literals: ${SqlExpr.render(expr)}")
     if value == DbValue.NullValue then require(field.nullable, s"${field.name} is NOT NULL")
     else require(DbValue.dataType(value).contains(field.dataType), s"type mismatch for ${field.name}")
     value
 
-  /** Extracts the key from a `WHERE pk = <BIGINT>` clause (either operand order), the only filter UPDATE and DELETE support. */
-  private def extractPkEquality(entity: Entity, expr: SqlExpr): Long = expr match
-    case SqlExpr.Binary(Column(name), SqlBinaryOp.Eq, LongLiteral(v)) if requireField(entity, name).id == entity.primaryKey => v
-    case SqlExpr.Binary(LongLiteral(v), SqlBinaryOp.Eq, Column(name)) if requireField(entity, name).id == entity.primaryKey => v
-    case _ => throw new IllegalArgumentException("UPDATE/DELETE in Milestone 2 require WHERE primary_key = BIGINT")
+  /** Extracts the key from a `WHERE pk = <BIGINT>` clause (either operand order; the column may
+    * be qualified with the table name), the only filter UPDATE and DELETE support.
+    */
+  private def extractPkEquality(entity: Entity, expr: SqlExpr): Long =
+    def isPk(column: Column): Boolean =
+      column.qualifier.forall(_.equalsIgnoreCase(entity.name)) && requireField(entity, column.name).id == entity.primaryKey
+    expr match
+      case SqlExpr.Binary(column: Column, SqlBinaryOp.Eq, LongLiteral(v)) if isPk(column) => v
+      case SqlExpr.Binary(LongLiteral(v), SqlBinaryOp.Eq, column: Column) if isPk(column) => v
+      case _ => throw new IllegalArgumentException("UPDATE/DELETE require WHERE primary_key = BIGINT")
 
-  /** Fails unless `expr` is boolean-typed. */
-  private def requireBoolean(expr: TypedExpr): Unit =
-    require(expr.dataType.contains(DataType.Bool), s"boolean expression required, got ${expr.dataType}")
+/** Limits and expression helpers shared by the binders. */
+object Binder:
+  /** Largest LIMIT accepted (the native engine's LIMIT/TopK bound). */
+  val MaxLimit: Int = 1_000_000
+
+  /** Maps a SQL operator to its typed counterpart. */
+  def mapOp(op: SqlBinaryOp): BinaryOp = op match
+    case SqlBinaryOp.Eq => BinaryOp.Eq
+    case SqlBinaryOp.Ne => BinaryOp.Ne
+    case SqlBinaryOp.Lt => BinaryOp.Lt
+    case SqlBinaryOp.Le => BinaryOp.Le
+    case SqlBinaryOp.Gt => BinaryOp.Gt
+    case SqlBinaryOp.Ge => BinaryOp.Ge
+    case SqlBinaryOp.And => BinaryOp.And
+    case SqlBinaryOp.Or => BinaryOp.Or
 
   /** Fails unless both operands have the same type; NULL literals (untyped) compare with anything. */
-  private def requireComparable(left: TypedExpr, right: TypedExpr): Unit =
+  def requireComparable(left: TypedExpr, right: TypedExpr): Unit =
     (left.dataType, right.dataType) match
       case (None, _) | (_, None) => ()
-      case (Some(a), Some(b)) => require(a == b, s"incompatible types $a and $b")
+      case (Some(a), Some(b)) => require(a == b, s"incompatible types ${a.sqlName} and ${b.sqlName}")

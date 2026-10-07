@@ -1,4 +1,7 @@
-# Architecture — Milestone 2.0.3
+# Architecture — Milestone 2.1.3
+
+Milestone 2.1.3 adds relational execution (joins, aggregation, sorting) on top of the 2.0.3
+storage architecture below, which is unchanged. See [Query path](#query-path-milestone-21).
 
 ## The one decision everything follows from
 
@@ -48,9 +51,10 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
 | `adb-storage` | Heap with free-space map, current store, version store, checkpoint record v3, integrity check. |
 | `adb-wal` | Segmented log writer, forward `WalCursor` from any record boundary. |
 | `adb-tx` | Transactions, isolation levels, OCC validation, snapshot registry. Storage-agnostic. |
-| `adb-execution` | Pull-based operators; streaming key-range scans via `DataSource::scan_page`. |
+| `adb-execution` | Slot-addressed, pull-based operators: scans, filter, project, limit, hash and nested-loop joins, aggregate, sort, TopK; plan validation; query `MemoryTracker`; runtime profiles. |
+| `adb-plan-wire` | Versioned JSON plan wire format (v2): bounded, version-checked, strict decoding plus validation. |
 | `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets. |
-| `adb-ffi` | C ABI v3 (`include/adb.h`). |
+| `adb-ffi` | C ABI v4 (`include/adb.h`). |
 
 ## Write path
 
@@ -125,7 +129,47 @@ transaction is committed, rolled back or simply dropped.
 `commit lock → log writer → projections (RwLock) → transaction manager`. The durability lock is
 taken without the commit lock (group commit) and only nests the log writer briefly.
 
+## Query path (Milestone 2.1)
+
+```text
+SQL ─► SqlParser ─► SelectBinder ─► LogicalPlanner ─► RuleOptimizer ─► PhysicalPlanner ─► PlanJsonEncoder
+        (JOIN, aliases,  (relation scope,   (canonical        (predicate        (PlanningPolicy:
+         GROUP BY,        dense SlotIds,     relational        pushdown, point   HashJoin | NestedLoopJoin,
+         ORDER BY)        GROUP BY rules)    tree)             lookups)          TopK; decisions + reasons)
+                                                                                         │ plan wire v2
+                                                                                         ▼
+ JVM ◄── batch format v2 + profile JSON ─── C ABI v4 ◄── QueryCursor ◄── operators ◄── adb-plan-wire::decode_json
+```
+
+**Who decides what.** Scala owns meaning: name resolution, types, GROUP BY rules, join-condition
+analysis, the choice of physical strategy. Rust owns execution and safety: it re-validates every
+plan (limits, slot consistency), enforces memory and work budgets at runtime, and reports what
+actually happened. Neither side trusts the other's input blindly; the wire format is pinned by a
+cross-language contract test.
+
+**Slots.** Every column of every relation *instance* gets its own query-scoped slot, allocated on
+first reference by the binder. Self-joins and aliases therefore never collide, scans read only
+referenced fields, and native rows are plain arrays (see [execution.md](execution.md)).
+
+**Adaptive loop.** Adaptive DB is meant to adapt its physical execution to the workload and to
+the user's declared intent. 2.1.3 establishes both halves of that loop without guessing at
+statistics it does not have yet:
+
+* *Decide and explain:* every strategy choice (join algorithm, build side, TopK vs. sort) goes
+  through a replaceable `PlanningPolicy` and is recorded as a `PlanDecision` with its reason,
+  shown by `EXPLAIN`. The default policy is rule-based; the statistics-driven cost model (2.2) and
+  workload or intent advisors (5.x) replace the policy, not the planner.
+* *Observe:* every operator reports rows, time, memory and operator-specific counters
+  (`adb_query_profile_json`, shown by `EXPLAIN ANALYZE`), so the same plan can be compared with
+  what it actually cost.
+
+**Bounded by construction.** Blocking operators reserve memory from a per-query
+`MemoryTracker` before holding it, materialization and join fanout are capped, nested-loop work is
+capped, and INT64 aggregation is checked. A runaway query fails with `RESOURCE_LIMIT` or
+`ARITHMETIC_OVERFLOW`; the database is never affected.
+
 ## Control plane
 
-The JVM (Scala parser/binder/planner, Java FFM) is unchanged in role. Since 2.0.3 a table scan is
-planned as `EntityScan` instead of `Filter(Scan, _entity_id = N)`.
+The JVM (Scala parser/binder/planner, Java FFM) keeps its role: everything up to the physical plan.
+Since 2.0.3 a table scan is planned as `EntityScan` instead of `Filter(Scan, _entity_id = N)`; since
+2.1 it carries a field-to-slot mapping of the referenced columns only.

@@ -6,10 +6,13 @@ use parking_lot::Mutex;
 
 use crate::{
     operator::{
-        filter::FilterOperator, limit::LimitOperator, point_lookup::PointLookupOperator,
-        project::ProjectOperator, scan::ScanOperator, Operator,
+        aggregate::AggregateOperator, filter::FilterOperator, hash_join::HashJoinOperator,
+        limit::LimitOperator, nested_loop_join::NestedLoopJoinOperator,
+        point_lookup::PointLookupOperator, profiled::Profiled, project::ProjectOperator,
+        scan::ScanOperator, sort::SortOperator, top_k::TopKOperator, Operator,
     },
-    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch,
+    profile::QueryProfile,
+    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
 };
 
 /// Plan validation and operator-tree construction.
@@ -22,11 +25,12 @@ impl Executor {
         plan: PhysicalPlan,
         context: ExecutionContext,
     ) -> Result<QueryCursor, ExecutionError> {
-        plan.validate().map_err(ExecutionError::InvalidPlan)?;
-        let root = build_operator(source, plan)?;
+        let shape = plan.validate().map_err(ExecutionError::InvalidPlan)?;
+        let root = build_operator(source, plan, shape.width)?;
 
         Ok(QueryCursor {
             root,
+            output: shape.output,
             context,
             metrics: Mutex::new(QueryMetrics::default()),
         })
@@ -37,6 +41,8 @@ impl Executor {
 pub struct QueryCursor {
     /// Root of the operator tree.
     root: Box<dyn Operator>,
+    /// Output slots of the root, in output-column order.
+    output: Vec<SlotId>,
     /// Snapshot, limits and cancellation of the query.
     context: ExecutionContext,
     /// Counters updated on every batch.
@@ -51,7 +57,7 @@ impl QueryCursor {
             return Ok(None);
         };
 
-        let batch = RecordBatch::from_rows(&rows)?;
+        let batch = RecordBatch::from_rows(&rows, &self.output)?;
         let estimated = batch.estimated_heap_bytes();
         if estimated > self.context.memory_limit_bytes {
             return Err(ExecutionError::ResourceLimit(format!(
@@ -70,9 +76,25 @@ impl QueryCursor {
         self.context.cancellation.cancel();
     }
 
+    /// Output slots of the query, in output-column order.
+    pub fn output_slots(&self) -> &[SlotId] {
+        &self.output
+    }
+
     /// Counters accumulated so far.
     pub fn metrics(&self) -> QueryMetrics {
-        *self.metrics.lock()
+        let mut metrics = *self.metrics.lock();
+        metrics.source_rows = self.root.profile().leaf_rows();
+        metrics
+    }
+
+    /// Per-operator runtime profile so far (complete once the cursor is exhausted).
+    pub fn profile(&self) -> QueryProfile {
+        QueryProfile {
+            peak_memory_bytes: self.context.memory.peak() as u64,
+            memory_limit_bytes: self.context.memory.limit() as u64,
+            root: self.root.profile(),
+        }
     }
 
     /// Token that cancels this query from another thread.
@@ -81,32 +103,96 @@ impl QueryCursor {
     }
 }
 
-/// Recursively instantiates the operator for each plan node.
+/// Recursively instantiates the operator for each plan node; rows are `width` slots wide.
+/// Every operator is wrapped in [`Profiled`] so the query profile covers the whole tree.
 fn build_operator(
     source: Arc<dyn DataSource>,
     plan: PhysicalPlan,
+    width: usize,
 ) -> Result<Box<dyn Operator>, ExecutionError> {
-    Ok(match plan {
-        PhysicalPlan::PointLookup { row_id } => Box::new(PointLookupOperator::new(source, row_id)),
+    let child = |input: Box<PhysicalPlan>| build_operator(source.clone(), *input, width);
+    let operator: Box<dyn Operator> = match plan {
+        PhysicalPlan::PointLookup { row_id, columns } => Box::new(PointLookupOperator::new(
+            source.clone(),
+            row_id,
+            columns,
+            width,
+        )),
 
-        PhysicalPlan::Scan => Box::new(ScanOperator::new(source, KeyRange::all())),
+        PhysicalPlan::Scan { columns } => Box::new(ScanOperator::new(
+            source.clone(),
+            ("scan", KeyRange::all()),
+            columns,
+            width,
+        )),
 
-        PhysicalPlan::EntityScan { entity_id } => {
-            Box::new(ScanOperator::new(source, KeyRange::entity(entity_id)))
+        PhysicalPlan::EntityScan { entity_id, columns } => Box::new(ScanOperator::new(
+            source.clone(),
+            ("entity_scan", KeyRange::entity(entity_id)),
+            columns,
+            width,
+        )),
+
+        PhysicalPlan::Filter { input, predicate } => {
+            Box::new(FilterOperator::new(child(input)?, predicate))
         }
 
-        PhysicalPlan::Filter { input, predicate } => Box::new(FilterOperator::new(
-            build_operator(source, *input)?,
+        PhysicalPlan::Project { input, slots } => {
+            Box::new(ProjectOperator::new(child(input)?, slots))
+        }
+
+        PhysicalPlan::Limit { input, limit } => Box::new(LimitOperator::new(child(input)?, limit)),
+
+        PhysicalPlan::HashJoin {
+            left,
+            right,
+            join_type,
+            keys,
+            residual,
+        } => {
+            let right_slots = right.output_slots();
+            Box::new(HashJoinOperator::new(
+                child(left)?,
+                child(right)?,
+                join_type,
+                keys.iter().map(|key| (key.left, key.right)).unzip(),
+                right_slots,
+                residual,
+            ))
+        }
+
+        PhysicalPlan::NestedLoopJoin {
+            left,
+            right,
+            join_type,
             predicate,
-        )),
-
-        PhysicalPlan::Project { input, fields } => Box::new(ProjectOperator::new(
-            build_operator(source, *input)?,
-            fields,
-        )),
-
-        PhysicalPlan::Limit { input, limit } => {
-            Box::new(LimitOperator::new(build_operator(source, *input)?, limit))
+        } => {
+            let right_slots = right.output_slots();
+            Box::new(NestedLoopJoinOperator::new(
+                child(left)?,
+                child(right)?,
+                join_type,
+                predicate,
+                right_slots,
+            ))
         }
-    })
+
+        PhysicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => Box::new(AggregateOperator::new(
+            child(input)?,
+            group_by,
+            aggregates,
+            width,
+        )),
+
+        PhysicalPlan::Sort { input, keys } => Box::new(SortOperator::new(child(input)?, keys)),
+
+        PhysicalPlan::TopK { input, keys, limit } => {
+            Box::new(TopKOperator::new(child(input)?, keys, limit))
+        }
+    };
+    Ok(Profiled::wrap(operator))
 }

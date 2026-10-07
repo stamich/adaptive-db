@@ -1,9 +1,11 @@
 //! Columnar record batches produced by query cursors.
-use std::collections::BTreeSet;
+//!
+//! A batch has one column per output slot (in the plan's output order) and, when every row came
+//! straight from storage, the rows' storage keys. Join and aggregate rows have no storage key,
+//! so their batches carry no row ids (batch format v2, see docs/batch-format.md).
+use adb_core::{RowId, Value};
 
-use adb_core::{FieldId, Row, RowId, Value};
-
-use crate::ExecutionError;
+use crate::{ExecRow, ExecutionError, SlotId};
 
 /// Physical type of a column vector; the discriminant is the wire type tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,50 +28,50 @@ pub enum PhysicalType {
 pub enum ColumnVector {
     /// Boolean column.
     Bool {
-        /// Field the column holds.
-        field_id: FieldId,
+        /// Output slot the column holds.
+        slot: SlotId,
         /// One value per row; `None` is NULL or absent.
         values: Vec<Option<bool>>,
     },
     /// Integer column.
     Int64 {
-        /// Field the column holds.
-        field_id: FieldId,
+        /// Output slot the column holds.
+        slot: SlotId,
         /// One value per row; `None` is NULL or absent.
         values: Vec<Option<i64>>,
     },
     /// Floating-point column.
     Float64 {
-        /// Field the column holds.
-        field_id: FieldId,
+        /// Output slot the column holds.
+        slot: SlotId,
         /// One value per row; `None` is NULL or absent.
         values: Vec<Option<f64>>,
     },
     /// String column.
     String {
-        /// Field the column holds.
-        field_id: FieldId,
+        /// Output slot the column holds.
+        slot: SlotId,
         /// One value per row; `None` is NULL or absent.
         values: Vec<Option<String>>,
     },
     /// Byte-string column.
     Bytes {
-        /// Field the column holds.
-        field_id: FieldId,
+        /// Output slot the column holds.
+        slot: SlotId,
         /// One value per row; `None` is NULL or absent.
         values: Vec<Option<Vec<u8>>>,
     },
 }
 
 impl ColumnVector {
-    /// Field the column holds.
-    pub fn field_id(&self) -> FieldId {
+    /// Output slot the column holds.
+    pub fn slot(&self) -> SlotId {
         match self {
-            Self::Bool { field_id, .. }
-            | Self::Int64 { field_id, .. }
-            | Self::Float64 { field_id, .. }
-            | Self::String { field_id, .. }
-            | Self::Bytes { field_id, .. } => *field_id,
+            Self::Bool { slot, .. }
+            | Self::Int64 { slot, .. }
+            | Self::Float64 { slot, .. }
+            | Self::String { slot, .. }
+            | Self::Bytes { slot, .. } => *slot,
         }
     }
 
@@ -101,31 +103,53 @@ impl ColumnVector {
     }
 }
 
-/// Rows of one batch in columnar form: row ids plus one vector per field present.
+/// Rows of one batch in columnar form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordBatch {
-    /// Storage key of each row, in output order.
-    pub row_ids: Vec<RowId>,
-    /// One column per field present in any row of the batch.
+    /// Number of rows.
+    pub num_rows: usize,
+    /// Storage key of each row when every row has one (scans, lookups); `None` otherwise.
+    pub row_ids: Option<Vec<RowId>>,
+    /// One column per output slot that has at least one non-NULL value, in output order.
+    /// A column that is NULL in every row is omitted (readers treat a missing column as NULL).
     pub columns: Vec<ColumnVector>,
 }
 
 impl RecordBatch {
     /// Number of rows.
     pub fn len(&self) -> usize {
-        self.row_ids.len()
+        self.num_rows
     }
 
     /// Whether the batch has no rows.
     pub fn is_empty(&self) -> bool {
-        self.row_ids.is_empty()
+        self.num_rows == 0
+    }
+
+    /// Value of `slot` in row `row`, if the batch has that column (else the value is NULL).
+    pub fn value(&self, row: usize, slot: SlotId) -> Value {
+        let Some(column) = self.columns.iter().find(|column| column.slot() == slot) else {
+            return Value::Null;
+        };
+        match column {
+            ColumnVector::Bool { values, .. } => values[row].map_or(Value::Null, Value::Bool),
+            ColumnVector::Int64 { values, .. } => values[row].map_or(Value::Null, Value::Int64),
+            ColumnVector::Float64 { values, .. } => values[row].map_or(Value::Null, Value::Float64),
+            ColumnVector::String { values, .. } => {
+                values[row].clone().map_or(Value::Null, Value::String)
+            }
+            ColumnVector::Bytes { values, .. } => {
+                values[row].clone().map_or(Value::Null, Value::Bytes)
+            }
+        }
     }
 
     /// Estimates heap bytes owned by this batch for enforcement of the per-query memory limit.
     pub fn estimated_heap_bytes(&self) -> usize {
         let mut total = self
             .row_ids
-            .len()
+            .as_ref()
+            .map_or(0, Vec::len)
             .saturating_mul(std::mem::size_of::<RowId>());
         for column in &self.columns {
             total = total.saturating_add(match column {
@@ -152,39 +176,36 @@ impl RecordBatch {
         }
         total
     }
-    /// Pivots rows into columns; a field whose non-null values disagree in type is an error.
-    pub fn from_rows(rows: &[(RowId, Row)]) -> Result<Self, ExecutionError> {
-        let mut fields = BTreeSet::new();
-        for (_, row) in rows {
-            fields.extend(row.fields.keys().copied());
-        }
+    /// Pivots operator rows into the columns of `output`; a slot whose non-null values disagree
+    /// in type is an error.
+    pub fn from_rows(rows: &[ExecRow], output: &[SlotId]) -> Result<Self, ExecutionError> {
+        let row_ids = rows
+            .iter()
+            .map(|row| row.row_id)
+            .collect::<Option<Vec<RowId>>>()
+            .filter(|ids| !ids.is_empty());
 
-        let row_ids = rows.iter().map(|(row_id, _)| *row_id).collect();
-        let mut columns = Vec::with_capacity(fields.len());
-
-        for field_id in fields {
-            let physical_type = infer_type(rows, field_id)?;
-            if let Some(physical_type) = physical_type {
-                columns.push(build_column(rows, field_id, physical_type)?);
+        let mut columns = Vec::with_capacity(output.len());
+        for slot in output {
+            if let Some(physical_type) = infer_type(rows, *slot)? {
+                columns.push(build_column(rows, *slot, physical_type)?);
             }
         }
 
-        Ok(Self { row_ids, columns })
+        Ok(Self {
+            num_rows: rows.len(),
+            row_ids,
+            columns,
+        })
     }
 }
 
-/// Physical type of `field_id` across `rows`, ignoring nulls and absent values.
-fn infer_type(
-    rows: &[(RowId, Row)],
-    field_id: FieldId,
-) -> Result<Option<PhysicalType>, ExecutionError> {
+/// Physical type of `slot` across `rows`, ignoring NULLs; `None` if every value is NULL.
+fn infer_type(rows: &[ExecRow], slot: SlotId) -> Result<Option<PhysicalType>, ExecutionError> {
     let mut found = None;
 
-    for (_, row) in rows {
-        let Some(value) = row.get(field_id) else {
-            continue;
-        };
-        let candidate = match value {
+    for row in rows {
+        let candidate = match row.get(slot) {
             Value::Null => continue,
             Value::Bool(_) => PhysicalType::Bool,
             Value::Int64(_) => PhysicalType::Int64,
@@ -194,7 +215,7 @@ fn infer_type(
         };
 
         if found.is_some_and(|existing| existing != candidate) {
-            return Err(ExecutionError::InconsistentType(field_id));
+            return Err(ExecutionError::InconsistentType(slot.0));
         }
         found = Some(candidate);
     }
@@ -202,67 +223,63 @@ fn infer_type(
     Ok(found)
 }
 
-/// Builds the column vector of `field_id` with the inferred physical type.
+/// Collects one typed column; `extract` returns `Ok(None)` for NULL.
+fn collect<T>(
+    rows: &[ExecRow],
+    slot: SlotId,
+    extract: impl Fn(&Value) -> Option<T>,
+) -> Result<Vec<Option<T>>, ExecutionError> {
+    rows.iter()
+        .map(|row| match row.get(slot) {
+            Value::Null => Ok(None),
+            value => extract(value)
+                .map(Some)
+                .ok_or(ExecutionError::InconsistentType(slot.0)),
+        })
+        .collect()
+}
+
+/// Builds the column vector of `slot` with the inferred physical type.
 fn build_column(
-    rows: &[(RowId, Row)],
-    field_id: FieldId,
+    rows: &[ExecRow],
+    slot: SlotId,
     physical_type: PhysicalType,
 ) -> Result<ColumnVector, ExecutionError> {
-    match physical_type {
-        PhysicalType::Bool => Ok(ColumnVector::Bool {
-            field_id,
-            values: rows
-                .iter()
-                .map(|(_, row)| match row.get(field_id) {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::Bool(value)) => Ok(Some(*value)),
-                    _ => Err(ExecutionError::InconsistentType(field_id)),
-                })
-                .collect::<Result<_, _>>()?,
-        }),
-        PhysicalType::Int64 => Ok(ColumnVector::Int64 {
-            field_id,
-            values: rows
-                .iter()
-                .map(|(_, row)| match row.get(field_id) {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::Int64(value)) => Ok(Some(*value)),
-                    _ => Err(ExecutionError::InconsistentType(field_id)),
-                })
-                .collect::<Result<_, _>>()?,
-        }),
-        PhysicalType::Float64 => Ok(ColumnVector::Float64 {
-            field_id,
-            values: rows
-                .iter()
-                .map(|(_, row)| match row.get(field_id) {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::Float64(value)) => Ok(Some(*value)),
-                    _ => Err(ExecutionError::InconsistentType(field_id)),
-                })
-                .collect::<Result<_, _>>()?,
-        }),
-        PhysicalType::String => Ok(ColumnVector::String {
-            field_id,
-            values: rows
-                .iter()
-                .map(|(_, row)| match row.get(field_id) {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::String(value)) => Ok(Some(value.clone())),
-                    _ => Err(ExecutionError::InconsistentType(field_id)),
-                })
-                .collect::<Result<_, _>>()?,
-        }),
-        PhysicalType::Bytes => Ok(ColumnVector::Bytes {
-            field_id,
-            values: rows
-                .iter()
-                .map(|(_, row)| match row.get(field_id) {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::Bytes(value)) => Ok(Some(value.clone())),
-                    _ => Err(ExecutionError::InconsistentType(field_id)),
-                })
-                .collect::<Result<_, _>>()?,
-        }),
-    }
+    Ok(match physical_type {
+        PhysicalType::Bool => ColumnVector::Bool {
+            slot,
+            values: collect(rows, slot, |value| match value {
+                Value::Bool(value) => Some(*value),
+                _ => None,
+            })?,
+        },
+        PhysicalType::Int64 => ColumnVector::Int64 {
+            slot,
+            values: collect(rows, slot, |value| match value {
+                Value::Int64(value) => Some(*value),
+                _ => None,
+            })?,
+        },
+        PhysicalType::Float64 => ColumnVector::Float64 {
+            slot,
+            values: collect(rows, slot, |value| match value {
+                Value::Float64(value) => Some(*value),
+                _ => None,
+            })?,
+        },
+        PhysicalType::String => ColumnVector::String {
+            slot,
+            values: collect(rows, slot, |value| match value {
+                Value::String(value) => Some(value.clone()),
+                _ => None,
+            })?,
+        },
+        PhysicalType::Bytes => ColumnVector::Bytes {
+            slot,
+            values: collect(rows, slot, |value| match value {
+                Value::Bytes(value) => Some(value.clone()),
+                _ => None,
+            })?,
+        },
+    })
 }

@@ -1,5 +1,5 @@
 [package]
-name = "adb-benchmark-2-0-3-rust"
+name = "adb-benchmark-rust"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,5 +8,6 @@ license.workspace = true
 adb-core = { path = "../../crates/adb-core" }
 adb-engine = { path = "../../crates/adb-engine" }
 adb-execution = { path = "../../crates/adb-execution" }
+adb-plan-wire = { path = "../../crates/adb-plan-wire" }
 tempfile.workspace = true
 serde_json.workspace = true

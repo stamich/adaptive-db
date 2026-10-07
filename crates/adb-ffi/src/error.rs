@@ -3,6 +3,7 @@
 use std::{cell::RefCell, panic::AssertUnwindSafe};
 
 use adb_engine::DbError;
+use adb_execution::ExecutionError;
 
 use crate::AdbStatus;
 
@@ -14,7 +15,7 @@ thread_local! {
 /// Maximum UTF-8 database path accepted by the C ABI.
 pub const MAX_PATH_BYTES: usize = 64 * 1024;
 /// Maximum physical-plan JSON accepted by the C ABI.
-pub const MAX_PLAN_JSON_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_PLAN_JSON_BYTES: usize = adb_plan_wire::MAX_PLAN_WIRE_BYTES;
 /// Maximum mutation JSON accepted by INSERT/UPDATE C ABI calls.
 pub const MAX_MUTATION_JSON_BYTES: usize = 8 * 1024 * 1024;
 
@@ -35,11 +36,25 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
         DbError::Poisoned(_) | DbError::CommitOutcomeUnknown(_) => AdbStatus::Poisoned,
         DbError::ChangeLogTruncated { .. } => AdbStatus::LogTruncated,
         DbError::InvalidArgument(_) | DbError::TransactionClosed => AdbStatus::InvalidArgument,
+        DbError::Execution(error) => map_execution_error(error),
         _ if error.is_corruption() => AdbStatus::Corruption,
         DbError::Io(_) => AdbStatus::IoError,
         _ => AdbStatus::Internal,
     };
     (status, error.to_string())
+}
+
+/// Maps query execution errors onto status categories.
+pub fn map_execution_error(error: &ExecutionError) -> AdbStatus {
+    match error {
+        ExecutionError::Cancelled | ExecutionError::DeadlineExceeded => AdbStatus::Cancelled,
+        ExecutionError::ResourceLimit(_) => AdbStatus::ResourceLimit,
+        ExecutionError::ArithmeticOverflow(_) => AdbStatus::ArithmeticOverflow,
+        ExecutionError::InvalidPlan(_)
+        | ExecutionError::Expression(_)
+        | ExecutionError::InconsistentType(_) => AdbStatus::InvalidArgument,
+        ExecutionError::DataSource(_) | ExecutionError::Wire(_) => AdbStatus::Internal,
+    }
 }
 
 /// Executes one FFI operation while preventing Rust panics from unwinding across the C boundary.

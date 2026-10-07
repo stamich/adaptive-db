@@ -13,6 +13,7 @@ adb-wal = { path = "../adb-wal" }
 adb-core = { path = "../adb-core" }
 adb-engine = { path = "../adb-engine" }
 adb-execution = { path = "../adb-execution" }
+adb-plan-wire = { path = "../adb-plan-wire" }
 serde.workspace = true
 serde_json.workspace = true
 parking_lot.workspace = true

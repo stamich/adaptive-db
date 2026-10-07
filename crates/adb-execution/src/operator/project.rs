@@ -1,51 +1,57 @@
-//! Projection: keeps only the requested fields.
-use std::collections::BTreeMap;
-
-use adb_core::{FieldId, Row};
+//! Projection: selects the output slots.
+use adb_core::Value;
 
 use crate::{
     operator::{Operator, RowBatch},
-    ExecutionContext, ExecutionError,
+    ExecutionContext, ExecutionError, SlotId,
 };
 
-/// Restricts every row of its input to `fields`.
+/// Keeps only `slots` in every row; all other slots become NULL.
+///
+/// Clearing the dropped slots matters for blocking operators above a projection (Sort, TopK):
+/// they only hold the values that will be returned.
 pub struct ProjectOperator {
     /// Upstream operator.
     input: Box<dyn Operator>,
-    /// Fields kept in every row.
-    fields: Vec<FieldId>,
+    /// Slots kept in every row.
+    slots: Vec<SlotId>,
 }
 
 impl ProjectOperator {
-    /// Projects `input` onto `fields`.
-    pub fn new(input: Box<dyn Operator>, fields: Vec<FieldId>) -> Self {
-        Self { input, fields }
+    /// Projects `input` onto `slots`.
+    pub fn new(input: Box<dyn Operator>, slots: Vec<SlotId>) -> Self {
+        Self { input, slots }
     }
 }
 
 impl Operator for ProjectOperator {
-    /// Keeps only the projected fields of each input row.
+    /// Moves the projected slots of each input row into a fresh all-NULL row.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,
     ) -> Result<Option<RowBatch>, ExecutionError> {
-        let Some(batch) = self.input.next_batch(context)? else {
+        let Some(mut batch) = self.input.next_batch(context)? else {
             return Ok(None);
         };
 
-        Ok(Some(
-            batch
-                .into_iter()
-                .map(|(row_id, row)| {
-                    let mut fields = BTreeMap::new();
-                    for field_id in &self.fields {
-                        if let Some(value) = row.get(*field_id) {
-                            fields.insert(*field_id, value.clone());
-                        }
-                    }
-                    (row_id, Row { fields })
-                })
-                .collect(),
-        ))
+        for row in &mut batch {
+            let mut values = vec![Value::Null; row.values.len()];
+            for slot in &self.slots {
+                values[slot.index()] =
+                    std::mem::replace(&mut row.values[slot.index()], Value::Null);
+            }
+            row.values = values;
+        }
+        Ok(Some(batch))
+    }
+
+    /// `project`.
+    fn name(&self) -> &'static str {
+        "project"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
     }
 }

@@ -34,6 +34,23 @@ public final class NativeQuery implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the query's per-operator runtime profile (rows, batches, time, counters, peak
+     * memory) as JSON; complete once {@link #nextBatch()} returned empty. Used by EXPLAIN ANALYZE.
+     *
+     * @return the profile document
+     */
+    public synchronized String profileJson() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.queryProfile, handle, out));
+            byte[] bytes = library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_BATCH_BYTES);
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
     /** Requests cooperative cancellation of this live query. */
     public synchronized void cancel() { ensureOpen(); library.check(library.invokeInt(library.queryCancel, handle)); }
 

@@ -3,7 +3,7 @@ mod common;
 
 use adb_core::{RowId, Value};
 use adb_engine::Database;
-use adb_execution::{BinaryOp, Expr, PhysicalPlan};
+use adb_execution::{BinaryOp, Expr, PhysicalPlan, ScanColumn, SlotId};
 use tempfile::tempdir;
 
 use common::row_with_i64;
@@ -22,9 +22,14 @@ fn database_executes_physical_plan_in_batches() {
 
     let plan = PhysicalPlan::Limit {
         input: Box::new(PhysicalPlan::Filter {
-            input: Box::new(PhysicalPlan::Scan),
+            input: Box::new(PhysicalPlan::Scan {
+                columns: vec![ScanColumn {
+                    field_id: 1,
+                    slot: SlotId(0),
+                }],
+            }),
             predicate: Expr::Binary {
-                left: Box::new(Expr::Column { field_id: 1 }),
+                left: Box::new(Expr::Slot { slot: SlotId(0) }),
                 op: BinaryOp::Gt,
                 right: Box::new(Expr::Literal {
                     value: Value::Int64(90),
@@ -37,5 +42,6 @@ fn database_executes_physical_plan_in_batches() {
     let mut cursor = db.execute(plan).unwrap();
     let batch = cursor.next_batch().unwrap().unwrap();
     assert_eq!(batch.len(), 5);
+    assert_eq!(batch.value(0, SlotId(0)), Value::Int64(91));
     assert!(cursor.next_batch().unwrap().is_none());
 }

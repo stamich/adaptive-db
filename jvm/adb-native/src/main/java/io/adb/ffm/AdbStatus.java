@@ -22,6 +22,10 @@ public enum AdbStatus {
     POISONED(8),
     /** The requested change-log position is no longer retained. */
     LOG_TRUNCATED(9),
+    /** A query exceeded a resource limit (memory, materialized rows, join fanout, comparisons). */
+    RESOURCE_LIMIT(10),
+    /** An exact computation overflowed its result type (e.g. an INT64 SUM). */
+    ARITHMETIC_OVERFLOW(11),
     /** Unexpected engine failure, or a code this binding does not know. */
     INTERNAL(255);
 

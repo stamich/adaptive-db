@@ -24,6 +24,11 @@ pub enum AdbStatus {
     Poisoned = 8,
     /// The requested change-log position is no longer retained.
     LogTruncated = 9,
+    /// A query exceeded a resource limit (memory budget, materialized rows, join fanout or
+    /// nested-loop comparisons); the database itself is unaffected.
+    ResourceLimit = 10,
+    /// An exact computation overflowed its result type (e.g. an INT64 SUM).
+    ArithmeticOverflow = 11,
     /// Unexpected internal failure or contained panic.
     Internal = 255,
 }

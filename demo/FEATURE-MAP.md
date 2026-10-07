@@ -1,4 +1,4 @@
-# Feature map: 1.0.1 → 2.0.3
+# Feature map: 1.0.1 → 2.1.3
 
 ## 1.0.1 — transactions, WAL and recovery
 
@@ -52,3 +52,34 @@ It demonstrates CREATE TABLE, INSERT, UPDATE, DELETE, filtered SELECT, LIMIT and
 The SQL tour is unchanged; table scans now run as native `EntityScan`. The data-plane features of
 2.0.3 (change feed, consumer offsets, vacuum, checkpoints) are exercised by
 `examples/jvm-cdc-smoke/run.sh` (Java FFM) and by the Rust tests in `crates/adb-engine/tests`.
+
+## 2.1.3 — relational execution
+
+The last phase creates `customer` and `orders` and runs `sql/2.1.3-relational.sql`:
+
+```text
+SQL with JOIN / GROUP BY / ORDER BY
+ ↓
+SqlParser (aliases, qualified columns, aggregates)
+ ↓
+SelectBinder (relation scope, dense SlotIds, GROUP BY rules)
+ ↓
+LogicalPlanner → RuleOptimizer (predicate pushdown, point lookups)
+ ↓
+PhysicalPlanner + PlanningPolicy (HashJoin | NestedLoopJoin, TopK; decisions with reasons)
+ ↓
+plan wire v2 → Java FFM → C ABI v4
+ ↓
+Rust: HashJoin / NestedLoopJoin / Aggregate / Sort / TopK under a query MemoryTracker
+ ↓
+batch format v2 (slot columns) + runtime profile → EXPLAIN ANALYZE
+```
+
+| Query | Shows |
+|---|---|
+| join + `ORDER BY` | hash join over slot-addressed rows, native sort |
+| `LEFT JOIN` + `COUNT(o.id)` | null-filling (a customer without orders counts 0) |
+| `GROUP BY city` + `SUM`/`AVG` + `LIMIT` | checked aggregation, TopK |
+| `orders a JOIN orders b` | self-join: one entity, two relation instances, distinct slots |
+| `ON o.customer_id <> c.id` | nested-loop fallback, filter pushed below the join |
+| `EXPLAIN ANALYZE` | plans, planner decisions with reasons, per-operator profile |

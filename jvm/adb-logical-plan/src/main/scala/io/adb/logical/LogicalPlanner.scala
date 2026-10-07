@@ -4,13 +4,26 @@ import io.adb.logical.LogicalPlan.*
 
 /** Turns bound SELECT statements into canonical logical plans. */
 object LogicalPlanner:
-  /** Builds `Limit(Project(Filter(TableScan)))`, omitting the filter and limit when absent.
+  /** Builds the canonical tree
+    *
+    * {{{
+    * Limit(Project(Sort(Aggregate(Filter(Join(...Join(Scan, Scan)...))))))
+    * }}}
+    *
+    * omitting every operator the query does not need. Joins are left-deep in FROM order, and
+    * the WHERE predicate sits above all joins; the optimizer pushes it down.
     *
     * @param select bound SELECT
     * @return the unoptimized logical plan
     */
   def plan(select: BoundSelect): LogicalPlan =
-    val base = TableScan(select.entity)
-    val filtered = select.predicate.fold[LogicalPlan](base)(Filter(base, _))
-    val projected = Project(filtered, select.fields)
+    val joined = select.joins.foldLeft[LogicalPlan](TableScan(select.base)) { (left, join) =>
+      Join(left, TableScan(join.relation), join.joinType, join.condition)
+    }
+    val filtered = select.predicate.fold(joined)(Filter(joined, _))
+    val aggregated =
+      if select.isAggregate then Aggregate(filtered, select.groupBy, select.aggregates)
+      else filtered
+    val sorted = if select.orderBy.isEmpty then aggregated else Sort(aggregated, select.orderBy)
+    val projected = Project(sorted, select.output.map(_.attribute))
     select.limit.fold[LogicalPlan](projected)(Limit(projected, _))
