@@ -1,4 +1,5 @@
 //! Physical operators. Each pulls batches from its input on demand.
+pub mod collect;
 pub mod filter;
 pub mod limit;
 pub mod point_lookup;
