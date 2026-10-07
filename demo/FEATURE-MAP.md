@@ -1,4 +1,4 @@
-# Feature map: 1.0.1 → 2.0.1
+# Feature map: 1.0.1 → 2.0.3
 
 ## 1.0.1 — transactions, WAL and recovery
 
@@ -45,3 +45,10 @@ Rust Execution Engine
 ```
 
 It demonstrates CREATE TABLE, INSERT, UPDATE, DELETE, filtered SELECT, LIMIT and EXPLAIN.
+
+
+## 2.0.3 — log as source of truth, native CDC
+
+The SQL tour is unchanged; table scans now run as native `EntityScan`. The data-plane features of
+2.0.3 (change feed, consumer offsets, vacuum, checkpoints) are exercised by
+`examples/jvm-cdc-smoke/run.sh` (Java FFM) and by the Rust tests in `crates/adb-engine/tests`.

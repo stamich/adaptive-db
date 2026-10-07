@@ -1,5 +1,19 @@
 # Roadmap after Milestone 2.0
 
+## 2.0.3 — log as source of truth (done)
+- canonical log retained; projections rebuildable (`rebuild_projections`)
+- journaled atomic checkpoints, no-steal buffer pool, group commit, poisoning
+- space reuse in the current heap, tombstone vacuum
+- streaming entity key-range scans
+- serializable isolation (OCC read-set validation) by default
+- native change data capture with durable consumer offsets (C ABI v3)
+
+## 2.0.x follow-ups
+- log retention driven by consumer offsets; archival of old segments to object storage
+- version-store retention (`Order.history: 7 years`) via immutable, droppable segments
+- push/long-poll change subscriptions
+- predicate (range) read sets for phantom-free serializable scans inside transactions
+
 ## 2.1 — relational execution
 - HashJoin and NestedLoopJoin
 - Aggregate / GroupBy
@@ -34,7 +48,7 @@
 - 3.4 metadata/control plane
 
 ## 4.x — HTAP
-- canonical-log projection framework
+- canonical-log projection framework (2.0.3 provides the log cursor and transaction assembler)
 - column segments
 - vectorized analytics
 - projection watermarks and delta repair

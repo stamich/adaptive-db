@@ -20,12 +20,21 @@ The Rust engine keeps `RowId` as `u128`; the FFI JSON decoder deliberately uses
 a separate wire representation so JSON transport limitations do not alter the
 engine-native ID type or its binary persistence formats.
 
+Table scans (Milestone 2.0.3) read one entity's key range
+`[entity_id << 64, (entity_id + 1) << 64)` and stream it in batches:
+
+```json
+{"op":"entity_scan","entity_id":7}
+```
+
+`{"op":"scan"}` still exists and scans every entity; it is meant for diagnostics only.
+
 ```json
 {
   "op":"limit",
   "input": {
     "op":"filter",
-    "input":{"op":"scan"},
+    "input":{"op":"entity_scan","entity_id":7},
     "predicate": {
       "kind":"binary",
       "left":{"kind":"column","field_id":1},

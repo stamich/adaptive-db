@@ -13,7 +13,7 @@ if ! command -v gradle >/dev/null 2>&1; then
   exit 1
 fi
 
-JAVA_MAJOR="$(java -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\).*/\1/p')"
+JAVA_MAJOR="$(java -version 2>&1 | sed -n 's/.*version "\([0-9][0-9]*\).*/\1/p' | head -n1)"
 if [[ -z "$JAVA_MAJOR" || "$JAVA_MAJOR" -lt 22 ]]; then
   echo "ERROR: JDK 22+ is required by the finalized Java FFM API." >&2
   exit 1

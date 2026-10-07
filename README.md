@@ -1,114 +1,104 @@
-# Adaptive DB — Milestone 2.0
+# Adaptive DB — Milestone 2.0.3
 
-Milestone 2 wprowadza pierwszą warstwę JVM/Scala nad Rust data-plane 1.7.
+Adaptive DB to baza danych, w której **kanoniczny log jest źródłem prawdy**, a fizyczne struktury
+(current store, version store, w przyszłości projekcje kolumnowe, wyszukiwawcze i grafowe) są
+odtwarzalnymi projekcjami tego logu. Koncepcja całości jest w [docs/concept/AdaptiveDB_1_3_baza_nowej_generacji.md](docs/concept/AdaptiveDB_1_3_baza_nowej_generacji.md).
+To repozytorium realizuje jej rdzeń V1: jednowęzłowy silnik transakcyjny z historią i natywnym
+strumieniem zmian.
 
-## JVM
+## Co wnosi 2.0.3
 
-- Scala 3 semantic model
-- persistent file catalog
-- SQL tokenizer/parser
-- binder + type checking
-- LogicalPlan
-- rule optimizer (w tym PK equality -> PointLookup)
-- PhysicalPlanner
-- versioned JSON plan wire adapter
-- Java 22+ FFM / Project Panama adapter
-- SQL gateway
-- CLI
+| Obszar | 2.0.2 | 2.0.3 |
+|---|---|---|
+| Źródło prawdy | store'y; WAL przycinany po checkpoincie | **log, nigdy nieprzycinany**; store'y odtwarzalne (`rebuild_projections`) |
+| Trwałość commitu | 6 fsync na commit, globalnie serializowane | WAL fsync + **group commit**; strony store'ów tylko w checkpointach |
+| Checkpoint / torn pages | zapis stron w miejscu, bez ochrony | **atomowy dziennik (doublewrite)** dla wszystkich plików naraz |
+| Błąd po zapisie do WAL | klient dostaje błąd, stan w pamięci rozjechany | **poisoning** + `CommitOutcomeUnknown`, rozstrzyga recovery |
+| Current heap | każdy UPDATE zostawiał martwą krotkę | zwalnianie slotów, kompaktowanie, mapa wolnego miejsca; **`vacuum()`** tombstone'ów |
+| Skan tabeli | skan całej bazy + filtr, materializacja w `Vec` | **`EntityScan`**: zakres kluczy encji, stronicowany strumieniowo |
+| Izolacja | Snapshot (write skew możliwy) | **Serializable domyślnie** (walidacja read-setu), Snapshot opcjonalnie |
+| CDC | brak | **natywny strumień zmian** z logu: before/after, kursory, filtry, trwałe offsety konsumentów |
+| C ABI | v2 | **v3** (CDC, checkpoint, vacuum, statusy `POISONED`, `LOG_TRUNCATED`) |
+| B+Tree | dwie prawie identyczne implementacje | **jedna generyczna** `BPlusTree<K>` (ten sam format na dysku) |
+| Testy Rust | 30 | **113** |
 
-## Rust additions
+Pomiary (`examples/rust-benchmark`, 5 000 wierszy na encję, ta sama maszyna):
 
-- ABI v2
-- execute-at-snapshot przez FFI
-- latest committed timestamp
-- atomic INSERT / UPDATE-fields / DELETE FFI helpers
-- wielotabelowy physical RowId: `(EntityId << 64) | BIGINT_PK`
+| Miara | 2.0.2 | 2.0.3 |
+|---|---:|---:|
+| commit jednowierszowy, 1 wątek | 522 /s | ~3 500–3 900 /s |
+| commit jednowierszowy, 8 wątków | 459 /s | ~9 900 /s |
+| ładowanie (100 wierszy / tx) | 21 147 wierszy/s | 48 189 wierszy/s |
+| skan jednej encji z 3 (5 000 wierszy) | 71 ms | 2,9 ms |
+| strony heapu po 2 000 aktualizacjach 100 wierszy | 1 → 7 | 1 → 1 |
 
-## Obsługiwany SQL 2.0
+## Architektura
+
+```text
+SQL -> Scala (parser, binder, planner) -> PhysicalPlan JSON -> Java FFM -> C ABI v3 -> Rust
+                                                                                      |
+  commit: validate -> append to LOG -> apply to projections (memory) -> group fsync -> publish
+  read:   snapshot over current + version projections; EntityScan = key-range scan
+  CDC:    WalCursor over the durable log prefix
+  checkpoint: dirty pages + roots + record -> journal -> in place
+```
+
+Szczegóły: [docs/architecture.md](docs/architecture.md), niezmienniki z testami:
+[docs/invariants.md](docs/invariants.md), CDC: [docs/cdc.md](docs/cdc.md), ABI:
+[docs/ffi.md](docs/ffi.md), format planu: [docs/plan-wire-format.md](docs/plan-wire-format.md),
+roadmapa: [docs/roadmap.md](docs/roadmap.md).
+
+## Użycie (Rust)
+
+```rust
+use adb_core::{Row, RowId, Value};
+use adb_engine::{ChangeCursor, ChangeFilter, Database};
+
+let db = Database::open("data")?;
+
+let mut tx = db.begin();                                   // Serializable
+let id = RowId::compose(/* entity */ 1, /* pk */ 42);
+if db.get_in_tx(&mut tx, id)?.is_none() {
+    tx.put(id, Row::new().with_field(1, Value::Int64(100)));
+}
+let ts = db.commit(tx)?;                                   // durable po powrocie
+
+let old = db.get_at(id, ts)?;                              // time travel
+let changes = db.read_changes(ChangeCursor::BEGINNING, 100, &ChangeFilter::entities([1]))?;
+db.vacuum()?;
+db.close()?;                                               // checkpoint (opcjonalny)
+```
+
+## Obsługiwany SQL (warstwa JVM, bez zmian względem 2.0)
 
 ```sql
-CREATE TABLE account (
-  id BIGINT PRIMARY KEY,
-  balance BIGINT NOT NULL,
-  owner STRING
-);
-
+CREATE TABLE account (id BIGINT PRIMARY KEY, balance BIGINT NOT NULL, owner STRING);
 INSERT INTO account VALUES (1, 100, 'Alice');
-SELECT id, balance FROM account WHERE balance > 50 LIMIT 10;
-SELECT * FROM account AS OF VERSION 3 WHERE id = 1;
+SELECT id, balance FROM account WHERE balance > 50 LIMIT 10;   -- EntityScan
+SELECT * FROM account AS OF VERSION 3 WHERE id = 1;            -- PointLookup w snapshocie
 UPDATE account SET balance = 200 WHERE id = 1;
 DELETE FROM account WHERE id = 1;
 EXPLAIN SELECT * FROM account WHERE id = 1;
 ```
 
-UPDATE/DELETE wymagają w Milestone 2 predykatu `WHERE primary_key = BIGINT`.
-
-## Build Rust
+## Budowanie i walidacja
 
 ```bash
-cargo fmt --all
-cargo check --workspace
-cargo test --workspace
-cargo build --release -p adb-ffi
+./build-milestone2.0.3.sh          # fmt, clippy -D warnings, testy, rustdoc, benchmark, smoke JVM
 ```
 
-## Build JVM
+Wymagania: Rust (stable), JDK 22+. Gradle 9 i dostęp do Maven Central są potrzebne tylko do
+testów i dema warstwy Scala/JVM (`cd jvm && gradle clean test`, `./demo/run-demo.sh`). Ścieżka
+Java FFM → Rust jest sprawdzana bez Gradle: `examples/jvm-cdc-smoke/run.sh`.
 
-Wymagany JDK 22+.
-
-```bash
-cd jvm
-gradle clean test
-```
-
-## CLI
-
-```bash
-cd jvm
-gradle :adb-cli:run \\
-  -Dadb.native.library=../target/release/libadb_ffi.so \\
-  -Dadb.data=../demo-data
-```
-
-## Granica architektoniczna
+## Układ repozytorium
 
 ```text
-SQL -> AST -> Binder -> LogicalPlan -> RuleOptimizer -> PhysicalPlan
-                                                     |
-                                                     v
-                                              Java FFM/Panama
-                                                     |
-                                                     v
-                                                  adb-ffi
-                                                     |
-                                                     v
-                                             Rust execution/storage
+crates/        silnik Rust (core, journal, page, buffer, btree, storage, wal, tx, execution, engine, ffi)
+include/adb.h  C ABI v3
+jvm/           Scala/Java: model, katalog, SQL, planowanie, FFM, gateway, CLI
+proto/         docelowy binarny kontrakt planu
+examples/      benchmark Rust, smoke test JVM CDC, wyniki
+demo/          przegląd funkcji przez CLI JVM
+docs/          architektura, niezmienniki, CDC, ABI; docs/history — artefakty starszych milestone'ów
 ```
-
-`proto/physical_plan.proto` jest docelowym kontraktem transportowym. Milestone 2.0 zachowuje JSON wire v1 jako działający bootstrap; core planner nie zależy od JSON.
-
-## Demo: 1.0.1 → 2.0.1
-
-A runnable chronological feature tour is available under `demo/`. It demonstrates WAL/recovery, persistent current state and B+Tree lookup, historical `AS OF VERSION`, native RecordBatch execution, and finally the complete Scala SQL/control-plane path.
-
-```bash
-./demo/run-demo.sh
-```
-
-See `demo/README.md` and `demo/FEATURE-MAP.md`.
-
-
-## Corrected demo build
-
-- Scala: **3.3.8**
-- JVM/Scala target: **JDK 22**
-- Changelog: `CHANGELOG.md`
-- Demo: `demo/run-demo.sh`
-
-The physical-plan point-lookup wire encodes the 128-bit RowId as a decimal JSON string to avoid
-precision/range loss for `(entityId << 64) | primaryKey`.
-
-## Milestone 2.0.2 benchmark/demo package
-
-`2.0.2` preserves the hardened `2.0.1-with-demo-buildfix` feature set and adds measurement tooling.
-See `TASKS-2.0.2.md` and `examples/README.md`. No Milestone 2.1+ query features are included.
