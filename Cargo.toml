@@ -13,6 +13,7 @@ members = [
     "crates/adb-plan-wire",
     "crates/adb-ffi",
     "examples/rust-benchmark",
+    "examples/rust-demo",
 ]
 resolver = "2"
 

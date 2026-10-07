@@ -13,7 +13,7 @@ object Main:
     if args.headOption.contains("--demo") then DemoMain.run()
     else runInteractiveShell()
 
-  /** Runs the interactive Milestone 2.0.1 SQL shell until EOF or `\\q`. */
+  /** Runs the interactive SQL shell until EOF or `\\q`. */
   private def runInteractiveShell(): Unit =
     val dataDir = Path.of(
       sys.env.getOrElse("ADB_DATA", sys.props.getOrElse("adb.data", "./adb-data"))
@@ -25,7 +25,7 @@ object Main:
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
     val db = new AdaptiveDatabase(catalog, native)
 
-    println("Adaptive DB Milestone 2.0.1 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.1.3 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do

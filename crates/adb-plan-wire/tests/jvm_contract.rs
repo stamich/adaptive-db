@@ -42,5 +42,13 @@ fn jvm_encoded_plan_decodes_and_validates() {
     ));
     // Non-ASCII literals survive the trip.
     assert!(std::str::from_utf8(bytes).unwrap().contains("Kraków"));
-    assert!(shape.width > shape.output.iter().map(|s: &SlotId| s.index()).max().unwrap());
+    assert!(
+        shape.width
+            > shape
+                .output
+                .iter()
+                .map(|s: &SlotId| s.index())
+                .max()
+                .unwrap()
+    );
 }

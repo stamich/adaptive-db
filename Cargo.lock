@@ -3,12 +3,13 @@
 version = 4
 
 [[package]]
-name = "adb-benchmark-2-0-3-rust"
+name = "adb-benchmark-rust"
 version = "0.2.3"
 dependencies = [
  "adb-core",
  "adb-engine",
  "adb-execution",
+ "adb-plan-wire",
  "serde_json",
  "tempfile",
 ]
@@ -120,6 +121,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "adb-rust-demo"
+version = "0.2.3"
+dependencies = [
+ "adb-core",
+ "adb-engine",
+ "adb-execution",
+ "adb-plan-wire",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,9 +1,9 @@
-//! Milestone 2.0.3 data-plane benchmark.
+//! Adaptive DB data-plane benchmark (Milestone 2.1.3).
 //!
-//! Sections comparable with 2.0.2 (bulk load, point lookup, scan, plan parsing) plus the
-//! behaviours introduced in 2.0.3: single-row commit throughput with and without concurrency
-//! (group commit), heap size under update churn, entity scan, change-feed throughput and
-//! recovery time.
+//! Storage sections (comparable since 2.0.2): bulk load, point lookup, entity scan, change
+//! feed, single-row commits with and without concurrency (group commit), heap size under update
+//! churn and recovery time. Relational sections (2.1): hash join, nested-loop join, GROUP BY
+//! with SUM, full sort, TopK, and plan wire v2 encoding / decoding + validation.
 
 use std::{
     env,
@@ -16,7 +16,10 @@ use std::{
 
 use adb_core::{Row, RowId, Value};
 use adb_engine::{ChangeCursor, ChangeFilter, Database};
-use adb_execution::{BinaryOp, Expr, PhysicalPlan, ScanColumn, SlotId};
+use adb_execution::{
+    AggregateFunction, AggregateSpec, BinaryOp, Expr, JoinKey, JoinType, PhysicalPlan, ScanColumn,
+    SlotId, SortKey,
+};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -31,16 +34,26 @@ struct Args {
     iters: usize,
     /// Writer threads of the concurrent-commit section.
     threads: u64,
+    /// Rows of the dimension table (= groups) in the relational sections.
+    groups: u64,
+    /// Outer rows of the nested-loop join (it compares `nested_rows x groups` pairs).
+    nested_rows: u64,
+    /// Repetitions of each relational section (the mean is reported).
+    relational_iters: u32,
     /// Optional JSON report path.
     output: Option<PathBuf>,
 }
 
-/// Parses `--rows`, `--iters`, `--threads` and `--output`.
+/// Parses `--rows`, `--iters`, `--threads`, `--groups`, `--nested-rows`, `--relational-iters`
+/// and `--output`.
 fn parse_args() -> Result<Args> {
     let mut args = Args {
         rows: 5_000,
         iters: 1_000,
         threads: 8,
+        groups: 100,
+        nested_rows: 1_000,
+        relational_iters: 5,
         output: None,
     };
     let raw: Vec<String> = env::args().skip(1).collect();
@@ -51,6 +64,9 @@ fn parse_args() -> Result<Args> {
             "--rows" => args.rows = value.parse()?,
             "--iters" => args.iters = value.parse()?,
             "--threads" => args.threads = value.parse()?,
+            "--groups" => args.groups = value.parse()?,
+            "--nested-rows" => args.nested_rows = value.parse()?,
+            "--relational-iters" => args.relational_iters = value.parse()?,
             "--output" => args.output = Some(PathBuf::from(value)),
             other => return Err(format!("unknown argument: {other}").into()),
         }
@@ -97,10 +113,192 @@ fn count_rows(db: &Database, plan: PhysicalPlan) -> Result<usize> {
     Ok(rows)
 }
 
+/// Shorthand for a scan column mapping.
+fn col(field_id: u32, slot: u32) -> ScanColumn {
+    ScanColumn {
+        field_id,
+        slot: SlotId(slot),
+    }
+}
+
+/// Fact table (entity 11): slots 0 = id, 1 = group, 2 = amount.
+fn facts() -> PhysicalPlan {
+    PhysicalPlan::EntityScan {
+        entity_id: 11,
+        columns: vec![col(1, 0), col(2, 1), col(3, 2)],
+    }
+}
+
+/// Dimension table (entity 10): slots 3 = id, 4 = label.
+fn dims() -> PhysicalPlan {
+    PhysicalPlan::EntityScan {
+        entity_id: 10,
+        columns: vec![col(1, 3), col(2, 4)],
+    }
+}
+
+/// `amount DESC` sort key.
+fn by_amount_desc() -> Vec<SortKey> {
+    vec![SortKey {
+        slot: SlotId(2),
+        descending: true,
+    }]
+}
+
+/// `facts JOIN dims ON facts.group = dims.id`, then `SUM(amount)` per label, best 10 first.
+fn relational_pipeline() -> PhysicalPlan {
+    PhysicalPlan::TopK {
+        input: Box::new(PhysicalPlan::Aggregate {
+            input: Box::new(PhysicalPlan::HashJoin {
+                left: Box::new(facts()),
+                right: Box::new(dims()),
+                join_type: JoinType::Inner,
+                keys: vec![JoinKey {
+                    left: SlotId(1),
+                    right: SlotId(3),
+                }],
+                residual: None,
+            }),
+            group_by: vec![SlotId(4)],
+            aggregates: vec![AggregateSpec {
+                function: AggregateFunction::Sum,
+                input: Some(SlotId(2)),
+                output: SlotId(5),
+            }],
+        }),
+        keys: vec![SortKey {
+            slot: SlotId(5),
+            descending: true,
+        }],
+        limit: 10,
+    }
+}
+
+/// Mean milliseconds and output rows of `iters` executions of `plan`.
+fn time_plan(db: &Database, plan: &PhysicalPlan, iters: u32) -> Result<(f64, usize)> {
+    let mut rows = 0;
+    let start = Instant::now();
+    for _ in 0..iters.max(1) {
+        rows = count_rows(db, plan.clone())?;
+    }
+    Ok((
+        start.elapsed().as_secs_f64() * 1e3 / f64::from(iters.max(1)),
+        rows,
+    ))
+}
+
+/// Relational sections over a fact table of `args.rows` rows and a dimension of `args.groups`.
+fn relational(args: &Args) -> Result<serde_json::Value> {
+    let dir = tempdir()?;
+    let db = Database::open(dir.path())?;
+    let groups = args.groups.max(1);
+    let mut tx = db.begin();
+    for id in 0..groups {
+        tx.put(
+            RowId::compose(10, id),
+            Row::new()
+                .with_field(1, Value::Int64(id as i64))
+                .with_field(2, Value::String(format!("group-{id}"))),
+        );
+    }
+    db.commit(tx)?;
+    for base in (0..args.rows).step_by(500) {
+        let mut tx = db.begin();
+        for id in base..(base + 500).min(args.rows) {
+            tx.put(
+                RowId::compose(11, id),
+                Row::new()
+                    .with_field(1, Value::Int64(id as i64))
+                    .with_field(2, Value::Int64((id % groups) as i64))
+                    .with_field(3, Value::Int64(((id * 7919) % 1000) as i64)),
+            );
+        }
+        db.commit(tx)?;
+    }
+
+    let iters = args.relational_iters;
+    let hash_join = PhysicalPlan::HashJoin {
+        left: Box::new(facts()),
+        right: Box::new(dims()),
+        join_type: JoinType::Inner,
+        keys: vec![JoinKey {
+            left: SlotId(1),
+            right: SlotId(3),
+        }],
+        residual: None,
+    };
+    let nested_loop_join = PhysicalPlan::NestedLoopJoin {
+        left: Box::new(PhysicalPlan::Limit {
+            input: Box::new(facts()),
+            limit: args.nested_rows as usize,
+        }),
+        right: Box::new(dims()),
+        join_type: JoinType::Inner,
+        predicate: Some(Expr::Binary {
+            left: Box::new(Expr::Slot { slot: SlotId(1) }),
+            op: BinaryOp::Eq,
+            right: Box::new(Expr::Slot { slot: SlotId(3) }),
+        }),
+    };
+    let aggregate = PhysicalPlan::Aggregate {
+        input: Box::new(facts()),
+        group_by: vec![SlotId(1)],
+        aggregates: vec![AggregateSpec {
+            function: AggregateFunction::Sum,
+            input: Some(SlotId(2)),
+            output: SlotId(5),
+        }],
+    };
+    let sort = PhysicalPlan::Sort {
+        input: Box::new(facts()),
+        keys: by_amount_desc(),
+    };
+    let top_k = PhysicalPlan::TopK {
+        input: Box::new(facts()),
+        keys: by_amount_desc(),
+        limit: 10,
+    };
+
+    let mut report = serde_json::Map::new();
+    for (name, plan) in [
+        ("hash_join", &hash_join),
+        ("nested_loop_join", &nested_loop_join),
+        ("aggregate_sum_group_by", &aggregate),
+        ("sort", &sort),
+        ("top_k", &top_k),
+        ("join_aggregate_top_k", &relational_pipeline()),
+    ] {
+        let (ms, rows) = time_plan(&db, plan, iters)?;
+        println!("{name} rows_out={rows} ms={ms:.2}");
+        report.insert(name.to_string(), json!({"rows_out": rows, "ms": ms}));
+    }
+
+    let pipeline = relational_pipeline();
+    let start = Instant::now();
+    let mut encoded = Vec::new();
+    for _ in 0..args.iters {
+        encoded = adb_plan_wire::encode_json(&pipeline)?;
+    }
+    let encode = per_second(args.iters as u64, start.elapsed());
+    let start = Instant::now();
+    for _ in 0..args.iters {
+        black_box(adb_plan_wire::decode_json(&encoded)?);
+    }
+    let decode = per_second(args.iters as u64, start.elapsed());
+    println!("plan_wire_encode ops_s={encode:.0} plan_wire_decode_validate ops_s={decode:.0}");
+    report.insert("plan_wire_encode_ops_s".into(), json!(encode));
+    report.insert("plan_wire_decode_validate_ops_s".into(), json!(decode));
+    report.insert(
+        "setup".into(),
+        json!({"fact_rows": args.rows, "groups": groups, "nested_rows": args.nested_rows, "iters": iters}),
+    );
+    Ok(serde_json::Value::Object(report))
+}
+
 /// Runs every benchmark section and optionally writes a JSON report.
 fn main() -> Result<()> {
     let args = parse_args()?;
-    println!("Adaptive DB 2.0.3 Rust benchmark");
+    println!("Adaptive DB 2.1.3 Rust benchmark");
     println!(
         "rows={} iters={} threads={}",
         args.rows, args.iters, args.threads
@@ -175,7 +373,7 @@ fn main() -> Result<()> {
         full_scan.as_secs_f64() * 1e3
     );
 
-    // ---- plan JSON parsing ----------------------------------------------------------------------
+    // ---- plan JSON parsing (bare serde, comparable with 2.0.x) -----------------------------------
     let plan_json = serde_json::to_string(&PhysicalPlan::Limit {
         input: Box::new(PhysicalPlan::EntityScan {
             entity_id: 2,
@@ -284,9 +482,18 @@ fn main() -> Result<()> {
     black_box(db.get(RowId::compose(1, 0))?);
     println!("recovery rows={} ms={}", args.rows, recovery.as_millis());
 
+    // ---- relational execution (2.1) -----------------------------------------------------------
+    let relational = relational(&args)?;
+
     if let Some(path) = args.output {
         let report = json!({
-            "milestone": "2.0.3",
+            "milestone": "2.1.3",
+            "host": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "cpus": thread::available_parallelism().map_or(0, usize::from),
+                "build": if cfg!(debug_assertions) { "debug" } else { "release" },
+            },
             "rows": args.rows, "iters": args.iters, "threads": args.threads,
             "load": {"rows": loaded, "ms": load.as_millis(), "rows_s": per_second(loaded, load)},
             "point_lookup": {"ops_s": per_second(args.iters as u64, lookup),
@@ -298,6 +505,7 @@ fn main() -> Result<()> {
             "commit_single_row": {"one_thread_ops_s": commit_1, "n_threads_ops_s": commit_n},
             "churn_heap_pages": {"before": pages_before, "after": pages_after},
             "recovery_ms": recovery.as_millis(),
+            "relational": relational,
         });
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

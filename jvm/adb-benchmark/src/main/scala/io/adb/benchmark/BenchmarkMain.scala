@@ -1,18 +1,22 @@
 package io.adb.benchmark
 
-import io.adb.catalog.{FileCatalog, InMemoryCatalog}
+import io.adb.catalog.{Catalog, FileCatalog, InMemoryCatalog}
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.AdaptiveDatabase
-import io.adb.logical.{Binder, BoundSelect, LogicalPlanner}
+import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
 import io.adb.optimizer.RuleOptimizer
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
-import scala.util.Using
 
-/** Milestone 2.0.2 benchmark separating JVM planning cost from native end-to-end execution. */
+/** JVM benchmark (Milestone 2.1.3) separating JVM planning cost from native end-to-end execution.
+  *
+  * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
+  * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
+  * native engine.
+  */
 object BenchmarkMain:
   /** Command-line options.
     *
@@ -23,26 +27,48 @@ object BenchmarkMain:
     */
   private final case class Config(iterations: Int = 10000, gatewayIterations: Int = 1000, dataDir: Option[Path] = None, nativeLib: Option[Path] = None)
 
+  /** Point lookup used since 2.0. */
+  private val PointSql = "SELECT id, owner, balance FROM account WHERE id = 42 LIMIT 10;"
+  /** Relational query of 2.1: join, aggregate, ordered limit. */
+  private val RelationalSql =
+    "SELECT a.owner, COUNT(*) AS n, SUM(t.amount) AS total FROM account a JOIN transfer t ON t.account_id = a.id " +
+      "WHERE t.amount > 0 GROUP BY a.owner ORDER BY total DESC LIMIT 10;"
+
   /** Runs the planner benchmark, then the gateway benchmark when both `--data` and `--native-lib` are given. */
   def main(args: Array[String]): Unit =
     val cfg = parseArgs(args.toList, Config())
-    println(s"Adaptive DB 2.0.2 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
-    benchmarkPlanner(cfg.iterations)
+    println(s"Adaptive DB 2.1.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    val catalog = new InMemoryCatalog
+    createTables(catalog)
+    benchmarkPlanner("", PointSql, catalog, cfg.iterations)
+    benchmarkPlanner("_relational", RelationalSql, catalog, cfg.iterations)
     (cfg.dataDir, cfg.nativeLib) match
       case (Some(data), Some(lib)) => benchmarkGateway(cfg.gatewayIterations, data, lib)
       case _ => println("gateway/FFM benchmark skipped; pass --data DIR --native-lib FILE to enable it")
 
-  /** Times each planning stage (parse, bind, logical plan, optimize, physical plan, JSON encoding) and the whole pipeline for a point-lookup query, after a warm-up. */
-  private def benchmarkPlanner(iterations: Int): Unit =
-    val catalog = new InMemoryCatalog
+  /** DDL of the benchmark schema. */
+  private val Ddl = Vector(
+    "CREATE TABLE account (id BIGINT PRIMARY KEY, balance BIGINT NOT NULL, owner STRING);",
+    "CREATE TABLE transfer (id BIGINT PRIMARY KEY, account_id BIGINT NOT NULL, amount BIGINT NOT NULL);"
+  )
+
+  /** Registers the benchmark tables in an in-memory catalog. */
+  private def createTables(catalog: Catalog): Unit =
+    val parser = new SqlParser
+    val binder = new Binder(catalog)
+    Ddl.foreach { ddl =>
+      binder.bind(parser.parse(ddl)) match
+        case create: BoundCreateTable => catalog.createEntity(create.name, create.fields, create.primaryKey)
+        case _ => throw new IllegalStateException("expected CREATE TABLE")
+    }
+
+  /** Times each planning stage of `sql` (parse, bind, logical plan, optimize, physical plan,
+    * plan JSON encoding) and the whole pipeline, after a warm-up. Stage names get `suffix`.
+    */
+  private def benchmarkPlanner(suffix: String, sql: String, catalog: Catalog, iterations: Int): Unit =
     val parser = new SqlParser
     val binder = new Binder(catalog)
     val optimizer = new RuleOptimizer()
-    binder.bind(parser.parse("CREATE TABLE account (id BIGINT PRIMARY KEY, balance BIGINT NOT NULL, owner STRING);")) match
-      case create: io.adb.logical.BoundCreateTable => catalog.createEntity(create.name, create.fields, create.primaryKey)
-      case _ => throw new IllegalStateException("expected CREATE TABLE")
-
-    val sql = "SELECT id, owner, balance FROM account WHERE id = 42 LIMIT 10;"
     for _ <- 0 until math.min(1000, iterations) do pipeline(parser, binder, optimizer, sql)
 
     val parseNs = time(iterations) { parser.parse(sql) }
@@ -58,13 +84,13 @@ object BenchmarkMain:
     val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan) }
     val totalNs = time(iterations) { pipeline(parser, binder, optimizer, sql) }
 
-    report("sql_parse", iterations, parseNs)
-    report("bind", iterations, bindNs)
-    report("logical_plan", iterations, logicalNs)
-    report("optimize", iterations, optimizeNs)
-    report("physical_plan", iterations, physicalNs)
-    report("plan_json_encode", iterations, wireNs)
-    report("planner_pipeline", iterations, totalNs)
+    report(s"sql_parse$suffix", iterations, parseNs)
+    report(s"bind_slots$suffix", iterations, bindNs)
+    report(s"logical_plan$suffix", iterations, logicalNs)
+    report(s"rule_optimize$suffix", iterations, optimizeNs)
+    report(s"physical_plan$suffix", iterations, physicalNs)
+    report(s"plan_json_encode$suffix", iterations, wireNs)
+    report(s"planner_pipeline$suffix", iterations, totalNs)
 
   /** Runs the full planning pipeline for one SELECT and returns the native plan JSON. */
   private def pipeline(parser: SqlParser, binder: Binder, optimizer: RuleOptimizer, sql: String): String =
@@ -73,22 +99,29 @@ object BenchmarkMain:
     val optimized = optimizer.optimize(logical)
     PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan)
 
-  /** Times end-to-end SQL execution through FFM against a 1000-row table: point lookups and a filtered scan with LIMIT. */
+  /** Times end-to-end SQL execution through FFM: point lookups, a filtered scan with LIMIT,
+    * and the relational query over 1,000 accounts and 10,000 transfers.
+    */
   private def benchmarkGateway(iterations: Int, dataDir: Path, nativeLib: Path): Unit =
     Files.createDirectories(dataDir)
     val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
     try
       val db = new AdaptiveDatabase(catalog, native)
-      if catalog.entity("bench").isEmpty then
-        db.execute("CREATE TABLE bench (id BIGINT PRIMARY KEY, value BIGINT NOT NULL, label STRING);")
-        for i <- 1 to 1000 do db.execute(s"INSERT INTO bench VALUES ($i, ${i * 10L}, 'row-$i');")
+      if catalog.entity("account").isEmpty then
+        Ddl.foreach(db.execute)
+        for i <- 1 to 1000 do db.execute(s"INSERT INTO account VALUES ($i, ${i * 10L}, 'owner-${i % 50}');")
+        for i <- 1 to 10000 do db.execute(s"INSERT INTO transfer VALUES ($i, ${1 + i % 1000}, ${i % 97});")
 
-      for _ <- 0 until math.min(100, iterations) do db.execute("SELECT * FROM bench WHERE id = 500;")
-      val pointNs = time(iterations) { db.execute("SELECT * FROM bench WHERE id = 500;") }
-      val scanNs = time(math.max(1, iterations / 10)) { db.execute("SELECT id, value FROM bench WHERE value >= 9000 LIMIT 100;") }
+      for _ <- 0 until math.min(100, iterations) do db.execute("SELECT * FROM account WHERE id = 500;")
+      val pointNs = time(iterations) { db.execute("SELECT * FROM account WHERE id = 500;") }
+      val scanIterations = math.max(1, iterations / 10)
+      val scanNs = time(scanIterations) { db.execute("SELECT id, balance FROM account WHERE balance >= 9000 LIMIT 100;") }
+      val relationalIterations = math.max(1, iterations / 100)
+      val relationalNs = time(relationalIterations) { db.execute(RelationalSql) }
       report("gateway_point_lookup_sql_to_rust", iterations, pointNs)
-      report("gateway_scan_filter_limit_sql_to_rust", math.max(1, iterations / 10), scanNs)
+      report("gateway_scan_filter_limit_sql_to_rust", scanIterations, scanNs)
+      report("gateway_join_aggregate_top_k_sql_to_rust", relationalIterations, relationalNs)
     finally native.close()
 
   /** Runs `body` `iterations` times, keeping its result alive so the JIT cannot elide it.
@@ -109,7 +142,7 @@ object BenchmarkMain:
   private def report(name: String, iterations: Int, totalNs: Long): Unit =
     val nsOp = totalNs.toDouble / math.max(1, iterations)
     val ops = if totalNs == 0 then 0.0 else iterations.toDouble / (totalNs.toDouble / 1e9)
-    println(f"$name%-38s ops/s=$ops%12.0f ns/op=$nsOp%12.1f")
+    println(f"$name%-42s ops/s=$ops%12.0f ns/op=$nsOp%12.1f")
 
   /** Parses `--iterations`, `--gateway-iterations`, `--data` and `--native-lib` into `cfg`. */
   @tailrec

@@ -1,13 +1,14 @@
 [package]
-name = "adb-benchmark-rust"
+name = "adb-rust-demo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Relational execution demo: plan wire round trip, HashJoin, Aggregate, TopK, profile"
 
 [dependencies]
 adb-core = { path = "../../crates/adb-core" }
 adb-engine = { path = "../../crates/adb-engine" }
 adb-execution = { path = "../../crates/adb-execution" }
 adb-plan-wire = { path = "../../crates/adb-plan-wire" }
-tempfile.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
