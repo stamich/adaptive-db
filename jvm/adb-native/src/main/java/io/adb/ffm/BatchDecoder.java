@@ -7,10 +7,15 @@ import java.util.*;
 
 /** Strict decoder for the bounded ADB Batch Format v1 returned by the Rust engine. */
 final class BatchDecoder {
+    /** Magic prefix {@code "ADBB"} (little-endian) of every batch. */
     static final int MAGIC = 0x41444242;
+    /** Supported batch format version. */
     static final int VERSION = 1;
+    /** Largest accepted encoded batch, in bytes. */
     static final int MAX_BATCH_BYTES = 64 * 1024 * 1024;
+    /** Largest accepted row count per batch. */
     static final int MAX_ROWS = 1_000_000;
+    /** Largest accepted column count per batch. */
     static final int MAX_COLUMNS = 4096;
 
     /** Decodes one batch after validating all counts, lengths, offsets and remaining bytes. */

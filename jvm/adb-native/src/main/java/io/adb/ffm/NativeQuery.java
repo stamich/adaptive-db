@@ -5,8 +5,11 @@ import java.util.Optional;
 
 /** Owns one native query cursor and exposes bounded decoded batches. */
 public final class NativeQuery implements AutoCloseable {
+    /** Largest accepted native batch buffer, in bytes. */
     private static final long MAX_BATCH_BYTES = 64L * 1024 * 1024;
+    /** Native library that owns the downcall handles. */
     private final NativeLibrary library;
+    /** Native query cursor handle; {@code MemorySegment.NULL} once closed. */
     private MemorySegment handle;
 
     /** Creates a wrapper around a non-null query handle returned by the native ABI. */

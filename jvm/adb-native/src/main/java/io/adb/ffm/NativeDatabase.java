@@ -9,12 +9,18 @@ import java.util.OptionalLong;
 
 /** Safe-ish Java ownership wrapper around one native Adaptive DB database handle. */
 public final class NativeDatabase implements AutoCloseable {
+    /** Upper bound on the UTF-8 length of a database directory path. */
     private static final int MAX_PATH_BYTES = 64 * 1024;
+    /** Upper bound on the UTF-8 length of a JSON argument (plan, row, or field update). */
     private static final int MAX_JSON_BYTES = 8 * 1024 * 1024;
+    /** Upper bound on the size of a change-feed JSON response. */
     private static final long MAX_CHANGES_JSON_BYTES = 64L * 1024 * 1024;
+    /** Upper bound on the UTF-8 length of a CDC consumer name. */
     private static final int MAX_CONSUMER_NAME_BYTES = 256;
 
+    /** Loaded native library and its downcall handles. */
     private final NativeLibrary library;
+    /** Native database handle; {@code MemorySegment.NULL} once closed. */
     private MemorySegment handle;
 
     /** Opens the native library and one database directory. */

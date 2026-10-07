@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.*;
 import org.junit.jupiter.api.Test;
 
+/** Unit tests of {@link BatchDecoder}. */
 class BatchDecoderTest {
+    /** A hand-encoded one-row, one-INT64-column batch decodes to the expected row id and value. */
     @Test void decodesInt64Batch() {
         ByteBuffer b = ByteBuffer.allocate(16 + 16 + 16 + 1 + 8)
             .order(ByteOrder.LITTLE_ENDIAN);

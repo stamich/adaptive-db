@@ -1,10 +1,23 @@
-/** Java FFM -> native engine smoke test of ABI v3: change feed, offsets, vacuum, entity scan. Needs only a JDK 22. */
 import io.adb.ffm.*;
 import java.nio.file.*;
 import java.util.Optional;
 
+/** Java FFM -> native engine smoke test of ABI v3: change feed, offsets, vacuum, entity scan. Needs only a JDK 22. */
 public class CdcSmoke {
+    /**
+     * Fails the smoke test unless {@code ok} holds, otherwise prints a pass line.
+     *
+     * @param ok   condition that must be true
+     * @param what human-readable description of the check
+     */
     static void check(boolean ok, String what) { if (!ok) throw new AssertionError(what); System.out.println("ok  " + what); }
+    /**
+     * Runs the scenario: writes, reads the change feed, stores a consumer offset, vacuums, scans,
+     * checks error statuses, then reopens the database and verifies the offset and new events.
+     *
+     * @param args {@code args[0]} is the path of the native library
+     * @throws Exception on any unexpected failure
+     */
     public static void main(String[] args) throws Exception {
         Path lib = Path.of(args[0]);
         Path data = Files.createTempDirectory("adb-e2e");
