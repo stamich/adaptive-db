@@ -32,9 +32,9 @@ impl Operator for FilterOperator {
             };
 
             let mut out = Vec::with_capacity(batch.len());
-            for (row_id, row) in batch {
+            for row in batch {
                 if self.predicate.evaluate_bool(&row)? {
-                    out.push((row_id, row));
+                    out.push(row);
                 }
             }
 

@@ -1,13 +1,17 @@
-//! Scalar expressions evaluated per row (filters and projections).
+//! Scalar expressions evaluated per operator row (filters, join conditions).
+//!
+//! Since 2.1 expressions address values by [`SlotId`], never by storage `FieldId`, so the same
+//! expression works on scan output, join output (where two relations may share field ids) and
+//! aggregate output.
 use std::cmp::Ordering;
 
-use adb_core::{FieldId, Row, Value};
+use adb_core::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::ExecutionError;
+use crate::{limits::MAX_EXPR_DEPTH, ExecRow, ExecutionError, SlotId};
 
 /// Comparison and boolean operators.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinaryOp {
     /// Equal.
@@ -29,13 +33,13 @@ pub enum BinaryOp {
 }
 
 /// Expression tree; the serde form is part of the plan wire format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expr {
-    /// Value of a field of the current row.
-    Column {
-        /// Field to read.
-        field_id: FieldId,
+    /// Value of a slot of the current row.
+    Slot {
+        /// Slot to read.
+        slot: SlotId,
     },
     /// Constant.
     Literal {
@@ -66,14 +70,12 @@ impl Expr {
 
     /// Depth-bounded validation helper.
     fn validate_depth(&self, depth: usize) -> Result<(), String> {
-        /// Deepest expression tree accepted.
-        const MAX_EXPR_DEPTH: usize = 128;
         if depth > MAX_EXPR_DEPTH {
             return Err(format!("expression depth exceeds {MAX_EXPR_DEPTH}"));
         }
 
         match self {
-            Self::Column { .. } | Self::Literal { .. } => Ok(()),
+            Self::Slot { .. } | Self::Literal { .. } => Ok(()),
             Self::Binary { left, right, .. } => {
                 left.validate_depth(depth + 1)?;
                 right.validate_depth(depth + 1)
@@ -82,8 +84,28 @@ impl Expr {
         }
     }
 
+    /// Every slot the expression reads (used to check slots against the input's output).
+    pub fn referenced_slots(&self) -> Vec<SlotId> {
+        let mut out = Vec::new();
+        self.collect_slots(&mut out);
+        out
+    }
+
+    /// Recursive helper of [`Expr::referenced_slots`] (depth is bounded by validation).
+    fn collect_slots(&self, out: &mut Vec<SlotId>) {
+        match self {
+            Self::Slot { slot } => out.push(*slot),
+            Self::Literal { .. } => {}
+            Self::Binary { left, right, .. } => {
+                left.collect_slots(out);
+                right.collect_slots(out);
+            }
+            Self::Not { expr } => expr.collect_slots(out),
+        }
+    }
+
     /// Evaluates as a predicate; NULL counts as false.
-    pub fn evaluate_bool(&self, row: &Row) -> Result<bool, ExecutionError> {
+    pub fn evaluate_bool(&self, row: &ExecRow) -> Result<bool, ExecutionError> {
         match self.evaluate(row)? {
             Value::Bool(value) => Ok(value),
             Value::Null => Ok(false),
@@ -93,10 +115,10 @@ impl Expr {
         }
     }
 
-    /// Evaluates against one row; absent fields are NULL.
-    pub fn evaluate(&self, row: &Row) -> Result<Value, ExecutionError> {
+    /// Evaluates against one row.
+    pub fn evaluate(&self, row: &ExecRow) -> Result<Value, ExecutionError> {
         match self {
-            Self::Column { field_id } => Ok(row.get(*field_id).cloned().unwrap_or(Value::Null)),
+            Self::Slot { slot } => Ok(row.get(*slot).clone()),
 
             Self::Literal { value } => Ok(value.clone()),
 
@@ -163,8 +185,8 @@ fn as_bool(value: &Value) -> Result<bool, ExecutionError> {
     }
 }
 
-/// Orders two non-null values of compatible types.
-fn compare(left: &Value, right: &Value) -> Result<Ordering, ExecutionError> {
+/// Orders two non-null values of compatible types (shared with Sort, TopK and MIN/MAX).
+pub(crate) fn compare(left: &Value, right: &Value) -> Result<Ordering, ExecutionError> {
     match (left, right) {
         (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
         (Value::Int64(a), Value::Int64(b)) => Ok(a.cmp(b)),

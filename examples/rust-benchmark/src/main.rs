@@ -16,7 +16,7 @@ use std::{
 
 use adb_core::{Row, RowId, Value};
 use adb_engine::{ChangeCursor, ChangeFilter, Database};
-use adb_execution::{BinaryOp, Expr, PhysicalPlan};
+use adb_execution::{BinaryOp, Expr, PhysicalPlan, ScanColumn, SlotId};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -76,6 +76,14 @@ fn percentiles(mut samples: Vec<u128>) -> (u128, u128, u128) {
     samples.sort_unstable();
     let at = |p: f64| samples[((samples.len() - 1) as f64 * p).round() as usize];
     (at(0.50), at(0.95), at(0.99))
+}
+
+/// Field 1 of every row, read into slot 0.
+fn field_1() -> Vec<ScanColumn> {
+    vec![ScanColumn {
+        field_id: 1,
+        slot: SlotId(0),
+    }]
 }
 
 /// Executes `plan` and counts the rows it returns.
@@ -138,15 +146,21 @@ fn main() -> Result<()> {
 
     // ---- entity scan vs full scan + filter (the 2.0.2 plan shape) -----------------------------
     let start = Instant::now();
-    let entity_rows = count_rows(&db, PhysicalPlan::EntityScan { entity_id: 2 })?;
+    let entity_rows = count_rows(
+        &db,
+        PhysicalPlan::EntityScan {
+            entity_id: 2,
+            columns: field_1(),
+        },
+    )?;
     let entity_scan = start.elapsed();
     let start = Instant::now();
     let filtered_rows = count_rows(
         &db,
         PhysicalPlan::Filter {
-            input: Box::new(PhysicalPlan::Scan),
+            input: Box::new(PhysicalPlan::Scan { columns: field_1() }),
             predicate: Expr::Binary {
-                left: Box::new(Expr::Column { field_id: 1 }),
+                left: Box::new(Expr::Slot { slot: SlotId(0) }),
                 op: BinaryOp::Ge,
                 right: Box::new(Expr::Literal {
                     value: Value::Int64(0),
@@ -163,7 +177,10 @@ fn main() -> Result<()> {
 
     // ---- plan JSON parsing ----------------------------------------------------------------------
     let plan_json = serde_json::to_string(&PhysicalPlan::Limit {
-        input: Box::new(PhysicalPlan::EntityScan { entity_id: 2 }),
+        input: Box::new(PhysicalPlan::EntityScan {
+            entity_id: 2,
+            columns: field_1(),
+        }),
         limit: 100,
     })?;
     let start = Instant::now();

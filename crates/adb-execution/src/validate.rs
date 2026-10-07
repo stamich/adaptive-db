@@ -1,0 +1,150 @@
+//! Structural validation of physical plans.
+//!
+//! Validation runs once, before any operator is built, and guarantees everything operators
+//! later rely on without re-checking: bounded depth and list sizes, slot ids below
+//! [`MAX_SLOTS`], no slot produced twice, and every slot an operator reads is produced by its
+//! input. Operators can then index [`crate::ExecRow`] values without bounds surprises.
+use std::collections::HashSet;
+
+use crate::{
+    limits::{MAX_LIMIT, MAX_LIST_LEN, MAX_PLAN_DEPTH, MAX_SLOTS},
+    Expr, PhysicalPlan, ScanColumn, SlotId,
+};
+
+/// What validation learned about a plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanShape {
+    /// Length of every [`crate::ExecRow`] of the query: highest slot used plus one.
+    pub width: usize,
+    /// Slots of the root's output, in output-column order.
+    pub output: Vec<SlotId>,
+}
+
+impl PhysicalPlan {
+    /// Validates the whole plan and returns its shape.
+    pub fn validate(&self) -> Result<PlanShape, String> {
+        let mut validator = Validator { width: 0 };
+        let output = validator.node(self, 0)?;
+        Ok(PlanShape {
+            width: validator.width,
+            output,
+        })
+    }
+}
+
+/// Walks the plan bottom-up, tracking the highest slot seen.
+struct Validator {
+    /// Highest slot id seen plus one.
+    width: usize,
+}
+
+impl Validator {
+    /// Validates one node and returns the slots it outputs.
+    fn node(&mut self, plan: &PhysicalPlan, depth: usize) -> Result<Vec<SlotId>, String> {
+        if depth > MAX_PLAN_DEPTH {
+            return Err(format!("physical plan depth exceeds {MAX_PLAN_DEPTH}"));
+        }
+        match plan {
+            PhysicalPlan::PointLookup { columns, .. }
+            | PhysicalPlan::Scan { columns }
+            | PhysicalPlan::EntityScan { columns, .. } => self.scan_columns(columns),
+
+            PhysicalPlan::Filter { input, predicate } => {
+                let output = self.node(input, depth + 1)?;
+                self.expr(predicate, &output, "filter predicate")?;
+                Ok(output)
+            }
+
+            PhysicalPlan::Project { input, slots } => {
+                let output = self.node(input, depth + 1)?;
+                self.list("projected slots", slots.len())?;
+                distinct("projected slots", slots)?;
+                require_all(slots, &output, "project")?;
+                Ok(slots.clone())
+            }
+
+            PhysicalPlan::Limit { input, limit } => {
+                check_limit("LIMIT", *limit)?;
+                self.node(input, depth + 1)
+            }
+        }
+    }
+
+    /// Checks a leaf's field-to-slot mapping and returns its slots.
+    fn scan_columns(&mut self, columns: &[ScanColumn]) -> Result<Vec<SlotId>, String> {
+        self.list("scan columns", columns.len())?;
+        let slots: Vec<SlotId> = columns.iter().map(|column| column.slot).collect();
+        self.new_slots(&slots, "scan columns")?;
+        Ok(slots)
+    }
+
+    /// Checks slots an operator *produces*: in range and unique.
+    fn new_slots(&mut self, slots: &[SlotId], what: &str) -> Result<(), String> {
+        distinct(what, slots)?;
+        for slot in slots {
+            self.slot(*slot)?;
+        }
+        Ok(())
+    }
+
+    /// Checks that one slot id is in range and records it in the row width.
+    fn slot(&mut self, slot: SlotId) -> Result<(), String> {
+        if slot.0 >= MAX_SLOTS {
+            return Err(format!(
+                "slot {slot} exceeds the limit of {MAX_SLOTS} slots"
+            ));
+        }
+        self.width = self.width.max(slot.index() + 1);
+        Ok(())
+    }
+
+    /// Checks an expression's depth and that it only reads slots in `available`.
+    fn expr(&mut self, expr: &Expr, available: &[SlotId], what: &str) -> Result<(), String> {
+        expr.validate()?;
+        require_all(&expr.referenced_slots(), available, what)
+    }
+
+    /// Checks a list length against [`MAX_LIST_LEN`].
+    fn list(&self, what: &str, len: usize) -> Result<(), String> {
+        if len > MAX_LIST_LEN {
+            return Err(format!("{what}: {len} entries exceed {MAX_LIST_LEN}"));
+        }
+        Ok(())
+    }
+}
+
+/// Checks a LIMIT-like row count against [`MAX_LIMIT`].
+pub(crate) fn check_limit(what: &str, limit: usize) -> Result<(), String> {
+    if limit > MAX_LIMIT {
+        return Err(format!("{what} {limit} exceeds {MAX_LIMIT}"));
+    }
+    Ok(())
+}
+
+/// Fails if `slots` contains a duplicate.
+pub(crate) fn distinct(what: &str, slots: &[SlotId]) -> Result<(), String> {
+    let mut seen = HashSet::with_capacity(slots.len());
+    for slot in slots {
+        if !seen.insert(*slot) {
+            return Err(format!("{what}: slot {slot} appears twice"));
+        }
+    }
+    Ok(())
+}
+
+/// Fails unless every slot of `needed` is in `available`.
+pub(crate) fn require_all(
+    needed: &[SlotId],
+    available: &[SlotId],
+    what: &str,
+) -> Result<(), String> {
+    let available: HashSet<SlotId> = available.iter().copied().collect();
+    for slot in needed {
+        if !available.contains(slot) {
+            return Err(format!(
+                "{what} reads slot {slot}, which its input does not produce"
+            ));
+        }
+    }
+    Ok(())
+}

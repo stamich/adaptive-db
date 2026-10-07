@@ -4,6 +4,21 @@ mod common;
 use adb_core::{CommitTs, RowId};
 use adb_engine::{Database, DbError, IsolationLevel};
 use adb_execution::PhysicalPlan;
+
+/// Entity scan of `entity` reading no fields (only keys are inspected).
+fn entity_scan(entity: u64) -> PhysicalPlan {
+    PhysicalPlan::EntityScan {
+        entity_id: entity,
+        columns: Vec::new(),
+    }
+}
+
+/// Full scan of every entity reading no fields.
+fn full_scan() -> PhysicalPlan {
+    PhysicalPlan::Scan {
+        columns: Vec::new(),
+    }
+}
 use tempfile::tempdir;
 
 use common::{delete, put, read_i64, row_with_i64, value};
@@ -28,10 +43,16 @@ fn count(db: &Database, plan: PhysicalPlan, at: Option<CommitTs>) -> usize {
 
 /// Primary keys returned by an entity scan, in order.
 fn entity_keys(db: &Database, entity: u64, at: Option<CommitTs>) -> Vec<u64> {
-    let mut cursor = cursor(db, PhysicalPlan::EntityScan { entity_id: entity }, at);
+    let mut cursor = cursor(db, entity_scan(entity), at);
     let mut keys = Vec::new();
     while let Some(batch) = cursor.next_batch().unwrap() {
-        keys.extend(batch.row_ids.iter().map(|row_id| row_id.primary_key()));
+        keys.extend(
+            batch
+                .row_ids
+                .iter()
+                .flatten()
+                .map(|row_id| row_id.primary_key()),
+        );
     }
     keys
 }
@@ -48,7 +69,7 @@ fn entity_scan_streams_only_its_entity() {
     }
     let keys = entity_keys(&db, 2, None);
     assert_eq!(keys, (0..1500).collect::<Vec<_>>());
-    assert_eq!(count(&db, PhysicalPlan::Scan, None), 4500);
+    assert_eq!(count(&db, full_scan(), None), 4500);
 }
 
 /// Repeated updates no longer leak heap space (regression for the 2.0.2 append-only heap).
@@ -116,7 +137,7 @@ fn vacuum_is_persisted_by_checkpoint() {
     }
     let db = Database::open(dir.path()).unwrap();
     assert_eq!(db.storage_stats().unwrap().current_rows, 0);
-    assert_eq!(count(&db, PhysicalPlan::Scan, Some(before_delete)), 1);
+    assert_eq!(count(&db, full_scan(), Some(before_delete)), 1);
 }
 
 /// A tombstone that a live transaction may still conflict with is kept, so its stale write

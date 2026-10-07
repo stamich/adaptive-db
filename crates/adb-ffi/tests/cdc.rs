@@ -155,7 +155,7 @@ fn entity_scan_plan_json_executes_over_the_c_abi() {
         insert(db, 7, pk, pk as i64);
         insert(db, 8, pk, pk as i64);
     }
-    let plan = br#"{"op":"entity_scan","entity_id":7}"#;
+    let plan = br#"{"op":"entity_scan","entity_id":7,"columns":[{"field_id":1,"slot":0}]}"#;
     let mut query = ptr::null_mut();
     assert_eq!(
         adb_execute_plan_json(db, plan.as_ptr(), plan.len(), &mut query),

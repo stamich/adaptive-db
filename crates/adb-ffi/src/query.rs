@@ -2,7 +2,7 @@
 
 use std::slice;
 
-use adb_execution::{encode_batch_v1, PhysicalPlan};
+use adb_execution::{encode_batch, PhysicalPlan};
 use parking_lot::Mutex;
 
 use crate::{
@@ -105,7 +105,7 @@ pub extern "C" fn adb_query_next_batch(
         }
         match unsafe { &*query }.cursor.lock().next_batch() {
             Ok(Some(batch)) => {
-                let bytes = encode_batch_v1(&batch)
+                let bytes = encode_batch(&batch)
                     .map_err(|error| (AdbStatus::Internal, error.to_string()))?
                     .into_boxed_slice();
                 unsafe { *out_batch = Box::into_raw(Box::new(AdbBatchHandle { bytes })) };

@@ -5,7 +5,7 @@ use adb_core::RowId;
 
 use crate::{
     operator::{Operator, RowBatch},
-    DataSource, ExecutionContext, ExecutionError,
+    DataSource, ExecRow, ExecutionContext, ExecutionError, ScanColumn,
 };
 
 /// Emits at most one row: `row_id` as of the query snapshot.
@@ -16,15 +16,26 @@ pub struct PointLookupOperator {
     row_id: RowId,
     /// Whether the lookup already ran.
     done: bool,
+    /// Stored fields to read and their slots.
+    columns: Vec<ScanColumn>,
+    /// Slot width of the row produced.
+    width: usize,
 }
 
 impl PointLookupOperator {
-    /// Looks up `row_id` in `source`.
-    pub fn new(source: Arc<dyn DataSource>, row_id: RowId) -> Self {
+    /// Looks up `row_id` in `source`, writing `columns` into a row of `width` slots.
+    pub fn new(
+        source: Arc<dyn DataSource>,
+        row_id: RowId,
+        columns: Vec<ScanColumn>,
+        width: usize,
+    ) -> Self {
         Self {
             source,
             row_id,
             done: false,
+            columns,
+            width,
         }
     }
 }
@@ -44,6 +55,13 @@ impl Operator for PointLookupOperator {
         Ok(self
             .source
             .point_lookup(self.row_id, context.snapshot_ts)?
-            .map(|row| vec![(self.row_id, row)]))
+            .map(|row| {
+                vec![ExecRow::from_stored(
+                    self.row_id,
+                    &row,
+                    &self.columns,
+                    self.width,
+                )]
+            }))
     }
 }

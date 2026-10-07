@@ -9,7 +9,7 @@ use crate::{
         filter::FilterOperator, limit::LimitOperator, point_lookup::PointLookupOperator,
         project::ProjectOperator, scan::ScanOperator, Operator,
     },
-    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch,
+    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
 };
 
 /// Plan validation and operator-tree construction.
@@ -22,11 +22,12 @@ impl Executor {
         plan: PhysicalPlan,
         context: ExecutionContext,
     ) -> Result<QueryCursor, ExecutionError> {
-        plan.validate().map_err(ExecutionError::InvalidPlan)?;
-        let root = build_operator(source, plan)?;
+        let shape = plan.validate().map_err(ExecutionError::InvalidPlan)?;
+        let root = build_operator(source, plan, shape.width)?;
 
         Ok(QueryCursor {
             root,
+            output: shape.output,
             context,
             metrics: Mutex::new(QueryMetrics::default()),
         })
@@ -37,6 +38,8 @@ impl Executor {
 pub struct QueryCursor {
     /// Root of the operator tree.
     root: Box<dyn Operator>,
+    /// Output slots of the root, in output-column order.
+    output: Vec<SlotId>,
     /// Snapshot, limits and cancellation of the query.
     context: ExecutionContext,
     /// Counters updated on every batch.
@@ -51,7 +54,7 @@ impl QueryCursor {
             return Ok(None);
         };
 
-        let batch = RecordBatch::from_rows(&rows)?;
+        let batch = RecordBatch::from_rows(&rows, &self.output)?;
         let estimated = batch.estimated_heap_bytes();
         if estimated > self.context.memory_limit_bytes {
             return Err(ExecutionError::ResourceLimit(format!(
@@ -70,6 +73,11 @@ impl QueryCursor {
         self.context.cancellation.cancel();
     }
 
+    /// Output slots of the query, in output-column order.
+    pub fn output_slots(&self) -> &[SlotId] {
+        &self.output
+    }
+
     /// Counters accumulated so far.
     pub fn metrics(&self) -> QueryMetrics {
         *self.metrics.lock()
@@ -81,32 +89,43 @@ impl QueryCursor {
     }
 }
 
-/// Recursively instantiates the operator for each plan node.
+/// Recursively instantiates the operator for each plan node; rows are `width` slots wide.
 fn build_operator(
     source: Arc<dyn DataSource>,
     plan: PhysicalPlan,
+    width: usize,
 ) -> Result<Box<dyn Operator>, ExecutionError> {
+    let child = |input: Box<PhysicalPlan>| build_operator(source.clone(), *input, width);
     Ok(match plan {
-        PhysicalPlan::PointLookup { row_id } => Box::new(PointLookupOperator::new(source, row_id)),
-
-        PhysicalPlan::Scan => Box::new(ScanOperator::new(source, KeyRange::all())),
-
-        PhysicalPlan::EntityScan { entity_id } => {
-            Box::new(ScanOperator::new(source, KeyRange::entity(entity_id)))
-        }
-
-        PhysicalPlan::Filter { input, predicate } => Box::new(FilterOperator::new(
-            build_operator(source, *input)?,
-            predicate,
+        PhysicalPlan::PointLookup { row_id, columns } => Box::new(PointLookupOperator::new(
+            source.clone(),
+            row_id,
+            columns,
+            width,
         )),
 
-        PhysicalPlan::Project { input, fields } => Box::new(ProjectOperator::new(
-            build_operator(source, *input)?,
-            fields,
+        PhysicalPlan::Scan { columns } => Box::new(ScanOperator::new(
+            source.clone(),
+            KeyRange::all(),
+            columns,
+            width,
         )),
 
-        PhysicalPlan::Limit { input, limit } => {
-            Box::new(LimitOperator::new(build_operator(source, *input)?, limit))
+        PhysicalPlan::EntityScan { entity_id, columns } => Box::new(ScanOperator::new(
+            source.clone(),
+            KeyRange::entity(entity_id),
+            columns,
+            width,
+        )),
+
+        PhysicalPlan::Filter { input, predicate } => {
+            Box::new(FilterOperator::new(child(input)?, predicate))
         }
+
+        PhysicalPlan::Project { input, slots } => {
+            Box::new(ProjectOperator::new(child(input)?, slots))
+        }
+
+        PhysicalPlan::Limit { input, limit } => Box::new(LimitOperator::new(child(input)?, limit)),
     })
 }

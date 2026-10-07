@@ -1,11 +1,14 @@
-//! Physical plans accepted by the native engine (JSON wire form, see docs/plan-wire-format.md).
-use adb_core::{FieldId, RowId};
+//! Physical plans accepted by the native engine (JSON wire form: docs/plan-wire-format.md).
+//!
+//! Every node works on [`SlotId`]s. Leaf nodes carry a `columns` list that maps stored
+//! `FieldId`s to slots; that mapping is the only place where storage field ids appear.
+use adb_core::RowId;
 use serde::{Deserialize, Serialize};
 
-use crate::Expr;
+use crate::{Expr, ScanColumn, SlotId};
 
 /// One node of a physical plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum PhysicalPlan {
     /// Reads one row by storage key.
@@ -13,15 +16,22 @@ pub enum PhysicalPlan {
         /// `(entity << 64) | primary key`; a decimal string on the wire.
         #[serde(with = "row_id_json")]
         row_id: RowId,
+        /// Stored fields to read and the slots they are written to.
+        columns: Vec<ScanColumn>,
     },
 
     /// Every row of every entity (diagnostics; prefer `EntityScan`).
-    Scan,
+    Scan {
+        /// Stored fields to read and the slots they are written to.
+        columns: Vec<ScanColumn>,
+    },
 
-    /// Every row of one entity, read as a key-range scan over `(entity << 64, (entity+1) << 64)`.
+    /// Every row of one entity, read as a key-range scan over `[entity << 64, (entity+1) << 64)`.
     EntityScan {
         /// Entity (table) id.
         entity_id: u64,
+        /// Stored fields to read and the slots they are written to.
+        columns: Vec<ScanColumn>,
     },
 
     /// Keeps rows matching a predicate.
@@ -32,50 +42,33 @@ pub enum PhysicalPlan {
         predicate: Expr,
     },
 
-    /// Keeps only some fields.
+    /// Selects and orders the output columns.
     Project {
         /// Plan producing the rows.
         input: Box<PhysicalPlan>,
-        /// Fields to keep.
-        fields: Vec<FieldId>,
+        /// Output slots, in output-column order.
+        slots: Vec<SlotId>,
     },
 
     /// Stops after a number of rows.
     Limit {
         /// Plan producing the rows.
         input: Box<PhysicalPlan>,
-        /// Maximum number of rows.
+        /// Maximum number of rows (at most [`crate::limits::MAX_LIMIT`]).
         limit: usize,
     },
 }
 
 impl PhysicalPlan {
-    /// Rejects plans and expressions beyond the hardened depth/size limits.
-    pub fn validate(&self) -> Result<(), String> {
-        self.validate_depth(0)
-    }
-
-    /// Depth-bounded validation helper.
-    fn validate_depth(&self, depth: usize) -> Result<(), String> {
-        /// Deepest plan accepted.
-        const MAX_PLAN_DEPTH: usize = 128;
-        if depth > MAX_PLAN_DEPTH {
-            return Err(format!("physical plan depth exceeds {MAX_PLAN_DEPTH}"));
-        }
-
+    /// Child plans, left to right.
+    pub fn children(&self) -> Vec<&PhysicalPlan> {
         match self {
-            Self::PointLookup { .. } | Self::Scan | Self::EntityScan { .. } => Ok(()),
-            Self::Filter { input, predicate } => {
-                predicate.validate()?;
-                input.validate_depth(depth + 1)
+            Self::PointLookup { .. } | Self::Scan { .. } | Self::EntityScan { .. } => Vec::new(),
+            Self::Filter { input, .. }
+            | Self::Project { input, .. }
+            | Self::Limit { input, .. } => {
+                vec![input]
             }
-            Self::Project { input, fields } => {
-                if fields.len() > 4096 {
-                    return Err("too many projected fields".to_string());
-                }
-                input.validate_depth(depth + 1)
-            }
-            Self::Limit { input, .. } => input.validate_depth(depth + 1),
         }
     }
 }
@@ -106,7 +99,9 @@ mod row_id_json {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum WireRowId {
+            /// Canonical form: the full `u128` as a decimal string.
             Decimal(String),
+            /// Legacy form: a JSON number that fits in `u64`.
             LegacyNumber(u64),
         }
 
