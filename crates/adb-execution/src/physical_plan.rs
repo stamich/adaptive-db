@@ -90,6 +90,78 @@ pub enum PhysicalPlan {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         predicate: Option<Expr>,
     },
+
+    /// GROUP BY + aggregate functions (blocking, memory-accounted).
+    ///
+    /// Output rows carry the `group_by` slots followed by every aggregate's `output` slot.
+    /// Without `group_by`, exactly one row is produced (also for empty input).
+    Aggregate {
+        /// Plan producing the rows.
+        input: Box<PhysicalPlan>,
+        /// Grouping slots; NULLs form one group.
+        group_by: Vec<SlotId>,
+        /// Aggregates computed per group.
+        aggregates: Vec<AggregateSpec>,
+    },
+
+    /// Full sort (blocking, memory-accounted).
+    Sort {
+        /// Plan producing the rows.
+        input: Box<PhysicalPlan>,
+        /// Sort keys, most significant first.
+        keys: Vec<SortKey>,
+    },
+
+    /// The first `limit` rows in `keys` order: `Limit(Sort)` without sorting everything.
+    TopK {
+        /// Plan producing the rows.
+        input: Box<PhysicalPlan>,
+        /// Sort keys, most significant first.
+        keys: Vec<SortKey>,
+        /// Rows kept (at most [`crate::limits::MAX_LIMIT`]).
+        limit: usize,
+    },
+}
+
+/// Aggregate functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregateFunction {
+    /// `COUNT(*)` without input slot, `COUNT(x)` (non-NULL values) with one. Result: INT64.
+    Count,
+    /// Sum of INT64 (exact, overflow is an error) or FLOAT64 values; NULL for no values.
+    Sum,
+    /// Smallest value; NULL for no values.
+    Min,
+    /// Largest value; NULL for no values.
+    Max,
+    /// Arithmetic mean as FLOAT64; NULL for no values.
+    Avg,
+}
+
+/// One aggregate of an [`PhysicalPlan::Aggregate`] node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AggregateSpec {
+    /// Function to compute.
+    pub function: AggregateFunction,
+    /// Input slot; only `Count` may omit it (`COUNT(*)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<SlotId>,
+    /// Slot the result is written to.
+    pub output: SlotId,
+}
+
+/// One key of a sort.
+///
+/// NULLs sort after every value in ascending order and before every value in descending order
+/// (PostgreSQL's default `NULLS LAST` / `NULLS FIRST`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SortKey {
+    /// Slot compared.
+    pub slot: SlotId,
+    /// Descending instead of ascending.
+    #[serde(default)]
+    pub descending: bool,
 }
 
 /// Join semantics.
@@ -118,7 +190,10 @@ impl PhysicalPlan {
             Self::PointLookup { .. } | Self::Scan { .. } | Self::EntityScan { .. } => Vec::new(),
             Self::Filter { input, .. }
             | Self::Project { input, .. }
-            | Self::Limit { input, .. } => {
+            | Self::Limit { input, .. }
+            | Self::Aggregate { input, .. }
+            | Self::Sort { input, .. }
+            | Self::TopK { input, .. } => {
                 vec![input]
             }
             Self::HashJoin { left, right, .. } | Self::NestedLoopJoin { left, right, .. } => {
@@ -135,7 +210,19 @@ impl PhysicalPlan {
             | Self::EntityScan { columns, .. } => {
                 columns.iter().map(|column| column.slot).collect()
             }
-            Self::Filter { input, .. } | Self::Limit { input, .. } => input.output_slots(),
+            Self::Filter { input, .. }
+            | Self::Limit { input, .. }
+            | Self::Sort { input, .. }
+            | Self::TopK { input, .. } => input.output_slots(),
+            Self::Aggregate {
+                group_by,
+                aggregates,
+                ..
+            } => group_by
+                .iter()
+                .copied()
+                .chain(aggregates.iter().map(|aggregate| aggregate.output))
+                .collect(),
             Self::Project { slots, .. } => slots.clone(),
             Self::HashJoin { left, right, .. } | Self::NestedLoopJoin { left, right, .. } => {
                 [left.output_slots(), right.output_slots()].concat()

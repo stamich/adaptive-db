@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::{
     limits::{MAX_LIMIT, MAX_LIST_LEN, MAX_PLAN_DEPTH, MAX_SLOTS},
-    Expr, PhysicalPlan, ScanColumn, SlotId,
+    AggregateFunction, Expr, PhysicalPlan, ScanColumn, SlotId, SortKey,
 };
 
 /// What validation learned about a plan.
@@ -104,7 +104,66 @@ impl Validator {
                 }
                 Ok(output)
             }
+
+            PhysicalPlan::Aggregate {
+                input,
+                group_by,
+                aggregates,
+            } => {
+                let input_out = self.node(input, depth + 1)?;
+                if group_by.is_empty() && aggregates.is_empty() {
+                    return Err("aggregate needs grouping slots or aggregates".into());
+                }
+                self.list("group by slots", group_by.len())?;
+                self.list("aggregates", aggregates.len())?;
+                distinct("group by slots", group_by)?;
+                require_all(group_by, &input_out, "group by")?;
+                for aggregate in aggregates {
+                    match aggregate.input {
+                        Some(slot) => require_all(&[slot], &input_out, "aggregate input")?,
+                        None if aggregate.function == AggregateFunction::Count => {}
+                        None => {
+                            return Err(format!("{:?} needs an input slot", aggregate.function))
+                        }
+                    }
+                }
+                let outputs: Vec<SlotId> = aggregates.iter().map(|a| a.output).collect();
+                for slot in &outputs {
+                    if input_out.contains(slot) {
+                        return Err(format!(
+                            "aggregate output slot {slot} is already produced by the input"
+                        ));
+                    }
+                }
+                self.new_slots(&outputs, "aggregate outputs")?;
+                let output = [group_by.as_slice(), outputs.as_slice()].concat();
+                distinct("aggregate output", &output)?;
+                Ok(output)
+            }
+
+            PhysicalPlan::Sort { input, keys } => {
+                let output = self.node(input, depth + 1)?;
+                self.sort_keys(keys, &output)?;
+                Ok(output)
+            }
+
+            PhysicalPlan::TopK { input, keys, limit } => {
+                check_limit("TopK", *limit)?;
+                let output = self.node(input, depth + 1)?;
+                self.sort_keys(keys, &output)?;
+                Ok(output)
+            }
         }
+    }
+
+    /// Checks sort keys: non-empty, bounded, reading slots of the input.
+    fn sort_keys(&self, keys: &[SortKey], available: &[SlotId]) -> Result<(), String> {
+        if keys.is_empty() {
+            return Err("sort needs at least one key".into());
+        }
+        self.list("sort keys", keys.len())?;
+        let slots: Vec<SlotId> = keys.iter().map(|key| key.slot).collect();
+        require_all(&slots, available, "sort key")
     }
 
     /// Validates both join inputs and checks that they produce disjoint slots.

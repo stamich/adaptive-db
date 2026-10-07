@@ -1,0 +1,92 @@
+//! TopK: the first `k` rows of a sort without sorting the whole input.
+use crate::{
+    memory::MemoryReservation,
+    operator::{ordering::sort_rows, output_buffer::OutputBuffer, Operator, RowBatch},
+    ExecRow, ExecutionContext, ExecutionError, SortKey,
+};
+
+/// Streams its input into a buffer of at most `2k` rows; whenever the buffer is full it is
+/// sorted and cut back to `k`. Memory is O(k) instead of O(input) and the work is
+/// O(n log k) amortized. Ties keep input order, exactly like `Limit(Sort)`.
+pub struct TopKOperator {
+    /// Upstream operator.
+    input: Box<dyn Operator>,
+    /// Sort keys, most significant first.
+    keys: Vec<SortKey>,
+    /// Rows kept.
+    k: usize,
+    /// Final rows, once computed.
+    output: Option<OutputBuffer>,
+    /// Memory of the buffered rows (held until the operator is dropped).
+    reservation: Option<MemoryReservation>,
+}
+
+impl TopKOperator {
+    /// Keeps the first `k` rows of `input` in `keys` order.
+    pub fn new(input: Box<dyn Operator>, keys: Vec<SortKey>, k: usize) -> Self {
+        Self {
+            input,
+            keys,
+            k,
+            output: None,
+            reservation: None,
+        }
+    }
+
+    /// Sorts `buffer` and truncates it to `k` rows, returning the freed memory.
+    fn compact(
+        &self,
+        buffer: &mut Vec<ExecRow>,
+        reservation: &mut MemoryReservation,
+    ) -> Result<(), ExecutionError> {
+        sort_rows(buffer, &self.keys)?;
+        let dropped: usize = buffer[self.k.min(buffer.len())..]
+            .iter()
+            .map(ExecRow::estimated_bytes)
+            .sum();
+        buffer.truncate(self.k);
+        reservation.shrink(dropped);
+        Ok(())
+    }
+
+    /// Consumes the input and returns the final `k` rows.
+    fn compute(&mut self, context: &ExecutionContext) -> Result<Vec<ExecRow>, ExecutionError> {
+        let mut reservation = context.memory.reservation("top-k");
+        let mut buffer: Vec<ExecRow> = Vec::new();
+        if self.k > 0 {
+            let capacity = self.k.saturating_mul(2);
+            while let Some(batch) = self.input.next_batch(context)? {
+                context.check_running()?;
+                for row in batch {
+                    reservation.grow(row.estimated_bytes())?;
+                    buffer.push(row);
+                    if buffer.len() >= capacity {
+                        self.compact(&mut buffer, &mut reservation)?;
+                    }
+                }
+            }
+            self.compact(&mut buffer, &mut reservation)?;
+        }
+        self.reservation = Some(reservation);
+        Ok(buffer)
+    }
+}
+
+impl Operator for TopKOperator {
+    /// Computes the top rows on the first call (without reading the input when `k = 0`), then
+    /// emits them in batches.
+    fn next_batch(
+        &mut self,
+        context: &ExecutionContext,
+    ) -> Result<Option<RowBatch>, ExecutionError> {
+        if self.output.is_none() {
+            let rows = self.compute(context)?;
+            self.output = Some(OutputBuffer::new(rows));
+        }
+        Ok(self
+            .output
+            .as_mut()
+            .expect("computed above")
+            .next_batch(context.batch_size))
+    }
+}

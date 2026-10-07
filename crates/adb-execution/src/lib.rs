@@ -31,7 +31,9 @@ pub use expression::{BinaryOp, Expr};
 pub use limits::ExecutionLimits;
 pub use memory::{MemoryReservation, MemoryTracker};
 pub use metrics::QueryMetrics;
-pub use physical_plan::{JoinKey, JoinType, PhysicalPlan};
+pub use physical_plan::{
+    AggregateFunction, AggregateSpec, JoinKey, JoinType, PhysicalPlan, SortKey,
+};
 pub use slot::{ScanColumn, SlotId};
 pub use validate::PlanShape;
 pub use wire::{

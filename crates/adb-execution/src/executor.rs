@@ -6,9 +6,10 @@ use parking_lot::Mutex;
 
 use crate::{
     operator::{
-        filter::FilterOperator, hash_join::HashJoinOperator, limit::LimitOperator,
-        nested_loop_join::NestedLoopJoinOperator, point_lookup::PointLookupOperator,
-        project::ProjectOperator, scan::ScanOperator, Operator,
+        aggregate::AggregateOperator, filter::FilterOperator, hash_join::HashJoinOperator,
+        limit::LimitOperator, nested_loop_join::NestedLoopJoinOperator,
+        point_lookup::PointLookupOperator, project::ProjectOperator, scan::ScanOperator,
+        sort::SortOperator, top_k::TopKOperator, Operator,
     },
     DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
 };
@@ -161,6 +162,23 @@ fn build_operator(
                 predicate,
                 right_slots,
             ))
+        }
+
+        PhysicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => Box::new(AggregateOperator::new(
+            child(input)?,
+            group_by,
+            aggregates,
+            width,
+        )),
+
+        PhysicalPlan::Sort { input, keys } => Box::new(SortOperator::new(child(input)?, keys)),
+
+        PhysicalPlan::TopK { input, keys, limit } => {
+            Box::new(TopKOperator::new(child(input)?, keys, limit))
         }
     })
 }
