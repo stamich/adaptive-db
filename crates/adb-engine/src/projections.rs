@@ -18,7 +18,9 @@ use crate::committed::CommittedTx;
 
 /// Current state plus history.
 pub struct Projections {
+    /// Latest state of every row.
     current: PersistentCurrentStore,
+    /// Superseded row states.
     versions: PersistentVersionStore,
 }
 
@@ -175,6 +177,7 @@ impl Projections {
         IntegrityChecker::verify(&self.current, &self.versions)
     }
 
+    /// Value of `row_id` at `ts`: the current record if committed by then, else the matching version.
     fn visible(
         &self,
         row_id: RowId,
@@ -194,17 +197,20 @@ impl Projections {
 }
 
 impl Checkpointable for Projections {
+    /// Dirty pages and roots of both stores.
     fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
         let mut writes = self.current.journal_writes()?;
         writes.extend(self.versions.journal_writes()?);
         Ok(writes)
     }
 
+    /// Marks both stores persisted.
     fn mark_clean(&self) {
         self.current.mark_clean();
         self.versions.mark_clean();
     }
 
+    /// Dirty pages of both stores.
     fn dirty_pages(&self) -> usize {
         self.current.dirty_pages() + self.versions.dirty_pages()
     }

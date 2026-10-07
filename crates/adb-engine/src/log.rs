@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 
 /// Single appender of the log.
 pub struct LogWriter {
+    /// The segmented log writer.
     writer: Mutex<SegmentedWalWriter>,
     /// End of the durable prefix of the log. Guards the `fsync` so only one runs at a time.
     durable_end: Mutex<Lsn>,

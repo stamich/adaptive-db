@@ -9,7 +9,9 @@ use crate::{Checkpointable, CurrentRecord, HeapFile, SpaceReuse, StorageError};
 
 /// Primary B+Tree over a space-reclaiming heap.
 pub struct PersistentCurrentStore {
+    /// Serialized `CurrentRecord`s.
     heap: HeapFile,
+    /// `RowId` to heap location.
     index: BTree,
 }
 
@@ -103,17 +105,20 @@ impl PersistentCurrentStore {
 }
 
 impl Checkpointable for PersistentCurrentStore {
+    /// Dirty heap and index pages plus the index root.
     fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
         let mut writes = self.heap.journal_writes()?;
         writes.extend(self.index.journal_writes()?);
         Ok(writes)
     }
 
+    /// Marks heap and index persisted.
     fn mark_clean(&self) {
         self.heap.mark_clean();
         self.index.mark_clean();
     }
 
+    /// Dirty heap and index pages.
     fn dirty_pages(&self) -> usize {
         self.heap.dirty_pages() + self.index.dirty_page_count()
     }

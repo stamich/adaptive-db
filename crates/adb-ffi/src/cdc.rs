@@ -150,6 +150,7 @@ fn encode(batch: ChangeBatch) -> Vec<u8> {
         .into_bytes()
 }
 
+/// JSON form of one change event (see the module documentation).
 fn event_json(event: &ChangeEvent) -> Value {
     json!({
         "tx_id": event.tx_id.0,

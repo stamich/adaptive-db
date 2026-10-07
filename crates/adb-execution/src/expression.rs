@@ -10,13 +10,21 @@ use crate::ExecutionError;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinaryOp {
+    /// Equal.
     Eq,
+    /// Not equal.
     Ne,
+    /// Less than.
     Lt,
+    /// Less than or equal.
     Le,
+    /// Greater than.
     Gt,
+    /// Greater than or equal.
     Ge,
+    /// Logical conjunction.
     And,
+    /// Logical disjunction.
     Or,
 }
 
@@ -24,18 +32,28 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expr {
+    /// Value of a field of the current row.
     Column {
+        /// Field to read.
         field_id: FieldId,
     },
+    /// Constant.
     Literal {
+        /// The constant value.
         value: Value,
     },
+    /// Binary operation.
     Binary {
+        /// Left operand.
         left: Box<Expr>,
+        /// Operator.
         op: BinaryOp,
+        /// Right operand.
         right: Box<Expr>,
     },
+    /// Boolean negation.
     Not {
+        /// Operand.
         expr: Box<Expr>,
     },
 }

@@ -11,10 +11,15 @@ pub const DEFAULT_BATCH_SIZE: usize = 1024;
 /// Snapshot, batch size, limits and cancellation of one query.
 #[derive(Clone)]
 pub struct ExecutionContext {
+    /// Snapshot every read of the query observes.
     pub snapshot_ts: CommitTs,
+    /// Rows per batch and per scan page.
     pub batch_size: usize,
+    /// Upper bound on the estimated heap size of one output batch.
     pub memory_limit_bytes: usize,
+    /// Point in time after which the query fails with `DeadlineExceeded`.
     pub deadline: Option<Instant>,
+    /// Cooperative cancellation flag.
     pub cancellation: CancellationToken,
 }
 

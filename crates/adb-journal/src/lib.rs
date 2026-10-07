@@ -95,6 +95,7 @@ impl FileWrite {
 /// Journal bound to one root directory (the database directory).
 #[derive(Debug, Clone)]
 pub struct Journal {
+    /// Directory holding the journal; all targets must live below it.
     root: PathBuf,
 }
 

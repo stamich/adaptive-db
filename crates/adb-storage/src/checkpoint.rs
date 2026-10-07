@@ -14,8 +14,11 @@ use crate::StorageError;
 
 /// Current checkpoint payload format.
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 3;
+/// Magic prefix of the checkpoint envelope.
 const MAGIC: &[u8; 8] = b"ADBCK161";
+/// Envelope version.
 const ENVELOPE_VERSION: u16 = 1;
+/// Upper bound on the checkpoint file size.
 const MAX_CHECKPOINT_BYTES: usize = 4096;
 
 /// Persisted progress of the projections.
@@ -38,6 +41,7 @@ pub struct Checkpoint {
 }
 
 impl Default for Checkpoint {
+    /// Empty database: replay from the start of the log.
     fn default() -> Self {
         Self {
             format_version: CHECKPOINT_FORMAT_VERSION,
@@ -53,10 +57,15 @@ impl Default for Checkpoint {
 /// Format 2 payload of Milestones 1.6–2.0.2.
 #[derive(Deserialize)]
 struct CheckpointV2 {
+    /// Always 2.
     format_version: u32,
+    /// Last commit LSN applied to the current store.
     current_applied_lsn: u64,
+    /// Last commit LSN applied to the version store.
     version_applied_lsn: u64,
+    /// Highest commit timestamp.
     last_commit_ts: u64,
+    /// Highest transaction id.
     last_tx_id: u64,
 }
 
@@ -78,6 +87,7 @@ impl CheckpointV2 {
 
 /// The checkpoint file of one database.
 pub struct CheckpointStore {
+    /// Path of `checkpoint.meta`.
     path: PathBuf,
 }
 
@@ -119,6 +129,7 @@ impl CheckpointStore {
     }
 }
 
+/// Envelope-framed encoding; refuses any format other than the current one.
 fn encode(checkpoint: &Checkpoint) -> Result<Vec<u8>, StorageError> {
     if checkpoint.format_version != CHECKPOINT_FORMAT_VERSION {
         return Err(StorageError::Invalid(
@@ -132,6 +143,7 @@ fn encode(checkpoint: &Checkpoint) -> Result<Vec<u8>, StorageError> {
     ))
 }
 
+/// Decodes format 3, or format 2 with migration.
 fn decode(payload: &[u8]) -> Result<Checkpoint, StorageError> {
     let version = payload
         .get(..4)
@@ -150,10 +162,12 @@ fn decode(payload: &[u8]) -> Result<Checkpoint, StorageError> {
     }
 }
 
+/// Unit tests of checkpoint persistence and migration.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A format-3 checkpoint round-trips; a missing file is the default.
     #[test]
     fn round_trips_format_3() {
         let dir = tempfile::tempdir().unwrap();
@@ -173,6 +187,7 @@ mod tests {
     /// A Milestone 2.0.2 checkpoint is migrated to "replay the whole log, skip applied commits".
     #[test]
     fn migrates_format_2() {
+        /// Field-for-field image of the format-2 payload.
         #[derive(Serialize)]
         struct V2(u32, u64, u64, u64, u64);
         let dir = tempfile::tempdir().unwrap();
@@ -187,6 +202,7 @@ mod tests {
         assert_eq!(migrated.last_tx_id, 8);
     }
 
+    /// Unknown formats are rejected.
     #[test]
     fn rejects_unknown_format() {
         let dir = tempfile::tempdir().unwrap();

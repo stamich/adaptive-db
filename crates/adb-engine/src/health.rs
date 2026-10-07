@@ -6,6 +6,7 @@ use crate::DbError;
 /// Tracks whether the instance is still trustworthy.
 #[derive(Debug, Default)]
 pub struct EngineHealth {
+    /// Reason of the first failure that poisoned the instance.
     poisoned: Mutex<Option<String>>,
 }
 
@@ -33,10 +34,12 @@ impl EngineHealth {
     }
 }
 
+/// Unit tests of poisoning.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The first failure poisons the instance and its reason is kept.
     #[test]
     fn a_failed_guarded_step_poisons_and_keeps_the_first_reason() {
         let health = EngineHealth::default();

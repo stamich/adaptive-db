@@ -13,6 +13,7 @@ pub struct DatabaseOptions {
 }
 
 impl Default for DatabaseOptions {
+    /// 256 cached pages per file, checkpoint after 4,096 dirty pages, 64 MiB log segments.
     fn default() -> Self {
         Self {
             buffer_pages: 256,

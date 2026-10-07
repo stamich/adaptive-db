@@ -17,14 +17,21 @@ use parking_lot::Mutex;
 
 use crate::{page_offset, BufferError, PageStore};
 
+/// One cached page.
 struct Frame {
+    /// The page image.
     page: Page,
+    /// Whether the image differs from the persisted page.
     dirty: bool,
+    /// Logical clock value of the last access (LRU eviction of clean frames).
     last_used: u64,
 }
 
+/// Mutable pool state guarded by one mutex.
 struct State {
+    /// Cached frames by page id.
     frames: HashMap<PageId, Frame>,
+    /// Logical clock advanced on every access.
     clock: u64,
     /// Logical number of pages, including allocated pages not yet written to the store.
     page_count: u64,
@@ -34,8 +41,11 @@ struct State {
 
 /// Page cache over one [`PageStore`].
 pub struct BufferPool {
+    /// Persistent location of the pages.
     store: Arc<dyn PageStore>,
+    /// Nominal number of cached pages (exceeded only by dirty pages).
     capacity: usize,
+    /// Frames, clock, page count and dirty counter.
     state: Mutex<State>,
 }
 

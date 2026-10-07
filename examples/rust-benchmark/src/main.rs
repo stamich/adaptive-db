@@ -20,15 +20,22 @@ use adb_execution::{BinaryOp, Expr, PhysicalPlan};
 use serde_json::json;
 use tempfile::tempdir;
 
+/// Result type of the benchmark (any error aborts it).
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Command-line options.
 struct Args {
+    /// Rows per entity.
     rows: u64,
+    /// Iterations of the point-lookup and plan-parse sections.
     iters: usize,
+    /// Writer threads of the concurrent-commit section.
     threads: u64,
+    /// Optional JSON report path.
     output: Option<PathBuf>,
 }
 
+/// Parses `--rows`, `--iters`, `--threads` and `--output`.
 fn parse_args() -> Result<Args> {
     let mut args = Args {
         rows: 5_000,
@@ -52,22 +59,26 @@ fn parse_args() -> Result<Args> {
     Ok(args)
 }
 
+/// Benchmark row: field 1 = value, field 2 = its string form.
 fn row(value: u64) -> Row {
     Row::new()
         .with_field(1, Value::Int64(value as i64))
         .with_field(2, Value::String(format!("row-{value}")))
 }
 
+/// Throughput of `count` operations in `elapsed`.
 fn per_second(count: u64, elapsed: Duration) -> f64 {
     count as f64 / elapsed.as_secs_f64()
 }
 
+/// p50/p95/p99 of latency samples in nanoseconds.
 fn percentiles(mut samples: Vec<u128>) -> (u128, u128, u128) {
     samples.sort_unstable();
     let at = |p: f64| samples[((samples.len() - 1) as f64 * p).round() as usize];
     (at(0.50), at(0.95), at(0.99))
 }
 
+/// Executes `plan` and counts the rows it returns.
 fn count_rows(db: &Database, plan: PhysicalPlan) -> Result<usize> {
     let mut cursor = db.execute(plan)?;
     let mut rows = 0;
@@ -78,6 +89,7 @@ fn count_rows(db: &Database, plan: PhysicalPlan) -> Result<usize> {
     Ok(rows)
 }
 
+/// Runs every benchmark section and optionally writes a JSON report.
 fn main() -> Result<()> {
     let args = parse_args()?;
     println!("Adaptive DB 2.0.3 Rust benchmark");

@@ -94,6 +94,7 @@ pub struct ChangeBatch {
 /// Which rows a consumer is interested in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeFilter {
+    /// Allowed entity ids; `None` means every entity.
     entities: Option<BTreeSet<u64>>,
 }
 
@@ -170,6 +171,7 @@ pub(crate) fn read_changes(
     Ok(ChangeBatch { events, next })
 }
 
+/// Error returned for a cursor that does not point at a transaction boundary.
 fn invalid_cursor(cursor: ChangeCursor) -> DbError {
     DbError::InvalidArgument(format!(
         "change cursor {:?} does not point at a transaction boundary",

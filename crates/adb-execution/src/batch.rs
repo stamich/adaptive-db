@@ -9,34 +9,54 @@ use crate::ExecutionError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PhysicalType {
+    /// Nullable booleans.
     Bool = 1,
+    /// Nullable signed 64-bit integers.
     Int64 = 2,
+    /// Nullable doubles.
     Float64 = 3,
+    /// Nullable UTF-8 strings.
     String = 4,
+    /// Nullable byte strings.
     Bytes = 5,
 }
 
 /// One typed, nullable column of a batch.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnVector {
+    /// Boolean column.
     Bool {
+        /// Field the column holds.
         field_id: FieldId,
+        /// One value per row; `None` is NULL or absent.
         values: Vec<Option<bool>>,
     },
+    /// Integer column.
     Int64 {
+        /// Field the column holds.
         field_id: FieldId,
+        /// One value per row; `None` is NULL or absent.
         values: Vec<Option<i64>>,
     },
+    /// Floating-point column.
     Float64 {
+        /// Field the column holds.
         field_id: FieldId,
+        /// One value per row; `None` is NULL or absent.
         values: Vec<Option<f64>>,
     },
+    /// String column.
     String {
+        /// Field the column holds.
         field_id: FieldId,
+        /// One value per row; `None` is NULL or absent.
         values: Vec<Option<String>>,
     },
+    /// Byte-string column.
     Bytes {
+        /// Field the column holds.
         field_id: FieldId,
+        /// One value per row; `None` is NULL or absent.
         values: Vec<Option<Vec<u8>>>,
     },
 }
@@ -84,7 +104,9 @@ impl ColumnVector {
 /// Rows of one batch in columnar form: row ids plus one vector per field present.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordBatch {
+    /// Storage key of each row, in output order.
     pub row_ids: Vec<RowId>,
+    /// One column per field present in any row of the batch.
     pub columns: Vec<ColumnVector>,
 }
 

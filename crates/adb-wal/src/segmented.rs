@@ -27,7 +27,9 @@ use crate::{
 
 /// Default maximum physical segment size.
 pub const DEFAULT_SEGMENT_SIZE: u64 = 64 * 1024 * 1024;
+/// Bits of an LSN that hold the offset inside a segment.
 const OFFSET_BITS: u32 = 32;
+/// Largest offset (and segment id) an LSN can encode.
 const OFFSET_MASK: u64 = (1u64 << OFFSET_BITS) - 1;
 
 /// Packs a segment id and an offset into an LSN.
@@ -50,6 +52,7 @@ pub fn lsn_offset(lsn: Lsn) -> u64 {
     lsn.0 & OFFSET_MASK
 }
 
+/// Path of segment `segment_id` (`{id:016x}.wal`).
 pub(crate) fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
     dir.join(format!("{segment_id:016x}.wal"))
 }
@@ -181,10 +184,15 @@ pub(crate) fn valid_end(path: &Path, segment_id: u64, is_last: bool) -> Result<u
 
 /// Appends frames to the newest segment, rotating when it is full.
 pub struct SegmentedWalWriter {
+    /// Log directory.
     dir: PathBuf,
+    /// Rotation threshold in bytes.
     segment_size: u64,
+    /// Segment being appended to.
     segment_id: u64,
+    /// Open handle of that segment.
     file: File,
+    /// Append offset in that segment.
     offset: u64,
 }
 
@@ -271,6 +279,7 @@ impl SegmentedWalWriter {
         make_lsn(self.segment_id, self.offset)
     }
 
+    /// Syncs the full segment and starts the next one.
     fn rotate(&mut self) -> Result<(), WalError> {
         self.sync()?;
         let next = self.segment_id + 1;
@@ -291,6 +300,7 @@ impl SegmentedWalWriter {
     }
 }
 
+/// Makes directory-entry changes durable.
 fn sync_dir(dir: &Path) -> Result<(), WalError> {
     File::open(dir)?.sync_all()?;
     Ok(())

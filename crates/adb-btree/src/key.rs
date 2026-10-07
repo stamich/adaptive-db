@@ -22,10 +22,12 @@ impl TreeKey for RowId {
     const MAX_LEAF_ENTRIES: usize = 96;
     const MAX_INTERNAL_KEYS: usize = 96;
 
+    /// Writes the 128-bit key little-endian.
     fn encode(&self, out: &mut [u8]) {
         out.copy_from_slice(&self.0.to_le_bytes());
     }
 
+    /// Reads a 128-bit little-endian key.
     fn decode(bytes: &[u8]) -> Self {
         let mut array = [0u8; 16];
         array.copy_from_slice(bytes);
@@ -38,11 +40,13 @@ impl TreeKey for VersionKey {
     const MAX_LEAF_ENTRIES: usize = 72;
     const MAX_INTERNAL_KEYS: usize = 72;
 
+    /// Writes the row id followed by the begin timestamp.
     fn encode(&self, out: &mut [u8]) {
         self.row_id.encode(&mut out[..16]);
         out[16..24].copy_from_slice(&self.begin_ts.0.to_le_bytes());
     }
 
+    /// Reads the row id and begin timestamp written by `encode`.
     fn decode(bytes: &[u8]) -> Self {
         let mut ts = [0u8; 8];
         ts.copy_from_slice(&bytes[16..24]);

@@ -64,6 +64,7 @@ impl TryFrom<u16> for PageKind {
 pub struct Page {
     /// Stable physical page identifier.
     pub id: PageId,
+    /// Raw page bytes, header included.
     bytes: Box<[u8; PAGE_SIZE]>,
 }
 

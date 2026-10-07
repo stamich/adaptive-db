@@ -14,8 +14,11 @@ use crc32fast::Hasher;
 
 use crate::{FileWrite, JournalError, WriteOp};
 
+/// Magic prefix of a journal file.
 const MAGIC: &[u8; 8] = b"ADBJRNL1";
+/// Tag of a range write.
 const OP_RANGE: u8 = 1;
+/// Tag of a whole-file replacement.
 const OP_REPLACE: u8 = 2;
 
 /// Encodes writes whose paths are already root-relative.
@@ -96,17 +99,21 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<FileWrite>, JournalError> {
     Ok(writes)
 }
 
+/// A `Corrupt` error with `message`.
 fn corrupt(message: &str) -> JournalError {
     JournalError::Corrupt(message.to_string())
 }
 
 /// Bounds-checked little-endian cursor.
 struct Reader<'a> {
+    /// Journal body.
     bytes: &'a [u8],
+    /// Read position.
     at: usize,
 }
 
 impl<'a> Reader<'a> {
+    /// Next `len` bytes, or an error if the body is shorter.
     fn take(&mut self, len: usize) -> Result<&'a [u8], JournalError> {
         let end = self
             .at
@@ -118,21 +125,25 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    /// Reads one byte.
     fn u8(&mut self) -> Result<u8, JournalError> {
         Ok(self.take(1)?[0])
     }
 
+    /// Reads a little-endian `u16`.
     fn u16(&mut self) -> Result<u16, JournalError> {
         let bytes = self.take(2)?;
         Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
+    /// Reads a little-endian `u32`.
     fn u32(&mut self) -> Result<u32, JournalError> {
         let mut array = [0u8; 4];
         array.copy_from_slice(self.take(4)?);
         Ok(u32::from_le_bytes(array))
     }
 
+    /// Reads a little-endian `u64`.
     fn u64(&mut self) -> Result<u64, JournalError> {
         let mut array = [0u8; 8];
         array.copy_from_slice(self.take(8)?);
@@ -140,10 +151,12 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// Unit tests of the journal encoding.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Range and replace writes round-trip.
     #[test]
     fn round_trips_both_operations() {
         let writes = vec![
@@ -153,6 +166,7 @@ mod tests {
         assert_eq!(decode(&encode(&writes)).unwrap(), writes);
     }
 
+    /// A single flipped bit is detected by the checksum.
     #[test]
     fn rejects_any_flipped_bit() {
         let mut bytes = encode(&[FileWrite::range("x", 0, vec![7; 32])]);
@@ -161,6 +175,7 @@ mod tests {
         assert!(decode(&bytes).is_err());
     }
 
+    /// A truncated journal is rejected.
     #[test]
     fn rejects_truncation() {
         let bytes = encode(&[FileWrite::range("x", 0, vec![7; 32])]);

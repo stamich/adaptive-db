@@ -68,11 +68,13 @@ fn write_skew(isolation: adb_engine::IsolationLevel) -> Result<(), DbError> {
     db.commit(b).map(|_| ())
 }
 
+/// Snapshot isolation lets both write-skew transactions commit.
 #[test]
 fn snapshot_isolation_permits_write_skew() {
     assert!(write_skew(adb_engine::IsolationLevel::Snapshot).is_ok());
 }
 
+/// Serializable isolation aborts the second write-skew transaction with a read-write conflict.
 #[test]
 fn serializable_isolation_prevents_write_skew() {
     assert!(matches!(
@@ -111,6 +113,7 @@ fn read_only_transactions_commit_at_their_snapshot() {
     assert_eq!(db.commit(reader).unwrap(), ts);
 }
 
+/// Uncommitted writes are invisible to other transactions and to plain reads.
 #[test]
 fn reads_never_see_uncommitted_or_other_transactions_writes() {
     let dir = tempdir().unwrap();

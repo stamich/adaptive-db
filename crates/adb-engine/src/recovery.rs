@@ -20,9 +20,13 @@ use crate::{committed::TxAssembler, projections::Projections, DatabaseOptions, D
 
 /// State reconstructed by [`recover`].
 pub(crate) struct Recovered {
+    /// Projections brought up to the end of the log.
     pub projections: Projections,
+    /// Highest commit timestamp found.
     pub last_commit_ts: CommitTs,
+    /// Highest transaction id found (committed or not).
     pub last_tx_id: u64,
+    /// Vacuum horizon restored from the checkpoint.
     pub vacuumed_through: CommitTs,
 }
 
@@ -103,6 +107,7 @@ pub(crate) fn recover(
 }
 
 impl Recovered {
+    /// Checkpoint record describing this state with recovery restarting at `replay_from`.
     fn checkpoint(&self, replay_from: Lsn) -> Checkpoint {
         Checkpoint {
             replay_from,
@@ -114,6 +119,7 @@ impl Recovered {
     }
 }
 
+/// Transaction id carried by any log record.
 fn tx_id_of(record: &WalRecord) -> u64 {
     match record {
         WalRecord::Begin { tx_id, .. }

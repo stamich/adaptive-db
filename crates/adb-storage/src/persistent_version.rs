@@ -9,7 +9,9 @@ use crate::{Checkpointable, HeapFile, HistoricalVersion, SpaceReuse, StorageErro
 
 /// Temporal B+Tree over an append-only heap.
 pub struct PersistentVersionStore {
+    /// Serialized `HistoricalVersion`s.
     heap: HeapFile,
+    /// `(RowId, begin_ts)` to heap location.
     index: VersionBTree,
 }
 
@@ -131,17 +133,20 @@ impl PersistentVersionStore {
 }
 
 impl Checkpointable for PersistentVersionStore {
+    /// Dirty heap and index pages plus the index root.
     fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
         let mut writes = self.heap.journal_writes()?;
         writes.extend(self.index.journal_writes()?);
         Ok(writes)
     }
 
+    /// Marks heap and index persisted.
     fn mark_clean(&self) {
         self.heap.mark_clean();
         self.index.mark_clean();
     }
 
+    /// Dirty heap and index pages.
     fn dirty_pages(&self) -> usize {
         self.heap.dirty_pages() + self.index.dirty_page_count()
     }

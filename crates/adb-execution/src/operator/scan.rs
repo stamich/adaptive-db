@@ -10,9 +10,13 @@ use crate::{
 
 /// Emits the rows of a key range one batch at a time; never materializes the whole range.
 pub struct ScanOperator {
+    /// Where the rows are read from.
     source: Arc<dyn DataSource>,
+    /// Key range being scanned.
     range: KeyRange,
+    /// Last key returned (keyset cursor).
     after: Option<RowId>,
+    /// Whether the source reported the end of the range.
     exhausted: bool,
 }
 
@@ -29,6 +33,7 @@ impl ScanOperator {
 }
 
 impl Operator for ScanOperator {
+    /// Requests the next page after the last returned key; an empty page ends the scan.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

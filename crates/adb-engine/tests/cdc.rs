@@ -7,11 +7,13 @@ use tempfile::tempdir;
 
 use common::{delete, put, read_i64, row_with_i64};
 
+/// Every event after `from`, unfiltered.
 fn all_changes(db: &Database, from: ChangeCursor) -> adb_engine::ChangeBatch {
     db.read_changes(from, usize::MAX, &ChangeFilter::all())
         .unwrap()
 }
 
+/// Insert, update and delete produce the right kinds and images, in commit order.
 #[test]
 fn insert_update_delete_carry_before_and_after_images() {
     let dir = tempdir().unwrap();
@@ -98,6 +100,7 @@ fn paging_with_the_returned_cursor_is_gap_free_and_duplicate_free() {
     assert_eq!(cursor, db.change_feed_end());
 }
 
+/// An entity filter hides other entities' changes but the cursor still moves past them.
 #[test]
 fn entity_filter_skips_other_entities_but_still_advances() {
     let dir = tempdir().unwrap();
@@ -141,6 +144,7 @@ fn named_consumer_resumes_after_restart() {
     assert!(db.consumer_offset("unknown").is_none());
 }
 
+/// Cursors past the durable end or inside a frame, and invalid consumer names, are rejected.
 #[test]
 fn invalid_cursors_are_rejected() {
     let dir = tempdir().unwrap();

@@ -5,6 +5,7 @@ use std::fs;
 use adb_journal::{FileWrite, Journal, JournalError, JOURNAL_FILE};
 use tempfile::tempdir;
 
+/// A commit applies range and replace writes and removes the journal.
 #[test]
 fn commit_applies_writes_and_leaves_no_journal() {
     let dir = tempdir().unwrap();
@@ -24,6 +25,7 @@ fn commit_applies_writes_and_leaves_no_journal() {
     assert!(!dir.path().join(JOURNAL_FILE).exists());
 }
 
+/// A range write past the end of a file extends it.
 #[test]
 fn range_write_extends_the_file() {
     let dir = tempdir().unwrap();
@@ -57,6 +59,7 @@ fn recover_reapplies_a_committed_journal() {
     assert!(!journal.recover().unwrap());
 }
 
+/// A `.tmp` journal never reached its commit point and is discarded.
 #[test]
 fn half_written_tmp_journal_is_discarded() {
     let dir = tempdir().unwrap();
@@ -68,6 +71,7 @@ fn half_written_tmp_journal_is_discarded() {
     assert!(!dir.path().join("checkpoint.journal.tmp").exists());
 }
 
+/// A corrupt committed journal is an error, not silently skipped.
 #[test]
 fn corrupt_committed_journal_is_reported_not_ignored() {
     let dir = tempdir().unwrap();
@@ -78,6 +82,7 @@ fn corrupt_committed_journal_is_reported_not_ignored() {
     ));
 }
 
+/// Absolute paths outside the root and `..` components are rejected.
 #[test]
 fn writes_outside_root_are_rejected() {
     let dir = tempdir().unwrap();

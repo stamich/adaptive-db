@@ -37,17 +37,23 @@ const MAX_DEPTH: usize = 64;
 
 /// Separator and new right sibling produced by a split.
 struct Split<K> {
+    /// Smallest key of the new right node; inserted into the parent.
     separator: K,
+    /// Page of the new right node.
     right: PageId,
 }
 
 /// Persistent B+Tree mapping `K` to heap [`RowLocation`]s.
 pub struct BPlusTree<K: TreeKey> {
+    /// Page cache of the index file.
     pool: Arc<BufferPool>,
+    /// Path of the index file (target of journal writes).
     data_path: PathBuf,
+    /// Root-pointer file.
     meta: MetaStore,
     /// Current root; guarded together with every structural operation.
     root: Mutex<PageId>,
+    /// Marks the key type; the tree stores no `K` values itself.
     _key: PhantomData<K>,
 }
 
@@ -234,10 +240,12 @@ impl<K: TreeKey> BPlusTree<K> {
 
     // ----- internals -------------------------------------------------------------------------
 
+    /// Decodes the node stored in `page_id`.
     fn read_node(&self, page_id: PageId) -> Result<Node<K>, BTreeError> {
         self.pool.read(page_id, decode_node::<K>)?
     }
 
+    /// Decodes `page_id`, which must be a leaf (used when following the leaf chain).
     fn read_leaf(&self, page_id: PageId) -> Result<LeafNode<K>, BTreeError> {
         match self.read_node(page_id)? {
             Node::Leaf(leaf) => Ok(leaf),
@@ -247,6 +255,7 @@ impl<K: TreeKey> BPlusTree<K> {
         }
     }
 
+    /// Encodes `node` into `page_id` and stamps the page with `lsn`.
     fn write_node(&self, page_id: PageId, lsn: Lsn, node: &Node<K>) -> Result<(), BTreeError> {
         self.pool.write(page_id, |page| {
             page.set_page_lsn(lsn);
@@ -269,6 +278,7 @@ impl<K: TreeKey> BPlusTree<K> {
         Err(BTreeError::Corrupt("tree depth exceeds limit".into()))
     }
 
+    /// Greatest entry `<= key` in the subtree rooted at `page_id`; skips empty leaves.
     fn floor_in(
         &self,
         page_id: PageId,
@@ -299,6 +309,7 @@ impl<K: TreeKey> BPlusTree<K> {
         }
     }
 
+    /// Greatest entry of the subtree rooted at `page_id`, or `None` if it is empty.
     fn last_in(
         &self,
         page_id: PageId,
@@ -320,6 +331,7 @@ impl<K: TreeKey> BPlusTree<K> {
         }
     }
 
+    /// Inserts into the subtree rooted at `page_id`; returns the split to propagate, if any.
     fn insert_into(
         &self,
         page_id: PageId,

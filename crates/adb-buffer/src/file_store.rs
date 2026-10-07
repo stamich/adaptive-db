@@ -20,7 +20,9 @@ pub fn page_offset(id: PageId) -> Result<u64, BufferError> {
 
 /// Persists fixed-size pages in one random-access file.
 pub struct FilePageStore {
+    /// Path of the page file.
     path: PathBuf,
+    /// Open file handle; the mutex serializes seek+read/write pairs.
     file: Mutex<File>,
 }
 
@@ -53,10 +55,12 @@ impl FilePageStore {
 }
 
 impl PageStore for FilePageStore {
+    /// Complete pages in the file.
     fn page_count(&self) -> Result<u64, BufferError> {
         Ok(self.file.lock().metadata()?.len() / PAGE_SIZE as u64)
     }
 
+    /// Reads page `id` and validates its header and checksum.
     fn read_page(&self, id: PageId) -> Result<Page, BufferError> {
         let mut file = self.file.lock();
         let offset = page_offset(id)?;
@@ -72,6 +76,7 @@ impl PageStore for FilePageStore {
         Ok(Page::from_bytes(id, bytes)?)
     }
 
+    /// Seals the checksum and writes the page at its offset (extending the file if needed).
     fn write_page(&self, page: &Page) -> Result<(), BufferError> {
         let mut copy = page.clone();
         copy.seal_checksum();
@@ -81,6 +86,7 @@ impl PageStore for FilePageStore {
         Ok(())
     }
 
+    /// `fdatasync`s the page file.
     fn sync(&self) -> Result<(), BufferError> {
         self.file.lock().sync_data()?;
         Ok(())

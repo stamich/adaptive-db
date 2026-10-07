@@ -47,10 +47,12 @@ pub type SlotId = u16;
 /// Column identifier inside a row.
 pub type FieldId = u32;
 
+/// Unit tests of the identifier helpers.
 #[cfg(test)]
 mod tests {
     use super::RowId;
 
+    /// Composing and splitting a row id is lossless and preserves entity order.
     #[test]
     fn row_id_round_trips_its_components() {
         let id = RowId::compose(7, u64::MAX);

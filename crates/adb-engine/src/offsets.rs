@@ -15,15 +15,20 @@ use parking_lot::Mutex;
 
 use crate::{cdc::ChangeCursor, DbError};
 
+/// Magic prefix of the offsets file envelope.
 const MAGIC: &[u8; 8] = b"ADBCDC01";
+/// Envelope version of the offsets file.
 const VERSION: u16 = 1;
+/// Upper bound on the offsets file size.
 const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 /// Longest accepted consumer name in bytes.
 pub const MAX_CONSUMER_NAME_BYTES: usize = 256;
 
 /// Map of consumer name to its committed cursor.
 pub struct ConsumerOffsets {
+    /// Path of `cdc/offsets.meta`.
     path: PathBuf,
+    /// Cursor (log position) of every named consumer.
     offsets: Mutex<BTreeMap<String, u64>>,
 }
 
@@ -75,6 +80,7 @@ impl ConsumerOffsets {
     }
 }
 
+/// Maps a malformed offsets file to a storage-corruption error.
 fn corrupt(reason: String) -> DbError {
     DbError::Storage(StorageError::Invalid(format!("CDC offsets file: {reason}")))
 }

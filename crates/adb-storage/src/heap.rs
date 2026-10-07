@@ -33,11 +33,14 @@ pub enum SpaceReuse {
 /// Free space per page, searchable by size.
 #[derive(Default)]
 struct FreeSpaceMap {
+    /// `(free bytes, page)` ordered for smallest-fit search.
     by_size: BTreeSet<(usize, PageId)>,
+    /// Free bytes per tracked page (to update `by_size`).
     by_page: HashMap<PageId, usize>,
 }
 
 impl FreeSpaceMap {
+    /// Records `free` bytes for `page`; pages below the tracking threshold are dropped.
     fn set(&mut self, page: PageId, free: usize) {
         if let Some(old) = self.by_page.remove(&page) {
             self.by_size.remove(&(old, page));
@@ -59,9 +62,13 @@ impl FreeSpaceMap {
 
 /// Slotted-page heap backed by one page file.
 pub struct HeapFile {
+    /// Page cache of the heap file.
     pool: Arc<BufferPool>,
+    /// Path of the heap file (target of journal writes).
     path: PathBuf,
+    /// Whether deleted space is reused.
     policy: SpaceReuse,
+    /// Free space per page (maintained only with `Reclaim`).
     free: Mutex<FreeSpaceMap>,
 }
 
@@ -144,6 +151,7 @@ impl HeapFile {
         Ok(self.pool.flush_all()?)
     }
 
+    /// Inserts into `page_id` if it fits and updates the free-space map; `None` when full.
     fn try_insert(
         &self,
         free: &mut FreeSpaceMap,
@@ -170,6 +178,7 @@ impl HeapFile {
         }
     }
 
+    /// Largest tuple `page_id` can hold after compaction.
     fn available(&self, page_id: PageId) -> Result<usize, StorageError> {
         Ok(self.pool.read(page_id, |page| {
             SlottedView::new(page).available_for_insert()
@@ -178,14 +187,17 @@ impl HeapFile {
 }
 
 impl Checkpointable for HeapFile {
+    /// Dirty heap pages as journal writes.
     fn journal_writes(&self) -> Result<Vec<FileWrite>, StorageError> {
         Ok(self.pool.journal_writes(&self.path)?)
     }
 
+    /// Marks all heap pages persisted.
     fn mark_clean(&self) {
         self.pool.mark_clean();
     }
 
+    /// Dirty heap pages.
     fn dirty_pages(&self) -> usize {
         self.pool.dirty_count()
     }

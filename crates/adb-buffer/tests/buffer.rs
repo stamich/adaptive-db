@@ -7,10 +7,12 @@ use adb_journal::Journal;
 use adb_page::PageKind;
 use tempfile::tempdir;
 
+/// Opens a pool over the page file at `path`.
 fn pool(path: &std::path::Path, capacity: usize) -> BufferPool {
     BufferPool::new(Arc::new(FilePageStore::open(path).unwrap()), capacity).unwrap()
 }
 
+/// Flushed pages are readable after reopening the file.
 #[test]
 fn dirty_pages_survive_flush_and_reopen() {
     let dir = tempdir().unwrap();
@@ -99,6 +101,7 @@ fn journal_writes_publish_dirty_pages() {
     assert_eq!(pool.read(PageId(0), |p| p.payload()[5]).unwrap(), 9);
 }
 
+/// Pages that were never allocated cannot be read.
 #[test]
 fn reading_an_unallocated_page_is_an_error() {
     let dir = tempdir().unwrap();

@@ -53,10 +53,12 @@ pub fn open<'a>(
     Ok(payload)
 }
 
+/// Unit tests of the metadata envelope.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Payloads round-trip; wrong magic, version, tampering and truncation are rejected.
     #[test]
     fn round_trip_and_tamper_detection() {
         let sealed = seal(b"TESTMAGI", 3, b"payload");

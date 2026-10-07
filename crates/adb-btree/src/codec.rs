@@ -15,12 +15,18 @@ use crate::{
     node::{InternalNode, LeafNode, Node},
 };
 
+/// Sentinel stored in `next` when a leaf has no right sibling.
 const NONE_PAGE: u64 = u64::MAX;
+/// Bytes available to a node after the common page header.
 const PAYLOAD: usize = PAGE_SIZE - PAGE_HEADER_SIZE;
+/// Leaf header: entry count (u16), padding, right-sibling page id (u64).
 const LEAF_HEADER: usize = 16;
+/// Internal-node header: key count (u16) plus padding.
 const INTERNAL_HEADER: usize = 8;
+/// Encoded size of a `RowLocation` (page id u64 + slot u16).
 const LOCATION_LEN: usize = 10;
 
+/// Encoded size of one leaf entry: key followed by its location.
 fn leaf_entry_len<K: TreeKey>() -> usize {
     K::ENCODED_LEN + LOCATION_LEN
 }
@@ -123,6 +129,7 @@ pub fn encode_node<K: TreeKey>(page: &mut Page, node: &Node<K>) -> Result<(), BT
     Ok(())
 }
 
+/// Checks parallel vector lengths, fanout limits and key order before encoding.
 fn validate<K: TreeKey>(node: &Node<K>) -> Result<(), BTreeError> {
     match node {
         Node::Leaf(leaf) => {
@@ -142,6 +149,7 @@ fn validate<K: TreeKey>(node: &Node<K>) -> Result<(), BTreeError> {
     }
 }
 
+/// Requires strictly increasing keys, which binary search and routing rely on.
 fn ensure_sorted<K: Ord>(keys: &[K]) -> Result<(), BTreeError> {
     if keys.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(BTreeError::Corrupt("node keys not strictly sorted".into()));
@@ -149,26 +157,31 @@ fn ensure_sorted<K: Ord>(keys: &[K]) -> Result<(), BTreeError> {
     Ok(())
 }
 
+/// Bounds-checked sub-slice of a node payload.
 fn slice(data: &[u8], at: usize, len: usize) -> Result<&[u8], BTreeError> {
     data.get(at..at + len)
         .ok_or_else(|| BTreeError::Corrupt("read outside node payload".into()))
 }
 
+/// Decodes a key at `at`.
 fn read_key<K: TreeKey>(data: &[u8], at: usize) -> Result<K, BTreeError> {
     Ok(K::decode(slice(data, at, K::ENCODED_LEN)?))
 }
 
+/// Reads a little-endian `u16` at `at`.
 fn read_u16(data: &[u8], at: usize) -> Result<u16, BTreeError> {
     let bytes = slice(data, at, 2)?;
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
+/// Reads a little-endian `u64` at `at`.
 fn read_u64(data: &[u8], at: usize) -> Result<u64, BTreeError> {
     let mut array = [0u8; 8];
     array.copy_from_slice(slice(data, at, 8)?);
     Ok(u64::from_le_bytes(array))
 }
 
+/// Bounds-checked copy of `bytes` into the payload at `at`.
 fn write(data: &mut [u8], at: usize, bytes: &[u8]) -> Result<(), BTreeError> {
     data.get_mut(at..at + bytes.len())
         .ok_or_else(|| BTreeError::Corrupt("write outside node payload".into()))?
@@ -176,6 +189,7 @@ fn write(data: &mut [u8], at: usize, bytes: &[u8]) -> Result<(), BTreeError> {
     Ok(())
 }
 
+/// Encodes a key at `at`.
 fn write_key<K: TreeKey>(data: &mut [u8], at: usize, key: &K) -> Result<(), BTreeError> {
     let target = data
         .get_mut(at..at + K::ENCODED_LEN)

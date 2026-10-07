@@ -12,17 +12,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::BTreeError;
 
+/// Magic prefix of the metadata envelope (format introduced in Milestone 1.6.1).
 const META_MAGIC: &[u8; 8] = b"ADBTM161";
+/// Envelope version.
 const META_VERSION: u16 = 1;
+/// Upper bound on the metadata file size; anything larger is corruption.
 const MAX_META_BYTES: usize = 1024;
 
+/// Serialized payload of the metadata file.
 #[derive(Debug, Serialize, Deserialize)]
 struct BTreeMeta {
+    /// Page id of the tree's root node.
     root_page_id: u64,
 }
 
 /// Root metadata file of one tree.
 pub struct MetaStore {
+    /// Path of the metadata file.
     path: PathBuf,
 }
 
@@ -66,6 +72,7 @@ impl MetaStore {
         Ok(())
     }
 
+    /// Envelope-framed encoding of `root`.
     fn encode(&self, root: PageId) -> Result<Vec<u8>, BTreeError> {
         let payload = bincode::serialize(&BTreeMeta {
             root_page_id: root.0,

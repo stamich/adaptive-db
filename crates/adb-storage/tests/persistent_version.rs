@@ -3,6 +3,7 @@ use adb_core::{CommitTs, KeyRange, Lsn, Row, RowId, Value};
 use adb_storage::{HistoricalVersion, PersistentVersionStore};
 use tempfile::tempdir;
 
+/// Version `[begin, end)` with field 1 = `value`.
 fn version(begin: u64, end: u64, value: i64) -> HistoricalVersion {
     HistoricalVersion {
         begin_ts: CommitTs(begin),
@@ -11,6 +12,7 @@ fn version(begin: u64, end: u64, value: i64) -> HistoricalVersion {
     }
 }
 
+/// Versions survive a reopen and are visible exactly within their interval.
 #[test]
 fn persistent_version_store_survives_restart() {
     let dir = tempdir().unwrap();
@@ -38,6 +40,7 @@ fn persistent_version_store_survives_restart() {
     assert_eq!(store.history(RowId(7)).unwrap().len(), 2);
 }
 
+/// Storing the same version repeatedly keeps one copy (idempotent replay).
 #[test]
 fn replaying_a_version_is_idempotent() {
     let dir = tempdir().unwrap();
@@ -50,6 +53,7 @@ fn replaying_a_version_is_idempotent() {
     assert_eq!(store.history(RowId(1)).unwrap().len(), 1);
 }
 
+/// Distinct-row enumeration pages through one entity regardless of history length.
 #[test]
 fn row_ids_enumerates_distinct_rows_per_entity() {
     let dir = tempdir().unwrap();

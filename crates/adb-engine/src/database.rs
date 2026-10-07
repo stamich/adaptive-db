@@ -50,7 +50,9 @@ use crate::{
     DatabaseOptions, DbError,
 };
 
+/// Log directory inside the database directory.
 const WAL_DIR: &str = "wal";
+/// Checkpoint record file inside the database directory.
 const CHECKPOINT_FILE: &str = "checkpoint.meta";
 
 /// Result of [`Database::vacuum`].
@@ -65,19 +67,31 @@ pub struct VacuumReport {
 /// A handle to one open database. Cheap to clone; all clones share the instance.
 #[derive(Clone)]
 pub struct Database {
+    /// Shared state of the instance.
     inner: Arc<Inner>,
 }
 
+/// State shared by all clones of a [`Database`].
 struct Inner {
+    /// Configuration the instance was opened with.
     options: DatabaseOptions,
+    /// Directory of the canonical log.
     wal_dir: PathBuf,
+    /// Appender of the canonical log (group commit).
     log: LogWriter,
+    /// Current and version stores; readers share, apply/vacuum take it exclusively.
     projections: RwLock<Projections>,
+    /// Ids, timestamps and active snapshots.
     tx_manager: Mutex<TransactionManager>,
+    /// Serializes validation, log append and apply of commits (and checkpoint/vacuum).
     commit_lock: Mutex<()>,
+    /// Atomic publication of checkpoints.
     journal: Journal,
+    /// Checkpoint record file.
     checkpoints: CheckpointStore,
+    /// Durable change-feed cursors of named consumers.
     offsets: ConsumerOffsets,
+    /// Poisoning state.
     health: EngineHealth,
     /// Snapshots older than this may need the version index to enumerate rows (see vacuum).
     vacuumed_through: AtomicU64,
@@ -452,10 +466,12 @@ impl Database {
 }
 
 impl DataSource for Database {
+    /// Latest published commit (default snapshot of queries).
     fn latest_committed_ts(&self) -> CommitTs {
         Database::latest_committed_ts(self)
     }
 
+    /// Snapshot read of one row for `PointLookup`.
     fn point_lookup(
         &self,
         row_id: RowId,
@@ -465,6 +481,7 @@ impl DataSource for Database {
             .map_err(|error| ExecutionError::DataSource(error.to_string()))
     }
 
+    /// Page of a range scan; merges the version index when the snapshot predates the vacuum horizon.
     fn scan_page(
         &self,
         range: &KeyRange,

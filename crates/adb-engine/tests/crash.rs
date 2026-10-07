@@ -13,6 +13,7 @@ use tempfile::tempdir;
 
 use common::{put, value};
 
+/// Options that checkpoint after only 8 dirty pages.
 fn small_checkpoints() -> DatabaseOptions {
     DatabaseOptions {
         checkpoint_dirty_pages: 8,
@@ -20,6 +21,7 @@ fn small_checkpoints() -> DatabaseOptions {
     }
 }
 
+/// Commits made after the last checkpoint are replayed from the log after a crash.
 #[test]
 fn commits_after_the_last_checkpoint_are_replayed() {
     let dir = tempdir().unwrap();

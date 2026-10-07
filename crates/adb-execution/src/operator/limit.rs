@@ -6,7 +6,9 @@ use crate::{
 
 /// Passes through at most `limit` rows, then stops pulling its input.
 pub struct LimitOperator {
+    /// Upstream operator.
     input: Box<dyn Operator>,
+    /// Rows still allowed through.
     remaining: usize,
 }
 
@@ -21,6 +23,7 @@ impl LimitOperator {
 }
 
 impl Operator for LimitOperator {
+    /// Passes batches through, truncating the last one, then stops pulling.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

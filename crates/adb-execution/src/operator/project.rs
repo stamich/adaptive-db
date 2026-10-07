@@ -10,7 +10,9 @@ use crate::{
 
 /// Restricts every row of its input to `fields`.
 pub struct ProjectOperator {
+    /// Upstream operator.
     input: Box<dyn Operator>,
+    /// Fields kept in every row.
     fields: Vec<FieldId>,
 }
 
@@ -22,6 +24,7 @@ impl ProjectOperator {
 }
 
 impl Operator for ProjectOperator {
+    /// Keeps only the projected fields of each input row.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

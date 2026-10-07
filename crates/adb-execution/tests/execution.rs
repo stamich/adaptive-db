@@ -17,10 +17,12 @@ struct MemorySource {
 }
 
 impl DataSource for MemorySource {
+    /// Fixed snapshot of the in-memory source.
     fn latest_committed_ts(&self) -> CommitTs {
         CommitTs(1)
     }
 
+    /// Linear search for `row_id`.
     fn point_lookup(
         &self,
         row_id: RowId,
@@ -33,6 +35,7 @@ impl DataSource for MemorySource {
             .map(|(_, row)| row.clone()))
     }
 
+    /// Rows of `range` after `after`, at most `limit`; counts served pages.
     fn scan_page(
         &self,
         range: &KeyRange,
@@ -69,6 +72,7 @@ fn memory(rows: impl IntoIterator<Item = RowId>) -> MemorySource {
     }
 }
 
+/// Rows 1..=100 of entity 0.
 fn source() -> Arc<dyn DataSource> {
     Arc::new(memory((1..=100).map(RowId)))
 }

@@ -7,6 +7,7 @@ use std::sync::{
 /// Shared flag checked by operators between batches.
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
+    /// Flag shared by every clone of the token.
     cancelled: Arc<AtomicBool>,
 }
 

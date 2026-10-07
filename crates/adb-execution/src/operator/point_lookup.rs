@@ -10,8 +10,11 @@ use crate::{
 
 /// Emits at most one row: `row_id` as of the query snapshot.
 pub struct PointLookupOperator {
+    /// Where the row is read from.
     source: Arc<dyn DataSource>,
+    /// Key of the row.
     row_id: RowId,
+    /// Whether the lookup already ran.
     done: bool,
 }
 
@@ -27,6 +30,7 @@ impl PointLookupOperator {
 }
 
 impl Operator for PointLookupOperator {
+    /// Returns the row once (if visible), then `None`.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

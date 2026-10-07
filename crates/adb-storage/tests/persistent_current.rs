@@ -3,6 +3,7 @@ use adb_core::{CommitTs, KeyRange, Lsn, Row, RowId, Value};
 use adb_storage::{CurrentRecord, PersistentCurrentStore};
 use tempfile::tempdir;
 
+/// Live record committed at `ts` with field 1 = `value`.
 fn record(ts: u64, value: i64) -> CurrentRecord {
     CurrentRecord {
         commit_ts: CommitTs(ts),
@@ -10,6 +11,7 @@ fn record(ts: u64, value: i64) -> CurrentRecord {
     }
 }
 
+/// A flushed record survives a reopen.
 #[test]
 fn current_store_survives_reopen() {
     let dir = tempdir().unwrap();
@@ -43,6 +45,7 @@ fn updates_do_not_grow_the_heap() {
     assert_eq!(store.get(RowId(50)).unwrap(), Some(record(199, 199)));
 }
 
+/// Removed rows vanish and their heap space is reused by later inserts.
 #[test]
 fn removed_rows_free_their_space_and_disappear() {
     let dir = tempdir().unwrap();
@@ -85,6 +88,7 @@ fn free_space_map_is_rebuilt_on_open() {
     assert_eq!(store.heap_page_count(), pages);
 }
 
+/// Entity scans page through exactly one entity in key order.
 #[test]
 fn entity_scan_is_paged_and_confined_to_the_entity() {
     let dir = tempdir().unwrap();

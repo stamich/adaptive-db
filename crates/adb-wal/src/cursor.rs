@@ -29,9 +29,13 @@ pub struct LogEntry {
 
 /// Forward cursor over the segmented log.
 pub struct WalCursor {
+    /// Log directory.
     dir: PathBuf,
+    /// Segment being read.
     segment_id: u64,
+    /// Offset of the next record in the segment.
     offset: u64,
+    /// Open segment and its last known length.
     file: Option<(File, u64)>,
 }
 

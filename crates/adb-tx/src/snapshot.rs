@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 /// Multiset of active snapshot timestamps.
 #[derive(Debug, Default)]
 pub struct SnapshotRegistry {
+    /// Number of live leases per snapshot timestamp.
     active: Mutex<BTreeMap<CommitTs, usize>>,
 }
 
@@ -40,6 +41,7 @@ impl SnapshotRegistry {
         self.len() == 0
     }
 
+    /// Drops one lease of `ts`.
     fn release(&self, ts: CommitTs) {
         let mut active = self.active.lock();
         if let Some(count) = active.get_mut(&ts) {
@@ -55,20 +57,25 @@ impl SnapshotRegistry {
 /// forgotten — always releases its snapshot.
 #[derive(Debug)]
 pub struct SnapshotLease {
+    /// Registry to release the lease into.
     registry: Arc<SnapshotRegistry>,
+    /// Leased snapshot.
     ts: CommitTs,
 }
 
 impl Drop for SnapshotLease {
+    /// Releases the snapshot.
     fn drop(&mut self) {
         self.registry.release(self.ts);
     }
 }
 
+/// Unit tests of the snapshot registry.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The oldest snapshot follows leases being taken and dropped.
     #[test]
     fn leases_track_the_oldest_snapshot() {
         let registry = Arc::new(SnapshotRegistry::default());

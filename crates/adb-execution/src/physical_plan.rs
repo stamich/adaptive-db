@@ -8,7 +8,9 @@ use crate::Expr;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum PhysicalPlan {
+    /// Reads one row by storage key.
     PointLookup {
+        /// `(entity << 64) | primary key`; a decimal string on the wire.
         #[serde(with = "row_id_json")]
         row_id: RowId,
     },
@@ -22,18 +24,27 @@ pub enum PhysicalPlan {
         entity_id: u64,
     },
 
+    /// Keeps rows matching a predicate.
     Filter {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Boolean expression; NULL counts as false.
         predicate: Expr,
     },
 
+    /// Keeps only some fields.
     Project {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Fields to keep.
         fields: Vec<FieldId>,
     },
 
+    /// Stops after a number of rows.
     Limit {
+        /// Plan producing the rows.
         input: Box<PhysicalPlan>,
+        /// Maximum number of rows.
         limit: usize,
     },
 }

@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 use common::{delete, put, read_i64, row_with_i64, value};
 
+/// Executes `plan` at `at`, or at the latest snapshot.
 fn cursor(db: &Database, plan: PhysicalPlan, at: Option<CommitTs>) -> adb_execution::QueryCursor {
     match at {
         Some(ts) => db.execute_at(plan, ts).unwrap(),
@@ -35,6 +36,7 @@ fn entity_keys(db: &Database, entity: u64, at: Option<CommitTs>) -> Vec<u64> {
     keys
 }
 
+/// An entity scan streams exactly that entity; a full scan sees every entity.
 #[test]
 fn entity_scan_streams_only_its_entity() {
     let dir = tempdir().unwrap();
@@ -66,6 +68,7 @@ fn update_churn_keeps_the_current_heap_bounded() {
     assert_eq!(db.storage_stats().unwrap().current_heap_pages, baseline);
 }
 
+/// Vacuum removes tombstones while point reads and scans at older snapshots still see the rows.
 #[test]
 fn vacuum_removes_tombstones_and_history_stays_readable() {
     let dir = tempdir().unwrap();

@@ -10,16 +10,24 @@ use crate::{IsolationLevel, Mutation, SnapshotLease};
 /// Writes are kept ordered by row id so the log and the change feed are deterministic.
 #[derive(Debug)]
 pub struct Transaction {
+    /// Transaction id.
     id: TxId,
+    /// Snapshot all reads observe.
     snapshot_ts: CommitTs,
+    /// Validation rule applied at commit.
     isolation: IsolationLevel,
+    /// Buffered writes by row.
     writes: BTreeMap<RowId, Mutation>,
+    /// Rows read from the snapshot.
     reads: BTreeSet<RowId>,
+    /// Set once committed or rolled back.
     closed: bool,
+    /// Keeps the snapshot registered while the transaction lives.
     _lease: SnapshotLease,
 }
 
 impl Transaction {
+    /// Creates a transaction; only the manager does this, so every one holds a lease.
     pub(crate) fn new(
         id: TxId,
         snapshot_ts: CommitTs,

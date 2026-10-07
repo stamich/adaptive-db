@@ -5,6 +5,7 @@ use adb_ffi::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+/// Opens a database through `adb_open`.
 fn open(dir: &std::path::Path) -> *mut adb_ffi::handle::AdbDatabaseHandle {
     let path = dir.to_string_lossy().as_bytes().to_vec();
     let mut db = ptr::null_mut();
@@ -12,6 +13,7 @@ fn open(dir: &std::path::Path) -> *mut adb_ffi::handle::AdbDatabaseHandle {
     db
 }
 
+/// Inserts a row with field 1 = `value` through `adb_insert_row_json`.
 fn insert(db: *mut adb_ffi::handle::AdbDatabaseHandle, entity: u64, pk: u64, value: i64) {
     let row = format!(r#"{{"fields":{{"1":{{"Int64":{value}}}}}}}"#).into_bytes();
     let mut ts = 0;
@@ -22,6 +24,7 @@ fn insert(db: *mut adb_ffi::handle::AdbDatabaseHandle, entity: u64, pk: u64, val
     assert!(ts > 0);
 }
 
+/// Copies a JSON buffer out of its handle, releases it and parses it.
 fn take_json(handle: *mut adb_ffi::handle::AdbBatchHandle) -> Value {
     let bytes =
         unsafe { std::slice::from_raw_parts(adb_batch_data(handle), adb_batch_len(handle)) }
@@ -30,6 +33,7 @@ fn take_json(handle: *mut adb_ffi::handle::AdbBatchHandle) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Reads up to 100 change events after `cursor`, optionally filtered by entity.
 fn read_changes(
     db: *mut adb_ffi::handle::AdbDatabaseHandle,
     cursor: u64,
@@ -43,6 +47,7 @@ fn read_changes(
     take_json(out)
 }
 
+/// Mutations, change feed, filters, offsets, vacuum and checkpoint work through the C ABI and survive a reopen.
 #[test]
 fn change_feed_and_offsets_over_the_c_abi() {
     let dir = tempdir().unwrap();
@@ -117,6 +122,7 @@ fn change_feed_and_offsets_over_the_c_abi() {
     assert_eq!(adb_close(db), AdbStatus::Ok);
 }
 
+/// Zero `max_events`, a mid-frame cursor and a null handle are rejected and leave the output null.
 #[test]
 fn invalid_change_feed_arguments_are_rejected() {
     let dir = tempdir().unwrap();

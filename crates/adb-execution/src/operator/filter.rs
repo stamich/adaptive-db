@@ -6,7 +6,9 @@ use crate::{
 
 /// Keeps rows for which the predicate is true; never returns an empty batch.
 pub struct FilterOperator {
+    /// Upstream operator.
     input: Box<dyn Operator>,
+    /// Rows for which this is true are kept.
     predicate: Expr,
 }
 
@@ -18,6 +20,7 @@ impl FilterOperator {
 }
 
 impl Operator for FilterOperator {
+    /// Pulls input batches until one has matching rows or the input ends.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

@@ -110,6 +110,7 @@ fn commit_with(
     Ok(AdbStatus::Ok)
 }
 
+/// Deserializes caller JSON, mapping failures to `InvalidArgument`.
 fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, FfiError> {
     serde_json::from_slice(bytes).map_err(|error| (AdbStatus::InvalidArgument, error.to_string()))
 }

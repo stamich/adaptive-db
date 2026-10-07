@@ -23,6 +23,7 @@ const FREE_SLOT: u16 = 0;
 
 /// Read-only view over a heap page (no page copy needed for lookups).
 pub struct SlottedView<'a> {
+    /// The page being read.
     page: &'a Page,
 }
 
@@ -79,6 +80,7 @@ impl<'a> SlottedView<'a> {
     }
 }
 
+/// Raw `(offset, len)` of a slot-directory entry.
 fn read_slot(page: &Page, slot_id: SlotId) -> (u16, u16) {
     let at = PAGE_HEADER_SIZE + slot_id as usize * SLOT_SIZE;
     let bytes = page.bytes();
@@ -90,6 +92,7 @@ fn read_slot(page: &Page, slot_id: SlotId) -> (u16, u16) {
 
 /// Mutable view over a heap page.
 pub struct SlottedPage<'a> {
+    /// The page being modified.
     page: &'a mut Page,
 }
 
@@ -184,14 +187,17 @@ impl<'a> SlottedPage<'a> {
         Ok(())
     }
 
+    /// Bytes between the slot directory and the tuple area.
     fn contiguous_free(&self) -> usize {
         (self.page.free_end() as usize).saturating_sub(self.page.free_start() as usize)
     }
 
+    /// Lowest free slot id, if any.
     fn first_free_slot(&self) -> Option<SlotId> {
         (0..self.page.slot_count()).find(|slot| self.read_slot(*slot).0 == FREE_SLOT)
     }
 
+    /// `(offset, len)` of a live slot, or `InvalidSlot`.
     fn live_slot(&self, slot_id: SlotId) -> Result<(usize, usize), PageError> {
         if slot_id >= self.page.slot_count() {
             return Err(PageError::InvalidSlot(slot_id));
@@ -203,10 +209,12 @@ impl<'a> SlottedPage<'a> {
         Ok((offset as usize, len as usize))
     }
 
+    /// Raw `(offset, len)` of a slot-directory entry.
     fn read_slot(&self, slot_id: SlotId) -> (u16, u16) {
         read_slot(self.page, slot_id)
     }
 
+    /// Overwrites a slot-directory entry.
     fn write_slot(&mut self, slot_id: SlotId, offset: u16, len: u16) {
         let at = PAGE_HEADER_SIZE + slot_id as usize * SLOT_SIZE;
         let bytes = self.page.bytes_mut();

@@ -81,6 +81,7 @@ pub struct LoggedTx {
 /// process that died mid-append and is discarded, exactly like an incomplete tail.
 #[derive(Debug, Default)]
 pub struct TxAssembler {
+    /// Transaction whose records are being collected.
     open: Option<CommittedTx>,
     /// Records of transactions whose `Begin` precedes the readable log are skipped up to here
     /// (only for databases migrated from Milestone 2.0.2, whose logs may have been pruned).
@@ -203,11 +204,13 @@ impl TxAssembler {
     }
 }
 
+/// Unit tests of log encoding and reassembly.
 #[cfg(test)]
 mod tests {
     use super::*;
     use adb_core::Row;
 
+    /// Wraps records as consecutive log entries starting at position `start`.
     fn entries(records: Vec<WalRecord>, start: u64) -> Vec<LogEntry> {
         records
             .into_iter()
@@ -220,6 +223,7 @@ mod tests {
             .collect()
     }
 
+    /// A transaction with one before-image, one delete and one put.
     fn sample(id: u64) -> CommittedTx {
         CommittedTx {
             tx_id: TxId(id),
@@ -240,6 +244,7 @@ mod tests {
         }
     }
 
+    /// Encoding a transaction and reassembling it yields the same transaction and end position.
     #[test]
     fn records_round_trip_through_the_assembler() {
         let tx = sample(7);
@@ -268,6 +273,7 @@ mod tests {
         assert_eq!(committed[0].tx.tx_id, TxId(2));
     }
 
+    /// Records without `Begin` are corruption, except in the tolerated legacy prefix.
     #[test]
     fn orphans_are_corruption_unless_tolerated() {
         let records = sample(1).to_records()[1..].to_vec();

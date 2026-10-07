@@ -35,8 +35,11 @@ impl Executor {
 
 /// A running query: pull batches until `None`, cancel from any thread.
 pub struct QueryCursor {
+    /// Root of the operator tree.
     root: Box<dyn Operator>,
+    /// Snapshot, limits and cancellation of the query.
     context: ExecutionContext,
+    /// Counters updated on every batch.
     metrics: Mutex<QueryMetrics>,
 }
 

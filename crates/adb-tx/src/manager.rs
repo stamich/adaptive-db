@@ -13,13 +13,18 @@ use crate::{IsolationLevel, SnapshotRegistry, Transaction};
 /// durable later commit implies every earlier appended commit is durable too.
 #[derive(Debug)]
 pub struct TransactionManager {
+    /// Next transaction id to hand out.
     next_tx_id: u64,
+    /// Next commit timestamp to hand out.
     next_commit_ts: u64,
+    /// Latest commit visible to new snapshots.
     last_committed_ts: u64,
+    /// Snapshots of live transactions.
     snapshots: Arc<SnapshotRegistry>,
 }
 
 impl Default for TransactionManager {
+    /// Ids and timestamps start at 1; nothing is committed yet.
     fn default() -> Self {
         Self {
             next_tx_id: 1,
@@ -81,12 +86,14 @@ impl TransactionManager {
     }
 }
 
+/// Unit tests of id allocation and validation.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{validate, Conflict};
     use adb_core::{Row, RowId};
 
+    /// Lookup of the latest commit per row from a fixed `(row, ts)` table.
     fn latest(map: &[(u128, u64)]) -> impl FnMut(RowId) -> Result<Option<CommitTs>, ()> + '_ {
         move |row| {
             Ok(map
@@ -96,6 +103,7 @@ mod tests {
         }
     }
 
+    /// Publishing commits out of order keeps the visible timestamp at the maximum.
     #[test]
     fn publication_is_monotonic_under_out_of_order_completion() {
         let mut manager = TransactionManager::default();
@@ -106,6 +114,7 @@ mod tests {
         assert_eq!(manager.latest_committed_ts(), second);
     }
 
+    /// Dropping a transaction releases its snapshot from the horizon.
     #[test]
     fn dropped_transactions_release_their_snapshot() {
         let mut manager = TransactionManager::default();
@@ -117,6 +126,7 @@ mod tests {
         assert_eq!(manager.oldest_active_snapshot(), CommitTs(9));
     }
 
+    /// A concurrent write to a written row aborts under both isolation levels.
     #[test]
     fn write_write_conflicts_abort_at_every_level() {
         for isolation in [IsolationLevel::Snapshot, IsolationLevel::Serializable] {
@@ -129,6 +139,7 @@ mod tests {
         }
     }
 
+    /// A concurrent write to a read row aborts only under serializable isolation.
     #[test]
     fn read_write_conflicts_abort_only_when_serializable() {
         let mut snapshot = TransactionManager::default().begin(IsolationLevel::Snapshot);

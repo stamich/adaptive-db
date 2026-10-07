@@ -4,6 +4,7 @@ use adb_core::{CommitTs, Lsn, TxId};
 use adb_wal::{earliest_lsn, read_all, SegmentedWalWriter, WalCursor, WalError, WalRecord};
 use tempfile::tempdir;
 
+/// A `Begin` record carrying `id`, used as a numbered marker.
 fn begin(id: u64) -> WalRecord {
     WalRecord::Begin {
         tx_id: TxId(id),
@@ -11,6 +12,7 @@ fn begin(id: u64) -> WalRecord {
     }
 }
 
+/// Transaction ids of `Begin` entries, in order.
 fn ids(entries: &[adb_wal::LogEntry]) -> Vec<u64> {
     entries
         .iter()
@@ -75,6 +77,7 @@ fn cursor_sees_records_appended_after_it_was_opened() {
     assert!(cursor.next_before(Lsn(u64::MAX)).unwrap().is_some());
 }
 
+/// Reading from before the oldest retained segment reports truncation.
 #[test]
 fn positions_before_the_oldest_segment_are_reported_as_truncated() {
     let dir = tempdir().unwrap();

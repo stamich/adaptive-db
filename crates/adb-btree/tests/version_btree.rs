@@ -6,6 +6,7 @@ use adb_btree::VersionBTree;
 use adb_core::{CommitTs, Lsn, PageId, RowId, RowLocation, VersionKey};
 use tempfile::tempdir;
 
+/// Floor lookups and per-row ranges over `(RowId, begin_ts)` keys survive a reopen.
 #[test]
 fn composite_keys_support_floor_and_per_row_ranges() {
     let dir = tempdir().unwrap();

@@ -7,6 +7,7 @@ use adb_core::{Lsn, PageId, RowId, RowLocation};
 use adb_journal::Journal;
 use tempfile::tempdir;
 
+/// Distinct, deterministic location for key `i`.
 fn loc(i: u128) -> RowLocation {
     RowLocation {
         page_id: PageId(i as u64),
@@ -14,6 +15,7 @@ fn loc(i: u128) -> RowLocation {
     }
 }
 
+/// Opens a tree in `dir` (8 cached pages, forcing splits) holding keys `0..n`.
 fn filled(dir: &std::path::Path, n: u128) -> BTree {
     let tree = BTree::open(dir.join("tree.dat"), dir.join("tree.meta"), 8).unwrap();
     for i in 0..n {
@@ -22,6 +24,7 @@ fn filled(dir: &std::path::Path, n: u128) -> BTree {
     tree
 }
 
+/// A thousand keys survive splits, a flush and a reopen.
 #[test]
 fn insert_split_reopen_and_lookup() {
     let dir = tempdir().unwrap();
@@ -49,6 +52,7 @@ fn unflushed_changes_vanish_but_flushed_state_is_intact() {
     assert_eq!(tree.get(RowId(50)).unwrap(), None);
 }
 
+/// A journal commit publishes split pages and the new root together.
 #[test]
 fn journaled_checkpoint_persists_pages_and_new_root() {
     let dir = tempdir().unwrap();
@@ -64,6 +68,7 @@ fn journaled_checkpoint_persists_pages_and_new_root() {
     assert_eq!(tree.scan_all().unwrap().len(), 3000);
 }
 
+/// Range scans honour inclusive/exclusive bounds and the limit.
 #[test]
 fn range_scan_respects_bounds_and_limit() {
     let dir = tempdir().unwrap();
@@ -93,6 +98,7 @@ fn range_scan_respects_bounds_and_limit() {
     );
 }
 
+/// Removed keys disappear, empty leaves are skipped and keys can be reinserted.
 #[test]
 fn remove_deletes_entries_and_scans_skip_empty_leaves() {
     let dir = tempdir().unwrap();
@@ -117,6 +123,7 @@ fn remove_deletes_entries_and_scans_skip_empty_leaves() {
     assert_eq!(tree.get(RowId(500)).unwrap(), Some(loc(7)));
 }
 
+/// Floor lookups walk left past empty leaves and report `None` when nothing is smaller.
 #[test]
 fn floor_finds_predecessor_across_empty_leaves() {
     let dir = tempdir().unwrap();

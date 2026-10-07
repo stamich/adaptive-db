@@ -50,10 +50,12 @@ impl KeyRange {
     }
 }
 
+/// Unit tests of key ranges.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// An entity range includes all of its keys and none of its neighbours'.
     #[test]
     fn entity_range_contains_exactly_its_entity() {
         let range = KeyRange::entity(3);
@@ -63,6 +65,7 @@ mod tests {
         assert!(!range.contains(RowId::compose(4, 0)));
     }
 
+    /// Keyset pagination resumes strictly after the cursor and ignores cursors before the range.
     #[test]
     fn bounds_after_resumes_strictly_after_the_cursor() {
         let range = KeyRange::entity(1);
@@ -75,6 +78,7 @@ mod tests {
         assert_eq!(start, Bound::Included(RowId::compose(1, 0)));
     }
 
+    /// The range of the last entity id extends to the end of the key space.
     #[test]
     fn last_entity_range_is_unbounded() {
         let range = KeyRange::entity(u64::MAX);
