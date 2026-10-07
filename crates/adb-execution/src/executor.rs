@@ -6,7 +6,8 @@ use parking_lot::Mutex;
 
 use crate::{
     operator::{
-        filter::FilterOperator, limit::LimitOperator, point_lookup::PointLookupOperator,
+        filter::FilterOperator, hash_join::HashJoinOperator, limit::LimitOperator,
+        nested_loop_join::NestedLoopJoinOperator, point_lookup::PointLookupOperator,
         project::ProjectOperator, scan::ScanOperator, Operator,
     },
     DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
@@ -127,5 +128,39 @@ fn build_operator(
         }
 
         PhysicalPlan::Limit { input, limit } => Box::new(LimitOperator::new(child(input)?, limit)),
+
+        PhysicalPlan::HashJoin {
+            left,
+            right,
+            join_type,
+            keys,
+            residual,
+        } => {
+            let right_slots = right.output_slots();
+            Box::new(HashJoinOperator::new(
+                child(left)?,
+                child(right)?,
+                join_type,
+                keys.iter().map(|key| (key.left, key.right)).unzip(),
+                right_slots,
+                residual,
+            ))
+        }
+
+        PhysicalPlan::NestedLoopJoin {
+            left,
+            right,
+            join_type,
+            predicate,
+        } => {
+            let right_slots = right.output_slots();
+            Box::new(NestedLoopJoinOperator::new(
+                child(left)?,
+                child(right)?,
+                join_type,
+                predicate,
+                right_slots,
+            ))
+        }
     })
 }

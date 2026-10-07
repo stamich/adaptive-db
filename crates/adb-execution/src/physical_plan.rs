@@ -57,6 +57,58 @@ pub enum PhysicalPlan {
         /// Maximum number of rows (at most [`crate::limits::MAX_LIMIT`]).
         limit: usize,
     },
+
+    /// Equi-join: builds a hash table over `right`, then streams `left` through it.
+    ///
+    /// Output rows carry the slots of both inputs. With `join_type = left`, a left row without
+    /// a match is emitted once with every right slot NULL.
+    HashJoin {
+        /// Probe side (streamed).
+        left: Box<PhysicalPlan>,
+        /// Build side (materialized, memory-accounted).
+        right: Box<PhysicalPlan>,
+        /// INNER or LEFT.
+        join_type: JoinType,
+        /// Equality conditions `left.slot = right.slot`; NULL keys never match.
+        keys: Vec<JoinKey>,
+        /// Extra condition evaluated on each key match (part of the join condition, so it
+        /// decides LEFT JOIN null-filling, unlike a filter above the join).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        residual: Option<Expr>,
+    },
+
+    /// General join: evaluates `predicate` for every pair of rows. Fallback for conditions the
+    /// planner cannot express as equality keys; bounded by the comparison limit.
+    NestedLoopJoin {
+        /// Outer side (streamed).
+        left: Box<PhysicalPlan>,
+        /// Inner side (materialized, memory-accounted).
+        right: Box<PhysicalPlan>,
+        /// INNER or LEFT.
+        join_type: JoinType,
+        /// Join condition; absent means every pair matches (cross join).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        predicate: Option<Expr>,
+    },
+}
+
+/// Join semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinType {
+    /// Only matching pairs.
+    Inner,
+    /// Matching pairs plus every unmatched left row with NULL right slots.
+    Left,
+}
+
+/// One equality condition of a hash join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinKey {
+    /// Slot produced by the left input.
+    pub left: SlotId,
+    /// Slot produced by the right input.
+    pub right: SlotId,
 }
 
 impl PhysicalPlan {
@@ -68,6 +120,25 @@ impl PhysicalPlan {
             | Self::Project { input, .. }
             | Self::Limit { input, .. } => {
                 vec![input]
+            }
+            Self::HashJoin { left, right, .. } | Self::NestedLoopJoin { left, right, .. } => {
+                vec![left, right]
+            }
+        }
+    }
+
+    /// Slots this node outputs, in output-column order (assumes a validated plan).
+    pub fn output_slots(&self) -> Vec<SlotId> {
+        match self {
+            Self::PointLookup { columns, .. }
+            | Self::Scan { columns }
+            | Self::EntityScan { columns, .. } => {
+                columns.iter().map(|column| column.slot).collect()
+            }
+            Self::Filter { input, .. } | Self::Limit { input, .. } => input.output_slots(),
+            Self::Project { slots, .. } => slots.clone(),
+            Self::HashJoin { left, right, .. } | Self::NestedLoopJoin { left, right, .. } => {
+                [left.output_slots(), right.output_slots()].concat()
             }
         }
     }

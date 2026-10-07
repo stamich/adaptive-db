@@ -67,7 +67,60 @@ impl Validator {
                 check_limit("LIMIT", *limit)?;
                 self.node(input, depth + 1)
             }
+
+            PhysicalPlan::HashJoin {
+                left,
+                right,
+                keys,
+                residual,
+                ..
+            } => {
+                let (left_out, right_out) = self.join_inputs(left, right, depth)?;
+                if keys.is_empty() {
+                    return Err("hash join needs at least one key".into());
+                }
+                self.list("join keys", keys.len())?;
+                let left_keys: Vec<SlotId> = keys.iter().map(|key| key.left).collect();
+                let right_keys: Vec<SlotId> = keys.iter().map(|key| key.right).collect();
+                require_all(&left_keys, &left_out, "hash join left key")?;
+                require_all(&right_keys, &right_out, "hash join right key")?;
+                let output = [left_out, right_out].concat();
+                if let Some(residual) = residual {
+                    self.expr(residual, &output, "hash join residual")?;
+                }
+                Ok(output)
+            }
+
+            PhysicalPlan::NestedLoopJoin {
+                left,
+                right,
+                predicate,
+                ..
+            } => {
+                let (left_out, right_out) = self.join_inputs(left, right, depth)?;
+                let output = [left_out, right_out].concat();
+                if let Some(predicate) = predicate {
+                    self.expr(predicate, &output, "nested loop join predicate")?;
+                }
+                Ok(output)
+            }
         }
+    }
+
+    /// Validates both join inputs and checks that they produce disjoint slots.
+    fn join_inputs(
+        &mut self,
+        left: &PhysicalPlan,
+        right: &PhysicalPlan,
+        depth: usize,
+    ) -> Result<(Vec<SlotId>, Vec<SlotId>), String> {
+        let left_out = self.node(left, depth + 1)?;
+        let right_out = self.node(right, depth + 1)?;
+        distinct(
+            "join output",
+            &[left_out.as_slice(), right_out.as_slice()].concat(),
+        )?;
+        Ok((left_out, right_out))
     }
 
     /// Checks a leaf's field-to-slot mapping and returns its slots.
