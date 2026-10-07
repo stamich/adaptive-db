@@ -3,8 +3,8 @@ use adb_ffi::{adb_abi_version, adb_engine_version, AdbStatus};
 
 /// The ABI version, every status code and the engine version string are stable.
 #[test]
-fn abi_is_v3_and_status_codes_are_stable() {
-    assert_eq!(adb_abi_version(), 3);
+fn abi_is_v4_and_status_codes_are_stable() {
+    assert_eq!(adb_abi_version(), 4);
     let codes = [
         (AdbStatus::Ok, 0),
         (AdbStatus::EndOfStream, 1),
@@ -16,6 +16,8 @@ fn abi_is_v3_and_status_codes_are_stable() {
         (AdbStatus::NotFound, 7),
         (AdbStatus::Poisoned, 8),
         (AdbStatus::LogTruncated, 9),
+        (AdbStatus::ResourceLimit, 10),
+        (AdbStatus::ArithmeticOverflow, 11),
         (AdbStatus::Internal, 255),
     ];
     for (status, code) in codes {

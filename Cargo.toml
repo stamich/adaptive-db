@@ -10,6 +10,7 @@ members = [
     "crates/adb-tx",
     "crates/adb-engine",
     "crates/adb-execution",
+    "crates/adb-plan-wire",
     "crates/adb-ffi",
     "examples/rust-benchmark",
 ]

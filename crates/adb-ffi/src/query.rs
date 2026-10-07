@@ -1,12 +1,13 @@
-//! Query lifecycle over the C ABI: bounded plan input, snapshot selection, batch streaming.
+//! Query lifecycle over the C ABI: versioned plan input, snapshot selection, batch streaming and
+//! runtime profiles.
 
 use std::slice;
 
-use adb_execution::{encode_batch, PhysicalPlan};
+use adb_execution::encode_batch;
 use parking_lot::Mutex;
 
 use crate::{
-    error::{ffi_guard, map_db_error, MAX_PLAN_JSON_BYTES},
+    error::{ffi_guard, map_db_error, map_execution_error, MAX_PLAN_JSON_BYTES},
     handle::{AdbBatchHandle, AdbDatabaseHandle, AdbQueryHandle},
     AdbStatus,
 };
@@ -67,7 +68,7 @@ fn execute_plan(
         }
 
         let plan_bytes = unsafe { slice::from_raw_parts(plan_ptr, plan_len) };
-        let plan: PhysicalPlan = serde_json::from_slice(plan_bytes)
+        let (plan, _shape) = adb_plan_wire::decode_json(plan_bytes)
             .map_err(|error| (AdbStatus::InvalidArgument, error.to_string()))?;
 
         let database = &unsafe { &*db }.database;
@@ -112,11 +113,36 @@ pub extern "C" fn adb_query_next_batch(
                 Ok(AdbStatus::Ok)
             }
             Ok(None) => Ok(AdbStatus::EndOfStream),
-            Err(adb_execution::ExecutionError::Cancelled) => {
-                Err((AdbStatus::Cancelled, "query cancelled".into()))
-            }
-            Err(error) => Err((AdbStatus::Internal, error.to_string())),
+            Err(error) => Err((map_execution_error(&error), error.to_string())),
         }
+    })
+}
+
+/// Returns the query's per-operator runtime profile as a UTF-8 JSON buffer (read with
+/// `adb_batch_data`/`adb_batch_len`, free with `adb_batch_release`). Complete once the query
+/// reached its end; callable at any time.
+#[no_mangle]
+pub extern "C" fn adb_query_profile_json(
+    query: *mut AdbQueryHandle,
+    out_json: *mut *mut AdbBatchHandle,
+) -> AdbStatus {
+    ffi_guard(|| {
+        if out_json.is_null() {
+            return Err((
+                AdbStatus::InvalidArgument,
+                "null profile output pointer".into(),
+            ));
+        }
+        unsafe { *out_json = std::ptr::null_mut() };
+        if query.is_null() {
+            return Err((AdbStatus::InvalidArgument, "null query handle".into()));
+        }
+        let profile = unsafe { &*query }.cursor.lock().profile();
+        let bytes = serde_json::to_vec(&profile)
+            .map_err(|error| (AdbStatus::Internal, error.to_string()))?
+            .into_boxed_slice();
+        unsafe { *out_json = Box::into_raw(Box::new(AdbBatchHandle { bytes })) };
+        Ok(AdbStatus::Ok)
     })
 }
 

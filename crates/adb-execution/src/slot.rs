@@ -32,6 +32,7 @@ impl fmt::Display for SlotId {
 
 /// Binding of one stored field to the slot a scan writes it into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScanColumn {
     /// Field read from the stored row.
     pub field_id: adb_core::FieldId,

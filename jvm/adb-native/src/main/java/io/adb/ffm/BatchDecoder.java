@@ -5,12 +5,20 @@ import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Strict decoder for the bounded ADB Batch Format v1 returned by the Rust engine. */
+/**
+ * Strict decoder for the bounded ADB Batch Format v2 returned by the Rust engine.
+ *
+ * <p>v2 differs from v1 in the header only: the former reserved word is a flags word and the
+ * per-row 16-byte row ids are present only with {@link #FLAG_ROW_IDS}. Column ids are output
+ * slots. See {@code docs/batch-format.md}.
+ */
 final class BatchDecoder {
     /** Magic prefix {@code "ADBB"} (little-endian) of every batch. */
     static final int MAGIC = 0x41444242;
     /** Supported batch format version. */
-    static final int VERSION = 1;
+    static final int VERSION = 2;
+    /** Header flag: row ids follow the header. */
+    static final int FLAG_ROW_IDS = 0x0001;
     /** Largest accepted encoded batch, in bytes. */
     static final int MAX_BATCH_BYTES = 64 * 1024 * 1024;
     /** Largest accepted row count per batch. */
@@ -26,15 +34,18 @@ final class BatchDecoder {
         if (readInt(b, "magic") != MAGIC) throw new IllegalArgumentException("bad batch magic");
         int version = Short.toUnsignedInt(readShort(b, "version"));
         if (version != VERSION) throw new IllegalArgumentException("unsupported batch version " + version);
-        readShort(b, "flags");
+        int flags = Short.toUnsignedInt(readShort(b, "flags"));
+        if ((flags & ~FLAG_ROW_IDS) != 0) throw new IllegalArgumentException("unknown batch flags " + flags);
+        boolean hasRowIds = (flags & FLAG_ROW_IDS) != 0;
         int rows = readInt(b, "row count");
         int columns = readInt(b, "column count");
         if (rows < 0 || rows > MAX_ROWS) throw new IllegalArgumentException("invalid row count " + rows);
         if (columns < 0 || columns > MAX_COLUMNS) throw new IllegalArgumentException("invalid column count " + columns);
 
-        requireRemaining(b, Math.multiplyExact(rows, 16), "row ids");
-        List<BigInteger> rowIds = new ArrayList<>(rows);
-        for (int i = 0; i < rows; i++) {
+        int rowIdCount = hasRowIds ? rows : 0;
+        requireRemaining(b, Math.multiplyExact(rowIdCount, 16), "row ids");
+        List<BigInteger> rowIds = new ArrayList<>(rowIdCount);
+        for (int i = 0; i < rowIdCount; i++) {
             byte[] le = new byte[16]; b.get(le);
             byte[] be = new byte[16];
             for (int j = 0; j < 16; j++) be[j] = le[15-j];
@@ -44,7 +55,7 @@ final class BatchDecoder {
         List<NativeColumn> decoded = new ArrayList<>(columns);
         for (int c = 0; c < columns; c++) {
             requireRemaining(b, 16, "column header");
-            int fieldId = b.getInt();
+            int slotId = b.getInt();
             PhysicalType type = PhysicalType.fromId(Byte.toUnsignedInt(b.get()));
             b.get(); b.get(); b.get();
             int bitmapLen = b.getInt();
@@ -55,10 +66,10 @@ final class BatchDecoder {
             requireRemaining(b, Math.addExact(bitmapLen, payloadLen), "column body");
             byte[] bitmap = new byte[bitmapLen]; b.get(bitmap);
             byte[] payload = new byte[payloadLen]; b.get(payload);
-            decoded.add(new NativeColumn(fieldId, type, decodeColumn(type, rows, bitmap, payload)));
+            decoded.add(new NativeColumn(slotId, type, decodeColumn(type, rows, bitmap, payload)));
         }
         if (b.hasRemaining()) throw new IllegalArgumentException("trailing bytes after batch");
-        return new NativeRecordBatch(List.copyOf(rowIds), List.copyOf(decoded));
+        return new NativeRecordBatch(rows, List.copyOf(rowIds), List.copyOf(decoded));
     }
 
     /** Decodes one typed column while validating fixed widths and variable offsets. */

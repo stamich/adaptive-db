@@ -32,7 +32,7 @@ fn ffi_executes_point_lookup() {
         AdbStatus::Ok
     );
 
-    let plan = serde_json::to_vec(&PhysicalPlan::PointLookup {
+    let plan = adb_plan_wire::encode_json(&PhysicalPlan::PointLookup {
         row_id: RowId(1),
         columns: Vec::new(),
     })

@@ -13,7 +13,7 @@ final class NativeLibrary implements AutoCloseable {
     /** Whether {@link #close()} already released the arena. */
     private boolean closed;
     /** C ABI version this binding was written against; any other version is rejected. */
-    static final int EXPECTED_ABI = 3;
+    static final int EXPECTED_ABI = 4;
 
     /** Shared arena that keeps the library mapped until {@link #close()}. */
     final Arena arena = Arena.ofShared();
@@ -44,6 +44,8 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle queryCancel;
     /** {@code adb_query_close}: releases a query cursor. */
     final MethodHandle queryClose;
+    /** {@code adb_query_profile_json}: per-operator runtime profile of a query (ABI 4). */
+    final MethodHandle queryProfile;
     /** {@code adb_batch_data}: data pointer of a native byte buffer. */
     final MethodHandle batchData;
     /** {@code adb_batch_len}: length of a native byte buffer. */
@@ -88,6 +90,7 @@ final class NativeLibrary implements AutoCloseable {
         queryNextBatch = downcall("adb_query_next_batch", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         queryCancel = downcall("adb_query_cancel", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
         queryClose = downcall("adb_query_close", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+        queryProfile = downcall("adb_query_profile_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         batchData = downcall("adb_batch_data", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         batchLen = downcall("adb_batch_len", FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         batchRelease = downcall("adb_batch_release", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));

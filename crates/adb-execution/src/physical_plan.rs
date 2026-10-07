@@ -9,7 +9,7 @@ use crate::{Expr, ScanColumn, SlotId};
 
 /// One node of a physical plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PhysicalPlan {
     /// Reads one row by storage key.
     PointLookup {
@@ -141,6 +141,7 @@ pub enum AggregateFunction {
 
 /// One aggregate of an [`PhysicalPlan::Aggregate`] node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AggregateSpec {
     /// Function to compute.
     pub function: AggregateFunction,
@@ -156,6 +157,7 @@ pub struct AggregateSpec {
 /// NULLs sort after every value in ascending order and before every value in descending order
 /// (PostgreSQL's default `NULLS LAST` / `NULLS FIRST`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SortKey {
     /// Slot compared.
     pub slot: SlotId,
@@ -176,6 +178,7 @@ pub enum JoinType {
 
 /// One equality condition of a hash join.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JoinKey {
     /// Slot produced by the left input.
     pub left: SlotId,

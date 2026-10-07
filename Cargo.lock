@@ -84,6 +84,7 @@ dependencies = [
  "adb-core",
  "adb-engine",
  "adb-execution",
+ "adb-plan-wire",
  "adb-storage",
  "adb-wal",
  "parking_lot",
@@ -107,6 +108,17 @@ version = "0.2.3"
 dependencies = [
  "adb-core",
  "crc32fast",
+ "thiserror",
+]
+
+[[package]]
+name = "adb-plan-wire"
+version = "0.2.3"
+dependencies = [
+ "adb-core",
+ "adb-execution",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

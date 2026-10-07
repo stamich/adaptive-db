@@ -34,7 +34,7 @@ pub enum BinaryOp {
 
 /// Expression tree; the serde form is part of the plan wire format.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Expr {
     /// Value of a slot of the current row.
     Slot {

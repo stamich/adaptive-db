@@ -98,7 +98,7 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase):
       var next = query.nextBatch()
       while next.isPresent do
         val batch = next.get()
-        val byField = batch.columns().asScala.map(c => c.fieldId() -> c).toMap
+        val byField = batch.columns().asScala.map(c => c.slotId() -> c).toMap
         for row <- 0 until batch.rowCount() do
           if materializedRows >= AdaptiveDatabase.MaxMaterializedResultRows then
             throw new IllegalStateException(s"result exceeds ${AdaptiveDatabase.MaxMaterializedResultRows} rows; use LIMIT")
