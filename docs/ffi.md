@@ -1,4 +1,4 @@
-# C ABI v3 — Milestone 2.0.3
+# C ABI v4 (Milestone 2.1.3)
 
 The JVM uses the JDK 22+ Foreign Function & Memory API; JNI is not required. The authoritative
 declarations are in `include/adb.h`.
@@ -16,12 +16,13 @@ declarations are in `include/adb.h`.
 | Area | Functions |
 |---|---|
 | Lifecycle | `adb_open`, `adb_close` (checkpoints, always releases the handle) |
-| Queries | `adb_execute_plan_json`, `adb_execute_plan_json_at`, `adb_query_next_batch`, `adb_query_cancel`, `adb_query_close` |
+| Queries | `adb_execute_plan_json`, `adb_execute_plan_json_at` (plan wire v2, see [plan-wire-format.md](plan-wire-format.md)), `adb_query_next_batch` (batch format v2, see [batch-format.md](batch-format.md)), `adb_query_cancel`, `adb_query_close` |
+| Profiles *(new in 4)* | `adb_query_profile_json`: the query's per-operator runtime profile (see [execution.md](execution.md#runtime-profile)) |
 | Buffers | `adb_batch_data`, `adb_batch_len`, `adb_batch_release` |
 | Mutations | `adb_insert_row_json`, `adb_update_fields_json`, `adb_delete_row` (each one serializable transaction) |
 | Metadata | `adb_latest_committed_ts`, `adb_abi_version`, `adb_engine_version` |
-| Maintenance *(new)* | `adb_checkpoint`, `adb_vacuum` |
-| Change feed *(new)* | `adb_read_changes_json`, `adb_change_feed_end`, `adb_commit_consumer_offset`, `adb_consumer_offset` — see [cdc.md](cdc.md) |
+| Maintenance | `adb_checkpoint`, `adb_vacuum` |
+| Change feed | `adb_read_changes_json`, `adb_change_feed_end`, `adb_commit_consumer_offset`, `adb_consumer_offset` (see [cdc.md](cdc.md)) |
 
 ## Status codes
 
@@ -29,23 +30,27 @@ declarations are in `include/adb.h`.
 |---|---|---|
 | 0 | `OK` | |
 | 1 | `END_OF_STREAM` | query exhausted |
-| 2 | `INVALID_ARGUMENT` | bad pointer, length, cursor or JSON |
+| 2 | `INVALID_ARGUMENT` | bad pointer, length, cursor or JSON; unsupported plan wire version; invalid plan; expression type error |
 | 3 | `CONFLICT` | transaction conflict (retry) or duplicate primary key |
 | 4 | `IO_ERROR` | filesystem failure |
 | 5 | `CORRUPTION` | persisted bytes failed validation; projections can be rebuilt from the log |
-| 6 | `CANCELLED` | query cancelled |
+| 6 | `CANCELLED` | query cancelled or past its deadline |
 | 7 | `NOT_FOUND` | row or consumer offset not found |
-| 8 | `POISONED` *(new)* | instance unusable or commit outcome unknown: close and reopen |
-| 9 | `LOG_TRUNCATED` *(new)* | change-log position no longer retained |
+| 8 | `POISONED` | instance unusable or commit outcome unknown: close and reopen |
+| 9 | `LOG_TRUNCATED` | change-log position no longer retained |
+| 10 | `RESOURCE_LIMIT` *(new)* | query exceeded its memory budget, materialized-row cap, join fanout or nested-loop comparison limit; the database is unaffected |
+| 11 | `ARITHMETIC_OVERFLOW` *(new)* | an exact computation overflowed (e.g. an INT64 `SUM`) |
 | 255 | `INTERNAL` | unexpected failure or contained panic |
 
 ## Versioning
 
-`adb_abi_version()` returns `3`. `io.adb.ffm.NativeLibrary` refuses any other value. Changes from
-ABI 2: new functions and status codes above, `adb_close` checkpoints, and the plan wire format
-accepts `entity_scan`.
+`adb_abi_version()` returns `4` and `adb_engine_version()` returns `2.1.3`.
+`io.adb.ffm.NativeLibrary` refuses any other ABI version. Changes from ABI 3: plan wire v2 only,
+batch format v2, `adb_query_profile_json`, statuses 10 and 11, consistent mapping of execution
+errors (invalid plans and expression errors are `INVALID_ARGUMENT`, deadlines `CANCELLED`).
 
 ## Verification
 
 `examples/jvm-cdc-smoke/run.sh` builds the library, compiles the Java binding with plain `javac`
-and exercises the full Java → C ABI → engine path.
+and exercises the Java → C ABI → engine path; `crates/adb-ffi/tests/relational.rs` covers joins,
+aggregates, profiles and the new statuses over the ABI.

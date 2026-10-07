@@ -1,4 +1,4 @@
-# Roadmap after Milestone 2.0
+# Roadmap
 
 ## 2.0.3 — log as source of truth (done)
 - canonical log retained; projections rebuildable (`rebuild_projections`)
@@ -14,18 +14,28 @@
 - push/long-poll change subscriptions
 - predicate (range) read sets for phantom-free serializable scans inside transactions
 
-## 2.1 — relational execution
-- HashJoin and NestedLoopJoin
-- Aggregate / GroupBy
+## 2.1.3 — relational execution (done)
+- slot-addressed execution (`RelationId` / `SlotId`), self-join safe
+- HashJoin and NestedLoopJoin (INNER / LEFT, CROSS), predicate pushdown
+- Aggregate / GROUP BY with COUNT, SUM, MIN, MAX, AVG (checked INT64 arithmetic)
 - Sort / TopK
-- expression functions
-- EXPLAIN ANALYZE operator metrics
+- query memory tracker and work limits
+- plan wire v2 (`adb-plan-wire`), batch format v2, C ABI v4
+- explained planning decisions (`PlanningPolicy`) and EXPLAIN ANALYZE runtime profiles
+
+## 2.1.x follow-ups
+- computed expressions in SELECT (arithmetic, functions), `HAVING`, `IS [NOT] NULL`, `IN`,
+  `DISTINCT`, ordinal ORDER BY
+- three-valued logic for AND / OR / NOT (today NULL behaves as false)
+- spilling for blocking operators once the memory budget is exceeded
+- right/full outer joins; choosing the hash-join build side by size
+- streaming JVM results instead of materializing up to 1,000,000 rows in the gateway
 
 ## 2.2 — statistics and cost-based optimizer
 - row counts / NDV / min-max / histograms
 - cardinality estimation
-- cost model
-- join ordering
+- cost model as a `PlanningPolicy` (build side, join algorithm, join ordering), fed back by the
+  2.1 runtime profiles (estimated vs. actual rows per operator)
 - persisted statistics
 
 ## 2.3 — secondary indexes
@@ -54,7 +64,8 @@
 - projection watermarks and delta repair
 
 ## 5.x — adaptive physical design
-- workload telemetry
+- workload telemetry (built on the per-operator runtime profiles of 2.1)
+- intent-driven planning: declared intents (latency, memory, freshness) as `PlanningPolicy` inputs
 - projection/index advisors
 - adaptive partition split/merge/move
 - transaction affinity graph

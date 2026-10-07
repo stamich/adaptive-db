@@ -8,18 +8,18 @@
 - binding and type checking
 - logical planning
 - deterministic optimization
-- physical access path selection
+- physical access path and strategy selection (with explained decisions)
 
 ### Java 22+
 - Foreign Function & Memory API
 - lifetime-safe wrappers around Rust-owned handles
-- ADB Batch Format v1 decoding
+- ADB batch format v2 decoding (slot columns, optional row ids)
 
 ### Rust
 - transactions and MVCC
 - WAL/recovery
 - storage
-- physical execution
+- physical execution (joins, aggregation, sorting) under memory and work budgets
 - statement mutation atomics
 
 ## Reserved physical field

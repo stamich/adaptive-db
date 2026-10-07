@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.0.3)
+# Engine invariants (Milestone 2.1.3)
 
 Each invariant names the test that guards it.
 
@@ -56,3 +56,29 @@ Each invariant names the test that guards it.
 
 18. Events are delivered in commit order, durable only, gap-free and duplicate-free across pages.
     *(cdc::paging_with_the_returned_cursor_is_gap_free_and_duplicate_free)*
+
+## Query execution (2.1)
+
+17. The native engine executes only plans that passed validation: bounded depth, lists, slots and
+    LIMIT/TopK; no slot produced twice; every slot read is produced by the operator's input.
+    *(plan_validation::\*, joins::invalid_join_plans_are_rejected, wire::invalid_plans_are_rejected_both_ways)*
+18. A plan from a producer with another wire version or dialect is refused, never half-understood.
+    *(wire::version_mismatch_is_reported_as_such, wire::unknown_fields_are_rejected, jvm_contract, PlanJsonEncoderTest.matchesTheNativeContractFixture)*
+19. Two instances of one entity in a query never share a slot.
+    *(joins::self_join_keeps_relation_instances_apart, SelectBinderTest.selfJoinGetsDistinctSlots)*
+20. NULL join keys never match; a LEFT JOIN emits every unmatched left row exactly once with NULL
+    right slots, and the join condition (not a later WHERE) decides what matched.
+    *(joins::inner_hash_join_matches_equal_keys, joins::left_hash_join_null_fills_unmatched_rows, joins::residual_condition_decides_left_join_matches, PredicatePushdownRuleTest.leftJoinPreservesNullFilling)*
+21. Hash and nested-loop joins return the same rows for the same equality condition.
+    *(joins::nested_loop_join_matches_hash_join_and_handles_inequalities)*
+22. `TopK(k)` returns exactly what `Limit(Sort, k)` returns, ties and NULL placement included.
+    *(aggregate_sort::top_k_equals_limit_over_sort)*
+23. An INT64 aggregate never returns a wrapped value: it is exact or fails with
+    `ARITHMETIC_OVERFLOW`. *(aggregate_sort::sum_is_checked, relational::sum_overflow_maps_to_its_own_status)*
+24. Unsortable values (mixed types, NaN) fail cleanly; sorting never panics.
+    *(aggregate_sort::unsortable_values_are_errors)*
+25. Blocking operators never hold more than the query memory budget or the materialized-row cap,
+    and return all reserved memory when the query ends or fails.
+    *(memory::tests, joins::build_side_respects_memory_and_row_limits, aggregate_sort::group_count_is_capped)*
+26. Join work is bounded: per-left-row fanout, total nested-loop comparisons and the size of an
+    output batch. *(joins::join_fanout_is_capped, joins::nested_loop_comparisons_are_capped, joins::join_output_is_batched)*

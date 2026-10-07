@@ -1,9 +1,64 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.0.3. Hardened patch releases preserve the functional scope of
+Milestone 2.1.3. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
+
+## 2.1.3 — Relational execution
+
+Implements the relational-execution plan of "Milestone 2.1.2" on top of 2.0.3, with the changes
+described in `docs/milestone-2.1.3.md`.
+
+### Added (Rust)
+- Slot-addressed execution: `SlotId`, `ScanColumn`, `ExecRow` (a `Vec<Value>` indexed by slot);
+  leaf nodes map stored fields to slots, everything above them works on slots only.
+- Operators `HashJoin` and `NestedLoopJoin` (INNER / LEFT; cross join), `Aggregate`
+  (GROUP BY; COUNT(*), COUNT, SUM, MIN, MAX, AVG), `Sort`, `TopK`.
+- `PhysicalPlan::validate` returns the plan shape and enforces depth, list, slot and LIMIT/TopK
+  limits plus slot consistency (no slot produced twice, every slot read is produced by the input).
+- `MemoryTracker` / RAII `MemoryReservation` (per-query budget), `ExecutionLimits` (materialized
+  rows, join fanout, nested-loop comparisons), `collect_all_bounded`.
+- Checked INT64 aggregation (`i128` accumulation, `ExecutionError::ArithmeticOverflow`).
+- Per-operator runtime profiles (`QueryCursor::profile`, `OperatorProfile`, `QueryProfile`);
+  `QueryMetrics::source_rows` is maintained.
+- New crate `adb-plan-wire`: plan wire v2 envelope, 8 MiB bound, version check before decoding,
+  unknown fields rejected, validation after decoding.
+- C ABI 4: `adb_query_profile_json`, statuses `RESOURCE_LIMIT` (10) and `ARITHMETIC_OVERFLOW` (11),
+  consistent execution-error mapping; batch format v2 (flags word, optional row ids, slot column ids).
+- `examples/rust-demo` (`adb-rust-demo`); relational sections in `examples/rust-benchmark`
+  (renamed `adb-benchmark-rust`).
+
+### Added (JVM)
+- Model: `RelationId`, `SlotId`, `AggregateFunction`, `ColumnOrigin`, `Attribute`.
+- SQL: INNER / LEFT [OUTER] / CROSS JOIN, table aliases, qualified columns, aggregate calls,
+  select aliases, GROUP BY, ORDER BY ASC/DESC; parser budgets.
+- `SelectBinder`: relation and alias scope, dense slot allocation on first reference, ambiguity
+  and visibility errors, GROUP BY validation, aggregate result types, hidden ORDER BY aggregates,
+  LIMIT ≤ 1,000,000.
+- Relational logical plan and EXPLAIN rendering; `PredicatePushdownRule`; `PointLookupRule` works on
+  join inputs and keeps remaining conjuncts.
+- `PlanningPolicy` / `DefaultPlanningPolicy` with `PlanDecision`s (join strategy, TopK) shown by
+  EXPLAIN; EXPLAIN ANALYZE shows the native runtime profile.
+- Java binding: ABI 4, batch v2 decoder, `NativeRecordBatch.column(slot)`, `NativeQuery.profileJson()`.
+- Demo tour phase 2.1.3; JVM benchmark relational stages.
+
+### Changed
+- `adb_core::SlotId` (heap tuple index) renamed to `TupleSlot`.
+- Plans must be plan wire v2; v1 bare plans are rejected with a version message.
+- Engine, crates and JVM build report version 2.1.3 (previously 0.2.x).
+- `build-milestone-2.1.3.sh` replaces `build-milestone2.0.3.sh`; `demo/run-demo.sh` uses the
+  Gradle wrapper.
+- `include/adb.h`: removed an accidental second copy of the header.
+
+### Tests
+- Rust: 113 → 157 (plan validation, joins, aggregation/sort/TopK, memory tracker, profiles, plan
+  wire, ABI). JVM: 13 → 38. A shared fixture pins the plan wire format from both the Scala encoder
+  and the Rust decoder.
+
+### Compatibility
+- Native ABI 4 (the JVM refuses 3); plan wire 2; batch format 2. Page, B+Tree, WAL and checkpoint
+  formats unchanged: 2.0.3 databases open as they are.
 
 ## 2.0.3 — Log as source of truth, native CDC
 

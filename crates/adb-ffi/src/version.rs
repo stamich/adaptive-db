@@ -4,7 +4,7 @@
 /// 4 = Milestone 2.1 (plan wire v2, batch format v2, query profiles, resource statuses).
 pub const ABI_VERSION: u32 = 4;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"0.2.3";
+static ENGINE_VERSION: &[u8] = b"2.1.3";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]
