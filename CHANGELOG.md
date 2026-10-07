@@ -59,7 +59,7 @@ and build reproducibility.
 - Engine 0.2.3, native ABI 3 (JVM checks it). Page, B+Tree and WAL formats unchanged; checkpoint
   format 3 (format 2 migrated). `Database::get_in_tx` takes `&mut Transaction`;
   `DbError::TransactionConflict` carries the `Conflict`.
-- Root-level validation logs and audits of earlier milestones moved to `docs/history/`.
+- Root-level validation logs, audits and build scripts of earlier milestones removed (available in git history).
 
 ## 2.0.1 — Hardened SQL/JVM control plane + demo
 

@@ -1,3 +1,0 @@
-Rust files: 100
-Rust items: 500
-Missing Rustdoc: 0

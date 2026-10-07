@@ -99,5 +99,5 @@ jvm/           Scala/Java: model, catalog, SQL, planning, FFM, gateway, CLI
 proto/         target binary plan contract
 examples/      Rust benchmark, JVM CDC smoke test, results
 demo/          feature tour through the JVM CLI
-docs/          architecture, invariants, CDC, ABI; docs/history holds artifacts of earlier milestones
+docs/          architecture, invariants, CDC, ABI, wire formats, roadmap
 ```
