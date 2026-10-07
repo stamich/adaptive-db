@@ -1,6 +1,6 @@
 package io.adb.sql
 
-/** Token produced by the Milestone 2 SQL tokenizer. */
+/** Token produced by the SQL tokenizer. */
 enum Token derives CanEqual:
   /** SQL identifier or keyword. */
   case Word(value: String)
@@ -8,12 +8,12 @@ enum Token derives CanEqual:
   case Number(value: String)
   /** SQL single-quoted string literal after quote unescaping. */
   case StringToken(value: String)
-  /** Punctuation or comparison operator. */
+  /** Punctuation (`(`, `)`, `,`, `*`, `;`, `.`) or comparison operator. */
   case Symbol(value: String)
   /** Sentinel marking the end of the token stream. */
   case End
 
-/** Bounded tokenizer for the intentionally small Milestone 2 SQL grammar. */
+/** Bounded tokenizer for the intentionally small SQL grammar (Milestone 2.1). */
 object Tokenizer:
   /** Maximum SQL statement length accepted by the JVM control plane. */
   val MaxSqlChars: Int = 1024 * 1024
@@ -93,7 +93,7 @@ object Tokenizer:
           depth -= 1
           if depth < 0 then throw new IllegalArgumentException("unmatched closing parenthesis")
           emit(Token.Symbol(")")); i += 1
-        case ch @ (',' | '*' | ';') =>
+        case ch @ (',' | '*' | ';' | '.') =>
           emit(Token.Symbol(ch.toString)); i += 1
         case other => throw new IllegalArgumentException(s"unexpected character '$other'")
 
