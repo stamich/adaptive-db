@@ -22,13 +22,18 @@ pub struct ScanOperator {
     columns: Vec<ScanColumn>,
     /// Slot width of the rows produced.
     width: usize,
+    /// Profile name: `scan` (every entity) or `entity_scan`.
+    name: &'static str,
+    /// Pages requested from the data source.
+    pages: u64,
 }
 
 impl ScanOperator {
-    /// Scans `range` of `source`, writing `columns` into rows of `width` slots.
+    /// Scans `range` of `source`, writing `columns` into rows of `width` slots; `name` is the
+    /// plan operator (`scan` or `entity_scan`).
     pub fn new(
         source: Arc<dyn DataSource>,
-        range: KeyRange,
+        (name, range): (&'static str, KeyRange),
         columns: Vec<ScanColumn>,
         width: usize,
     ) -> Self {
@@ -39,6 +44,8 @@ impl ScanOperator {
             exhausted: false,
             columns,
             width,
+            name,
+            pages: 0,
         }
     }
 }
@@ -53,6 +60,7 @@ impl Operator for ScanOperator {
         if self.exhausted {
             return Ok(None);
         }
+        self.pages += 1;
         let batch = self.source.scan_page(
             &self.range,
             self.after,
@@ -76,5 +84,15 @@ impl Operator for ScanOperator {
                 Ok(None)
             }
         }
+    }
+
+    /// `scan` or `entity_scan`.
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Pages requested from storage.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        vec![("pages", self.pages)]
     }
 }

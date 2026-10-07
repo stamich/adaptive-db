@@ -13,6 +13,8 @@ pub struct LeftStream {
     pending: VecDeque<ExecRow>,
     /// Whether the input is exhausted.
     done: bool,
+    /// Rows pulled from the input.
+    rows: u64,
 }
 
 impl LeftStream {
@@ -22,6 +24,7 @@ impl LeftStream {
             input,
             pending: VecDeque::new(),
             done: false,
+            rows: 0,
         }
     }
 
@@ -33,7 +36,10 @@ impl LeftStream {
         while self.pending.is_empty() && !self.done {
             context.check_running()?;
             match self.input.next_batch(context)? {
-                Some(batch) => self.pending.extend(batch),
+                Some(batch) => {
+                    self.rows += batch.len() as u64;
+                    self.pending.extend(batch);
+                }
                 None => self.done = true,
             }
         }
@@ -43,6 +49,11 @@ impl LeftStream {
     /// The upstream operator (for profiling).
     pub fn input(&self) -> &dyn Operator {
         self.input.as_ref()
+    }
+
+    /// Rows pulled from the input so far.
+    pub fn rows(&self) -> u64 {
+        self.rows
     }
 }
 

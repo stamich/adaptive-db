@@ -22,7 +22,7 @@ struct BuildSide {
     /// Join key -> positions of the build rows with that key.
     index: HashMap<Vec<KeyPart>, Vec<u32>>,
     /// Memory held by `rows` and `index`; released with the build side.
-    _reservation: MemoryReservation,
+    reservation: MemoryReservation,
 }
 
 /// Builds a hash table over the right input on the first pull, then streams the left input
@@ -91,7 +91,7 @@ impl HashJoinOperator {
         Ok(BuildSide {
             rows,
             index,
-            _reservation: reservation,
+            reservation,
         })
     }
 }
@@ -135,5 +135,32 @@ impl Operator for HashJoinOperator {
             finish_left_row(left_row, matches, *join_type, right_slots, out);
             Ok(())
         })
+    }
+
+    /// `hash_join`.
+    fn name(&self) -> &'static str {
+        "hash_join"
+    }
+
+    /// Probe side, then build side.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.left.input(), self.right.as_ref()]
+    }
+
+    /// Build-side size, distinct keys, probe rows and memory.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        let (rows, keys, peak) = self.build.as_ref().map_or((0, 0, 0), |build| {
+            (
+                build.rows.len() as u64,
+                build.index.len() as u64,
+                build.reservation.peak() as u64,
+            )
+        });
+        vec![
+            ("build_rows", rows),
+            ("build_keys", keys),
+            ("probe_rows", self.left.rows()),
+            ("peak_memory_bytes", peak),
+        ]
     }
 }

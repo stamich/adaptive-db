@@ -43,4 +43,14 @@ impl Operator for LimitOperator {
         self.remaining -= batch.len();
         Ok(Some(batch))
     }
+
+    /// `limit`.
+    fn name(&self) -> &'static str {
+        "limit"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
+    }
 }

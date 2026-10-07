@@ -161,6 +161,10 @@ pub struct AggregateOperator {
     width: usize,
     /// Result rows and the memory of the groups, once computed.
     output: Option<(OutputBuffer, MemoryReservation)>,
+    /// Rows read from the input.
+    rows_in: u64,
+    /// Groups formed.
+    groups: u64,
 }
 
 impl AggregateOperator {
@@ -177,6 +181,8 @@ impl AggregateOperator {
             aggregates,
             width,
             output: None,
+            rows_in: 0,
+            groups: 0,
         }
     }
 
@@ -198,6 +204,7 @@ impl AggregateOperator {
 
         while let Some(batch) = self.input.next_batch(context)? {
             context.check_running()?;
+            self.rows_in += batch.len() as u64;
             for row in &batch {
                 let key = group_key(row, &self.group_by);
                 let position = match index.get(&key) {
@@ -231,6 +238,7 @@ impl AggregateOperator {
             }
         }
 
+        self.groups = groups.len() as u64;
         let mut rows = Vec::with_capacity(groups.len());
         for (key, accumulators) in &groups {
             let mut row = ExecRow::nulls(self.width);
@@ -263,5 +271,28 @@ impl Operator for AggregateOperator {
         }
         let (buffer, _) = self.output.as_mut().expect("computed above");
         Ok(buffer.next_batch(context.batch_size))
+    }
+
+    /// `aggregate`.
+    fn name(&self) -> &'static str {
+        "aggregate"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
+    }
+
+    /// Rows read, groups and memory.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        let peak = self
+            .output
+            .as_ref()
+            .map_or(0, |(_, reservation)| reservation.peak() as u64);
+        vec![
+            ("rows_in", self.rows_in),
+            ("groups", self.groups),
+            ("peak_memory_bytes", peak),
+        ]
     }
 }

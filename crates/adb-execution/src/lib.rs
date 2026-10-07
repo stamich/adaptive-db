@@ -16,6 +16,7 @@ pub mod memory;
 pub mod metrics;
 pub mod operator;
 pub mod physical_plan;
+pub mod profile;
 pub mod slot;
 pub mod validate;
 pub mod wire;
@@ -34,6 +35,7 @@ pub use metrics::QueryMetrics;
 pub use physical_plan::{
     AggregateFunction, AggregateSpec, JoinKey, JoinType, PhysicalPlan, SortKey,
 };
+pub use profile::{OperatorProfile, QueryProfile};
 pub use slot::{ScanColumn, SlotId};
 pub use validate::PlanShape;
 pub use wire::{

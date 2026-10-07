@@ -8,9 +8,10 @@ use crate::{
     operator::{
         aggregate::AggregateOperator, filter::FilterOperator, hash_join::HashJoinOperator,
         limit::LimitOperator, nested_loop_join::NestedLoopJoinOperator,
-        point_lookup::PointLookupOperator, project::ProjectOperator, scan::ScanOperator,
-        sort::SortOperator, top_k::TopKOperator, Operator,
+        point_lookup::PointLookupOperator, profiled::Profiled, project::ProjectOperator,
+        scan::ScanOperator, sort::SortOperator, top_k::TopKOperator, Operator,
     },
+    profile::QueryProfile,
     DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
 };
 
@@ -82,7 +83,18 @@ impl QueryCursor {
 
     /// Counters accumulated so far.
     pub fn metrics(&self) -> QueryMetrics {
-        *self.metrics.lock()
+        let mut metrics = *self.metrics.lock();
+        metrics.source_rows = self.root.profile().leaf_rows();
+        metrics
+    }
+
+    /// Per-operator runtime profile so far (complete once the cursor is exhausted).
+    pub fn profile(&self) -> QueryProfile {
+        QueryProfile {
+            peak_memory_bytes: self.context.memory.peak() as u64,
+            memory_limit_bytes: self.context.memory.limit() as u64,
+            root: self.root.profile(),
+        }
     }
 
     /// Token that cancels this query from another thread.
@@ -92,13 +104,14 @@ impl QueryCursor {
 }
 
 /// Recursively instantiates the operator for each plan node; rows are `width` slots wide.
+/// Every operator is wrapped in [`Profiled`] so the query profile covers the whole tree.
 fn build_operator(
     source: Arc<dyn DataSource>,
     plan: PhysicalPlan,
     width: usize,
 ) -> Result<Box<dyn Operator>, ExecutionError> {
     let child = |input: Box<PhysicalPlan>| build_operator(source.clone(), *input, width);
-    Ok(match plan {
+    let operator: Box<dyn Operator> = match plan {
         PhysicalPlan::PointLookup { row_id, columns } => Box::new(PointLookupOperator::new(
             source.clone(),
             row_id,
@@ -108,14 +121,14 @@ fn build_operator(
 
         PhysicalPlan::Scan { columns } => Box::new(ScanOperator::new(
             source.clone(),
-            KeyRange::all(),
+            ("scan", KeyRange::all()),
             columns,
             width,
         )),
 
         PhysicalPlan::EntityScan { entity_id, columns } => Box::new(ScanOperator::new(
             source.clone(),
-            KeyRange::entity(entity_id),
+            ("entity_scan", KeyRange::entity(entity_id)),
             columns,
             width,
         )),
@@ -180,5 +193,6 @@ fn build_operator(
         PhysicalPlan::TopK { input, keys, limit } => {
             Box::new(TopKOperator::new(child(input)?, keys, limit))
         }
-    })
+    };
+    Ok(Profiled::wrap(operator))
 }

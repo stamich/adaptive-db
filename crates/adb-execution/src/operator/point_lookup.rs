@@ -64,4 +64,9 @@ impl Operator for PointLookupOperator {
                 )]
             }))
     }
+
+    /// `point_lookup`.
+    fn name(&self) -> &'static str {
+        "point_lookup"
+    }
 }

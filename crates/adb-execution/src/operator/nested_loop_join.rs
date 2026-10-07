@@ -103,4 +103,27 @@ impl Operator for NestedLoopJoinOperator {
             Ok(())
         })
     }
+
+    /// `nested_loop_join`.
+    fn name(&self) -> &'static str {
+        "nested_loop_join"
+    }
+
+    /// Outer side, then inner side.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.left.input(), self.right.as_ref()]
+    }
+
+    /// Inner size, outer rows, evaluated pairs and memory.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        let (rows, peak) = self.inner.as_ref().map_or((0, 0), |(rows, reservation)| {
+            (rows.len() as u64, reservation.peak() as u64)
+        });
+        vec![
+            ("inner_rows", rows),
+            ("outer_rows", self.left.rows()),
+            ("comparisons", self.comparisons),
+            ("peak_memory_bytes", peak),
+        ]
+    }
 }

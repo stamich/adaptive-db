@@ -38,6 +38,7 @@ impl MemoryTracker {
             tracker: Arc::clone(self),
             owner,
             bytes: 0,
+            peak: 0,
         }
     }
 
@@ -99,6 +100,8 @@ pub struct MemoryReservation {
     owner: &'static str,
     /// Bytes currently held.
     bytes: usize,
+    /// Most bytes held at once (reported by operator profiles).
+    peak: usize,
 }
 
 impl MemoryReservation {
@@ -106,6 +109,7 @@ impl MemoryReservation {
     pub fn grow(&mut self, bytes: usize) -> Result<(), ExecutionError> {
         self.tracker.acquire(bytes, self.owner)?;
         self.bytes += bytes;
+        self.peak = self.peak.max(self.bytes);
         Ok(())
     }
 
@@ -119,6 +123,11 @@ impl MemoryReservation {
     /// Bytes currently held.
     pub fn size(&self) -> usize {
         self.bytes
+    }
+
+    /// Most bytes held at once.
+    pub fn peak(&self) -> usize {
+        self.peak
     }
 }
 

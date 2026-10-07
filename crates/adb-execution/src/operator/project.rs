@@ -44,4 +44,14 @@ impl Operator for ProjectOperator {
         }
         Ok(Some(batch))
     }
+
+    /// `project`.
+    fn name(&self) -> &'static str {
+        "project"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
+    }
 }

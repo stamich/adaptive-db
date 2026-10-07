@@ -19,6 +19,10 @@ pub struct TopKOperator {
     output: Option<OutputBuffer>,
     /// Memory of the buffered rows (held until the operator is dropped).
     reservation: Option<MemoryReservation>,
+    /// Rows read from the input.
+    rows_in: u64,
+    /// Sort-and-truncate passes performed.
+    compactions: u64,
 }
 
 impl TopKOperator {
@@ -30,15 +34,18 @@ impl TopKOperator {
             k,
             output: None,
             reservation: None,
+            rows_in: 0,
+            compactions: 0,
         }
     }
 
     /// Sorts `buffer` and truncates it to `k` rows, returning the freed memory.
     fn compact(
-        &self,
+        &mut self,
         buffer: &mut Vec<ExecRow>,
         reservation: &mut MemoryReservation,
     ) -> Result<(), ExecutionError> {
+        self.compactions += 1;
         sort_rows(buffer, &self.keys)?;
         let dropped: usize = buffer[self.k.min(buffer.len())..]
             .iter()
@@ -57,6 +64,7 @@ impl TopKOperator {
             let capacity = self.k.saturating_mul(2);
             while let Some(batch) = self.input.next_batch(context)? {
                 context.check_running()?;
+                self.rows_in += batch.len() as u64;
                 for row in batch {
                     reservation.grow(row.estimated_bytes())?;
                     buffer.push(row);
@@ -88,5 +96,28 @@ impl Operator for TopKOperator {
             .as_mut()
             .expect("computed above")
             .next_batch(context.batch_size))
+    }
+
+    /// `top_k`.
+    fn name(&self) -> &'static str {
+        "top_k"
+    }
+
+    /// The input.
+    fn children(&self) -> Vec<&dyn Operator> {
+        vec![self.input.as_ref()]
+    }
+
+    /// Rows read, compactions and memory.
+    fn counters(&self) -> Vec<(&'static str, u64)> {
+        let peak = self
+            .reservation
+            .as_ref()
+            .map_or(0, |reservation| reservation.peak() as u64);
+        vec![
+            ("rows_in", self.rows_in),
+            ("compactions", self.compactions),
+            ("peak_memory_bytes", peak),
+        ]
     }
 }
