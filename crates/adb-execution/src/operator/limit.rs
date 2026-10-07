@@ -1,18 +1,17 @@
-//! Module `limit` for crate `src`.
+//! LIMIT: stops pulling once enough rows were produced.
 use crate::{
     operator::{Operator, RowBatch},
     ExecutionContext, ExecutionError,
 };
 
-/// Represents `LimitOperator` state used by this subsystem.
+/// Passes through at most `limit` rows, then stops pulling its input.
 pub struct LimitOperator {
     input: Box<dyn Operator>,
     remaining: usize,
 }
 
-/// Implements behavior for `LimitOperator`.
 impl LimitOperator {
-    /// Implements the `new` operation used by this subsystem.
+    /// Limits `input` to `limit` rows.
     pub fn new(input: Box<dyn Operator>, limit: usize) -> Self {
         Self {
             input,
@@ -21,9 +20,7 @@ impl LimitOperator {
     }
 }
 
-/// Implements behavior for `Operator`.
 impl Operator for LimitOperator {
-    /// Implements the `next_batch` operation used by this subsystem.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

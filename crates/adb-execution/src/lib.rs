@@ -1,4 +1,4 @@
-//! Module `lib` for crate `adb-execution`.
+//! Pull-based physical execution over a snapshot-consistent [`DataSource`].
 pub mod batch;
 pub mod cancellation;
 pub mod context;

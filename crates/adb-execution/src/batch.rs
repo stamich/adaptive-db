@@ -1,11 +1,11 @@
-//! Module `batch` for crate `adb-execution`.
+//! Columnar record batches produced by query cursors.
 use std::collections::BTreeSet;
 
 use adb_core::{FieldId, Row, RowId, Value};
 
 use crate::ExecutionError;
 
-/// Enumerates `PhysicalType` alternatives used by this subsystem.
+/// Physical type of a column vector; the discriminant is the wire type tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PhysicalType {
@@ -16,7 +16,7 @@ pub enum PhysicalType {
     Bytes = 5,
 }
 
-/// Enumerates `ColumnVector` alternatives used by this subsystem.
+/// One typed, nullable column of a batch.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnVector {
     Bool {
@@ -41,9 +41,8 @@ pub enum ColumnVector {
     },
 }
 
-/// Implements behavior for `ColumnVector`.
 impl ColumnVector {
-    /// Implements the `field_id` operation used by this subsystem.
+    /// Field the column holds.
     pub fn field_id(&self) -> FieldId {
         match self {
             Self::Bool { field_id, .. }
@@ -54,7 +53,7 @@ impl ColumnVector {
         }
     }
 
-    /// Implements the `physical_type` operation used by this subsystem.
+    /// Physical type of the column.
     pub fn physical_type(&self) -> PhysicalType {
         match self {
             Self::Bool { .. } => PhysicalType::Bool,
@@ -65,7 +64,12 @@ impl ColumnVector {
         }
     }
 
-    /// Implements the `len` operation used by this subsystem.
+    /// Whether the column has no values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Number of values in the column.
     pub fn len(&self) -> usize {
         match self {
             Self::Bool { values, .. } => values.len(),
@@ -77,21 +81,20 @@ impl ColumnVector {
     }
 }
 
-/// Represents `RecordBatch` state used by this subsystem.
+/// Rows of one batch in columnar form: row ids plus one vector per field present.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordBatch {
     pub row_ids: Vec<RowId>,
     pub columns: Vec<ColumnVector>,
 }
 
-/// Implements behavior for `RecordBatch`.
 impl RecordBatch {
-    /// Implements the `len` operation used by this subsystem.
+    /// Number of rows.
     pub fn len(&self) -> usize {
         self.row_ids.len()
     }
 
-    /// Implements the `is_empty` operation used by this subsystem.
+    /// Whether the batch has no rows.
     pub fn is_empty(&self) -> bool {
         self.row_ids.is_empty()
     }
@@ -127,7 +130,7 @@ impl RecordBatch {
         }
         total
     }
-    /// Implements the `from_rows` operation used by this subsystem.
+    /// Pivots rows into columns; a field whose non-null values disagree in type is an error.
     pub fn from_rows(rows: &[(RowId, Row)]) -> Result<Self, ExecutionError> {
         let mut fields = BTreeSet::new();
         for (_, row) in rows {
@@ -148,7 +151,7 @@ impl RecordBatch {
     }
 }
 
-/// Implements the `infer_type` operation used by this subsystem.
+/// Physical type of `field_id` across `rows`, ignoring nulls and absent values.
 fn infer_type(
     rows: &[(RowId, Row)],
     field_id: FieldId,
@@ -177,7 +180,7 @@ fn infer_type(
     Ok(found)
 }
 
-/// Implements the `build_column` operation used by this subsystem.
+/// Builds the column vector of `field_id` with the inferred physical type.
 fn build_column(
     rows: &[(RowId, Row)],
     field_id: FieldId,

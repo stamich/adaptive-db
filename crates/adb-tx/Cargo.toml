@@ -6,5 +6,4 @@ license.workspace = true
 
 [dependencies]
 adb-core = { path = "../adb-core" }
-adb-storage = { path = "../adb-storage" }
-thiserror.workspace = true
+parking_lot.workspace = true

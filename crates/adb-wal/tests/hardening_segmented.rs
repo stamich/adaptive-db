@@ -6,7 +6,7 @@ use std::{
 };
 
 use adb_core::{CommitTs, TxId};
-use adb_wal::{SegmentedWalReader, SegmentedWalWriter, WalRecord};
+use adb_wal::{read_all, SegmentedWalWriter, WalRecord};
 use tempfile::tempdir;
 
 /// Verifies that reopening the final WAL segment truncates only an incomplete
@@ -50,7 +50,7 @@ fn writer_truncates_incomplete_tail_before_append() {
         writer.sync().unwrap();
     }
 
-    let records = SegmentedWalReader::read_all(&wal_dir).unwrap();
+    let records = read_all(&wal_dir).unwrap();
     assert_eq!(records.len(), 2);
-    assert!(matches!(records[1].1, WalRecord::Commit { .. }));
+    assert!(matches!(records[1].record, WalRecord::Commit { .. }));
 }

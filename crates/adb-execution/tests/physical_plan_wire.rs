@@ -1,4 +1,4 @@
-//! Regression tests for the Milestone 2.0.1 physical-plan JSON wire contract.
+//! Physical-plan JSON wire contract (decoding, validation, u128 row ids, entity scans).
 
 use adb_core::RowId;
 use adb_execution::PhysicalPlan;
@@ -27,4 +27,20 @@ fn point_lookup_accepts_legacy_numeric_row_id() {
         PhysicalPlan::PointLookup { row_id } => assert_eq!(row_id, RowId(1)),
         _ => panic!("expected point lookup"),
     }
+}
+
+/// The JVM planner encodes table scans as `entity_scan` (Milestone 2.0.3).
+#[test]
+fn entity_scan_round_trips_through_json() {
+    let plan: adb_execution::PhysicalPlan =
+        serde_json::from_str(r#"{"op":"entity_scan","entity_id":42}"#).unwrap();
+    assert!(matches!(
+        plan,
+        adb_execution::PhysicalPlan::EntityScan { entity_id: 42 }
+    ));
+    assert!(plan.validate().is_ok());
+    assert_eq!(
+        serde_json::to_string(&plan).unwrap(),
+        r#"{"op":"entity_scan","entity_id":42}"#
+    );
 }

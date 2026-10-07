@@ -1,4 +1,4 @@
-//! Module `project` for crate `src`.
+//! Projection: keeps only the requested fields.
 use std::collections::BTreeMap;
 
 use adb_core::{FieldId, Row};
@@ -8,23 +8,20 @@ use crate::{
     ExecutionContext, ExecutionError,
 };
 
-/// Represents `ProjectOperator` state used by this subsystem.
+/// Restricts every row of its input to `fields`.
 pub struct ProjectOperator {
     input: Box<dyn Operator>,
     fields: Vec<FieldId>,
 }
 
-/// Implements behavior for `ProjectOperator`.
 impl ProjectOperator {
-    /// Implements the `new` operation used by this subsystem.
+    /// Projects `input` onto `fields`.
     pub fn new(input: Box<dyn Operator>, fields: Vec<FieldId>) -> Self {
         Self { input, fields }
     }
 }
 
-/// Implements behavior for `Operator`.
 impl Operator for ProjectOperator {
-    /// Implements the `next_batch` operation used by this subsystem.
     fn next_batch(
         &mut self,
         context: &ExecutionContext,

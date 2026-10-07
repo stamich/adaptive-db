@@ -1,4 +1,14 @@
-//! Segmented WAL with bounded frames, crash-tail normalization, and segment-gap detection.
+//! Segmented canonical log: framing, segment files and the appender.
+//!
+//! The log is a sequence of segment files `0000000000000000.wal`, `...01.wal`, ... Each holds
+//! CRC-protected frames:
+//!
+//! ```text
+//! u32 magic | u16 version | u32 payload_len | u32 crc32(payload) | payload (bincode WalRecord)
+//! ```
+//!
+//! A position (LSN) is `segment << 32 | offset`. Since Milestone 2.0.3 the log is the source of
+//! truth and segments are never deleted by the engine.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -17,12 +27,10 @@ use crate::{
 
 /// Default maximum physical segment size.
 pub const DEFAULT_SEGMENT_SIZE: u64 = 64 * 1024 * 1024;
-/// Number of low LSN bits reserved for an offset within a WAL segment.
 const OFFSET_BITS: u32 = 32;
-/// Largest segment id or offset representable by the packed Milestone 1.6 LSN.
 const OFFSET_MASK: u64 = (1u64 << OFFSET_BITS) - 1;
 
-/// Packs a segment id and offset into one LSN after validating both components.
+/// Packs a segment id and an offset into an LSN.
 pub fn make_lsn(segment_id: u64, offset: u64) -> Result<Lsn, WalError> {
     if segment_id > OFFSET_MASK || offset > OFFSET_MASK {
         return Err(WalError::InvalidConfiguration(format!(
@@ -32,42 +40,36 @@ pub fn make_lsn(segment_id: u64, offset: u64) -> Result<Lsn, WalError> {
     Ok(Lsn((segment_id << OFFSET_BITS) | offset))
 }
 
-/// Extracts the physical WAL segment id from a packed LSN.
+/// Segment component of an LSN.
 pub fn lsn_segment(lsn: Lsn) -> u64 {
     lsn.0 >> OFFSET_BITS
 }
 
-/// Extracts the byte offset within a WAL segment from a packed LSN.
+/// Offset component of an LSN.
 pub fn lsn_offset(lsn: Lsn) -> u64 {
     lsn.0 & OFFSET_MASK
 }
 
-/// Returns the canonical fixed-width filename for a segment id.
-fn segment_name(segment_id: u64) -> String {
-    format!("{segment_id:016x}.wal")
+pub(crate) fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
+    dir.join(format!("{segment_id:016x}.wal"))
 }
 
-/// Returns the filesystem path for one segment id.
-fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
-    dir.join(segment_name(segment_id))
-}
-
-/// Lists recognized WAL segments in ascending order and validates id range and contiguity.
-fn list_segments(dir: &Path) -> Result<Vec<u64>, WalError> {
+/// Lists segment ids in ascending order and rejects gaps.
+pub(crate) fn list_segments(dir: &Path) -> Result<Vec<u64>, WalError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-
     let mut ids = Vec::new();
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("wal") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        let Ok(id) = u64::from_str_radix(stem, 16) else {
+        let Some(id) = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .and_then(|stem| u64::from_str_radix(stem, 16).ok())
+        else {
             continue;
         };
         if id > OFFSET_MASK {
@@ -77,21 +79,107 @@ fn list_segments(dir: &Path) -> Result<Vec<u64>, WalError> {
         }
         ids.push(id);
     }
-
     ids.sort_unstable();
     ids.dedup();
-    for pair in ids.windows(2) {
-        if pair[1] != pair[0] + 1 {
-            return Err(WalError::Corrupt(format!(
-                "missing WAL segment between {} and {}",
-                pair[0], pair[1]
-            )));
-        }
+    if let Some(pair) = ids.windows(2).find(|pair| pair[1] != pair[0] + 1) {
+        return Err(WalError::Corrupt(format!(
+            "missing WAL segment between {} and {}",
+            pair[0], pair[1]
+        )));
     }
     Ok(ids)
 }
 
-/// Appends records to a sequence of fixed-size WAL segments.
+/// Position of the oldest retained record, or `None` for an empty log.
+pub fn earliest_lsn(dir: impl AsRef<Path>) -> Result<Option<Lsn>, WalError> {
+    match list_segments(dir.as_ref())?.first() {
+        Some(first) => Ok(Some(make_lsn(*first, 0)?)),
+        None => Ok(None),
+    }
+}
+
+/// Outcome of reading one frame.
+pub(crate) enum Frame {
+    /// A complete, verified record and its encoded length.
+    Record(WalRecord, u64),
+    /// Clean end of the segment.
+    End,
+    /// An incomplete frame at the end of the segment (crash tail).
+    TruncatedTail,
+}
+
+/// Reads the frame at `offset` of an open segment of length `file_len`.
+pub(crate) fn read_frame(
+    file: &mut File,
+    segment_id: u64,
+    offset: u64,
+    file_len: u64,
+) -> Result<Frame, WalError> {
+    if offset == file_len {
+        return Ok(Frame::End);
+    }
+    let remaining = file_len.saturating_sub(offset);
+    if remaining < HEADER_LEN as u64 {
+        return Ok(Frame::TruncatedTail);
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let mut header = [0u8; HEADER_LEN];
+    file.read_exact(&mut header)?;
+    if u32::from_le_bytes([header[0], header[1], header[2], header[3]]) != WAL_MAGIC {
+        return Err(WalError::Corrupt(format!(
+            "bad WAL magic in segment {segment_id} at {offset}"
+        )));
+    }
+    if u16::from_le_bytes([header[4], header[5]]) != WAL_VERSION {
+        return Err(WalError::Corrupt(format!(
+            "unsupported WAL version in segment {segment_id}"
+        )));
+    }
+    let payload_len = u32::from_le_bytes([header[6], header[7], header[8], header[9]]) as usize;
+    let expected_crc = u32::from_le_bytes([header[10], header[11], header[12], header[13]]);
+    if payload_len > MAX_WAL_RECORD_BYTES {
+        return Err(WalError::Corrupt(format!(
+            "payload length {payload_len} exceeds limit in segment {segment_id}"
+        )));
+    }
+    let frame_len = (HEADER_LEN + payload_len) as u64;
+    if frame_len > remaining {
+        return Ok(Frame::TruncatedTail);
+    }
+    let mut payload = vec![0u8; payload_len];
+    file.read_exact(&mut payload)?;
+    let mut hasher = Hasher::new();
+    hasher.update(&payload);
+    if hasher.finalize() != expected_crc {
+        return Err(WalError::Corrupt(format!(
+            "checksum mismatch in segment {segment_id} at {offset}"
+        )));
+    }
+    Ok(Frame::Record(bincode::deserialize(&payload)?, frame_len))
+}
+
+/// Returns the offset after the last complete frame of a segment.
+///
+/// An incomplete frame is tolerated only when `is_last` (the crash tail of the newest segment).
+pub(crate) fn valid_end(path: &Path, segment_id: u64, is_last: bool) -> Result<u64, WalError> {
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut offset = 0;
+    loop {
+        match read_frame(&mut file, segment_id, offset, file_len)? {
+            Frame::Record(_, len) => offset += len,
+            Frame::End => return Ok(offset),
+            Frame::TruncatedTail if is_last => return Ok(offset),
+            Frame::TruncatedTail => {
+                return Err(WalError::Corrupt(format!(
+                    "truncated non-tail WAL segment {segment_id} at {offset}"
+                )))
+            }
+        }
+    }
+}
+
+/// Appends frames to the newest segment, rotating when it is full.
 pub struct SegmentedWalWriter {
     dir: PathBuf,
     segment_size: u64,
@@ -100,9 +188,8 @@ pub struct SegmentedWalWriter {
     offset: u64,
 }
 
-/// Implements safe segmented append, rotation, crash-tail truncation, and retention.
 impl SegmentedWalWriter {
-    /// Opens the newest segment and truncates an incomplete final crash suffix before appending.
+    /// Opens the newest segment and truncates an incomplete crash tail before appending.
     pub fn open(dir: impl AsRef<Path>, segment_size: u64) -> Result<Self, WalError> {
         if segment_size <= HEADER_LEN as u64 || segment_size > OFFSET_MASK {
             return Err(WalError::InvalidConfiguration(format!(
@@ -110,251 +197,100 @@ impl SegmentedWalWriter {
                 HEADER_LEN + 1
             )));
         }
-
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
-        let segments = list_segments(&dir)?;
-        let segment_id = segments.last().copied().unwrap_or(0);
+        let segment_id = list_segments(&dir)?.last().copied().unwrap_or(0);
         let path = segment_path(&dir, segment_id);
-        let newly_created = !path.exists();
+        let created = !path.exists();
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&path)?;
-        if newly_created {
+        if created {
             sync_dir(&dir)?;
         }
-
-        let physical_end = file.seek(SeekFrom::End(0))?;
-        let valid_end = read_segment(&path, segment_id, true, None)?;
-        if valid_end < physical_end {
-            file.set_len(valid_end)?;
+        let end = valid_end(&path, segment_id, true)?;
+        if end < file.metadata()?.len() {
+            file.set_len(end)?;
             file.sync_data()?;
         }
-        file.seek(SeekFrom::End(0))?;
-
+        file.seek(SeekFrom::Start(end))?;
         Ok(Self {
             dir,
             segment_size,
             segment_id,
             file,
-            offset: valid_end,
+            offset: end,
         })
     }
 
-    /// Appends one bounded CRC-protected record, rotating first when the record will not fit.
+    /// Appends one record and returns its position. Not durable until [`sync`](Self::sync).
     pub fn append(&mut self, record: &WalRecord) -> Result<Lsn, WalError> {
         let payload = bincode::serialize(record)?;
         if payload.len() > MAX_WAL_RECORD_BYTES {
             return Err(WalError::RecordTooLarge(payload.len()));
         }
-        let payload_len =
-            u32::try_from(payload.len()).map_err(|_| WalError::RecordTooLarge(payload.len()))?;
-        let record_len = (HEADER_LEN as u64)
-            .checked_add(payload.len() as u64)
-            .ok_or_else(|| WalError::Corrupt("WAL record length overflow".into()))?;
-        if record_len > self.segment_size {
+        let frame_len = (HEADER_LEN + payload.len()) as u64;
+        if frame_len > self.segment_size {
             return Err(WalError::RecordTooLarge(payload.len()));
         }
-        if self.offset > 0
-            && self
-            .offset
-            .checked_add(record_len)
-            .map_or(true, |end| end > self.segment_size)
-        {
+        if self.offset > 0 && self.offset + frame_len > self.segment_size {
             self.rotate()?;
         }
-
         let lsn = make_lsn(self.segment_id, self.offset)?;
         let mut hasher = Hasher::new();
         hasher.update(&payload);
-        let checksum = hasher.finalize();
-
-        self.file.write_all(&WAL_MAGIC.to_le_bytes())?;
-        self.file.write_all(&WAL_VERSION.to_le_bytes())?;
-        self.file.write_all(&payload_len.to_le_bytes())?;
-        self.file.write_all(&checksum.to_le_bytes())?;
-        self.file.write_all(&payload)?;
-        self.offset = self
-            .offset
-            .checked_add(record_len)
-            .ok_or_else(|| WalError::Corrupt("WAL offset overflow".into()))?;
+        let mut frame = Vec::with_capacity(frame_len as usize);
+        frame.extend_from_slice(&WAL_MAGIC.to_le_bytes());
+        frame.extend_from_slice(&WAL_VERSION.to_le_bytes());
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&hasher.finalize().to_le_bytes());
+        frame.extend_from_slice(&payload);
+        self.file.write_all(&frame)?;
+        self.offset += frame_len;
         Ok(lsn)
     }
 
-    /// Flushes process buffers and synchronizes the active WAL segment.
+    /// Makes every appended record durable.
     pub fn sync(&mut self) -> Result<(), WalError> {
-        self.file.flush()?;
         self.file.sync_data()?;
         Ok(())
     }
 
-    /// Returns the packed LSN at which the next record will be appended.
+    /// A handle that can make everything appended so far durable *without* holding the
+    /// writer: syncing the returned file covers every record before the returned position.
+    /// Earlier segments are already durable because rotation syncs them.
+    pub fn sync_point(&self) -> Result<(File, Lsn), WalError> {
+        Ok((self.file.try_clone()?, self.position()?))
+    }
+
+    /// Position at which the next record will be appended (end of the log).
     pub fn position(&self) -> Result<Lsn, WalError> {
         make_lsn(self.segment_id, self.offset)
     }
 
-    /// Deletes complete segments strictly older than the segment containing `retain_lsn`.
-    pub fn prune_segments_before(&self, retain_lsn: Lsn) -> Result<usize, WalError> {
-        let retain_segment = lsn_segment(retain_lsn);
-        let mut removed = 0;
-        for segment_id in list_segments(&self.dir)? {
-            if segment_id < retain_segment && segment_id < self.segment_id {
-                fs::remove_file(segment_path(&self.dir, segment_id))?;
-                removed += 1;
-            }
-        }
-        if removed > 0 {
-            sync_dir(&self.dir)?;
-        }
-        Ok(removed)
-    }
-
-    /// Synchronizes the active segment and advances to a newly created next segment.
     fn rotate(&mut self) -> Result<(), WalError> {
         self.sync()?;
-        let next = self
-            .segment_id
-            .checked_add(1)
-            .ok_or_else(|| WalError::InvalidConfiguration("segment id overflow".into()))?;
+        let next = self.segment_id + 1;
         if next > OFFSET_MASK {
             return Err(WalError::InvalidConfiguration(
                 "segment id exceeds LSN range".into(),
             ));
         }
-
-        let path = segment_path(&self.dir, next);
-        let file = OpenOptions::new()
+        self.file = OpenOptions::new()
             .create_new(true)
             .read(true)
             .write(true)
-            .open(&path)?;
+            .open(segment_path(&self.dir, next))?;
         sync_dir(&self.dir)?;
         self.segment_id = next;
         self.offset = 0;
-        self.file = file;
         Ok(())
     }
 }
 
-/// Sequential reader across a contiguous set of WAL segments.
-pub struct SegmentedWalReader;
-
-/// Implements bounded, checksummed recovery over segmented WAL files.
-impl SegmentedWalReader {
-    /// Reads all complete records and tolerates an incomplete suffix only in the newest segment.
-    pub fn read_all(dir: impl AsRef<Path>) -> Result<Vec<(Lsn, WalRecord)>, WalError> {
-        let dir = dir.as_ref();
-        let segments = list_segments(dir)?;
-        let mut out = Vec::new();
-        for (index, segment_id) in segments.iter().copied().enumerate() {
-            let is_last = index + 1 == segments.len();
-            read_segment(
-                &segment_path(dir, segment_id),
-                segment_id,
-                is_last,
-                Some(&mut out),
-            )?;
-        }
-        Ok(out)
-    }
-}
-
-/// Reads one segment and returns the offset after its last complete valid record.
-fn read_segment(
-    path: &Path,
-    segment_id: u64,
-    allow_truncated_tail: bool,
-    mut out: Option<&mut Vec<(Lsn, WalRecord)>>,
-) -> Result<u64, WalError> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
-    let mut offset = 0u64;
-    if file_len > OFFSET_MASK {
-        return Err(WalError::Corrupt(format!(
-            "segment {segment_id} exceeds LSN offset range"
-        )));
-    }
-
-    loop {
-        if offset == file_len {
-            return Ok(offset);
-        }
-        let remaining = file_len - offset;
-        if remaining < HEADER_LEN as u64 {
-            return if allow_truncated_tail {
-                Ok(offset)
-            } else {
-                Err(WalError::Corrupt(format!(
-                    "truncated non-tail WAL segment {segment_id} at {offset}"
-                )))
-            };
-        }
-
-        file.seek(SeekFrom::Start(offset))?;
-        let mut magic = [0u8; 4];
-        file.read_exact(&mut magic)?;
-        if u32::from_le_bytes(magic) != WAL_MAGIC {
-            return Err(WalError::Corrupt(format!(
-                "bad WAL magic in segment {segment_id} at {offset}"
-            )));
-        }
-
-        let mut version = [0u8; 2];
-        file.read_exact(&mut version)?;
-        if u16::from_le_bytes(version) != WAL_VERSION {
-            return Err(WalError::Corrupt(format!(
-                "unsupported WAL version in segment {segment_id}"
-            )));
-        }
-
-        let mut len = [0u8; 4];
-        file.read_exact(&mut len)?;
-        let payload_len = u32::from_le_bytes(len) as usize;
-        if payload_len > MAX_WAL_RECORD_BYTES {
-            return Err(WalError::Corrupt(format!(
-                "payload length {payload_len} exceeds hardened limit in segment {segment_id}"
-            )));
-        }
-
-        let mut crc = [0u8; 4];
-        file.read_exact(&mut crc)?;
-        let expected_crc = u32::from_le_bytes(crc);
-        let frame_len = (HEADER_LEN as u64)
-            .checked_add(payload_len as u64)
-            .ok_or_else(|| WalError::Corrupt("frame length overflow".into()))?;
-        if frame_len > remaining {
-            return if allow_truncated_tail {
-                Ok(offset)
-            } else {
-                Err(WalError::Corrupt(format!(
-                    "truncated non-tail WAL segment {segment_id} at {offset}"
-                )))
-            };
-        }
-
-        let mut payload = vec![0u8; payload_len];
-        file.read_exact(&mut payload)?;
-        let mut hasher = Hasher::new();
-        hasher.update(&payload);
-        if hasher.finalize() != expected_crc {
-            return Err(WalError::Corrupt(format!(
-                "checksum mismatch in segment {segment_id} at {offset}"
-            )));
-        }
-
-        let record: WalRecord = bincode::deserialize(&payload)?;
-        if let Some(records) = out.as_mut() {
-            (**records).push((make_lsn(segment_id, offset)?, record));
-        }
-        offset = offset
-            .checked_add(frame_len)
-            .ok_or_else(|| WalError::Corrupt("segment offset overflow".into()))?;
-    }
-}
-
-/// Synchronizes a directory entry update so created/removed segment names survive power loss.
 fn sync_dir(dir: &Path) -> Result<(), WalError> {
     File::open(dir)?.sync_all()?;
     Ok(())

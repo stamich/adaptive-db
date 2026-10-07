@@ -1,7 +1,7 @@
-//! Module `error` for crate `adb-execution`.
+//! Query execution errors.
 use thiserror::Error;
 
-/// Enumerates `ExecutionError` alternatives used by this subsystem.
+/// Why a query could not produce its next batch.
 #[derive(Debug, Error)]
 pub enum ExecutionError {
     #[error("data source error: {0}")]

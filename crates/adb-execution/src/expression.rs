@@ -1,4 +1,4 @@
-//! Module `expression` for crate `adb-execution`.
+//! Scalar expressions evaluated per row (filters and projections).
 use std::cmp::Ordering;
 
 use adb_core::{FieldId, Row, Value};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ExecutionError;
 
-/// Enumerates `BinaryOp` alternatives used by this subsystem.
+/// Comparison and boolean operators.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinaryOp {
@@ -20,7 +20,7 @@ pub enum BinaryOp {
     Or,
 }
 
-/// Enumerates `Expr` alternatives used by this subsystem.
+/// Expression tree; the serde form is part of the plan wire format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expr {
@@ -40,16 +40,15 @@ pub enum Expr {
     },
 }
 
-/// Implements behavior for `Expr`.
 impl Expr {
-    /// Implements the `validate` operation used by this subsystem.
+    /// Rejects trees deeper than the hardened limit (protects the recursive evaluator).
     pub fn validate(&self) -> Result<(), String> {
         self.validate_depth(0)
     }
 
-    /// Implements the `validate_depth` operation used by this subsystem.
+    /// Depth-bounded validation helper.
     fn validate_depth(&self, depth: usize) -> Result<(), String> {
-        /// Defines the `MAX_EXPR_DEPTH` constant used by this subsystem.
+        /// Deepest expression tree accepted.
         const MAX_EXPR_DEPTH: usize = 128;
         if depth > MAX_EXPR_DEPTH {
             return Err(format!("expression depth exceeds {MAX_EXPR_DEPTH}"));
@@ -65,7 +64,7 @@ impl Expr {
         }
     }
 
-    /// Implements the `evaluate_bool` operation used by this subsystem.
+    /// Evaluates as a predicate; NULL counts as false.
     pub fn evaluate_bool(&self, row: &Row) -> Result<bool, ExecutionError> {
         match self.evaluate(row)? {
             Value::Bool(value) => Ok(value),
@@ -76,7 +75,7 @@ impl Expr {
         }
     }
 
-    /// Implements the `evaluate` operation used by this subsystem.
+    /// Evaluates against one row; absent fields are NULL.
     pub fn evaluate(&self, row: &Row) -> Result<Value, ExecutionError> {
         match self {
             Self::Column { field_id } => Ok(row.get(*field_id).cloned().unwrap_or(Value::Null)),
@@ -100,7 +99,7 @@ impl Expr {
     }
 }
 
-/// Implements the `eval_binary` operation used by this subsystem.
+/// Applies a binary operator with SQL-like NULL propagation.
 fn eval_binary(left: Value, op: BinaryOp, right: Value) -> Result<Value, ExecutionError> {
     use BinaryOp::*;
 
@@ -135,7 +134,7 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> Result<Value, Executi
     Ok(Value::Bool(result))
 }
 
-/// Implements the `as_bool` operation used by this subsystem.
+/// Interprets a value as a boolean (NULL is false).
 fn as_bool(value: &Value) -> Result<bool, ExecutionError> {
     match value {
         Value::Bool(value) => Ok(*value),
@@ -146,7 +145,7 @@ fn as_bool(value: &Value) -> Result<bool, ExecutionError> {
     }
 }
 
-/// Implements the `compare` operation used by this subsystem.
+/// Orders two non-null values of compatible types.
 fn compare(left: &Value, right: &Value) -> Result<Ordering, ExecutionError> {
     match (left, right) {
         (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
