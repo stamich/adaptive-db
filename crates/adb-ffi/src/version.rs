@@ -5,7 +5,7 @@
 /// 5 = Milestone 2.2.3 (ANALYZE, statistics documents, modification counters, profile node ids).
 pub const ABI_VERSION: u32 = 5;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"2.1.3";
+static ENGINE_VERSION: &[u8] = b"2.2.3";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

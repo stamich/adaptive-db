@@ -26,7 +26,7 @@ object Main:
     val feedback = new PlannerFeedbackLog(dataDir.resolve("planner-feedback.jsonl"))
     val db = new AdaptiveDatabase(catalog, native, feedbackLog = Some(feedback))
 
-    println("Adaptive DB 2.1.3 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.2.3 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do

@@ -1,4 +1,4 @@
-//! Adaptive DB data-plane benchmark (Milestone 2.1.3).
+//! Adaptive DB data-plane benchmark (Milestone 2.2.3; sections unchanged since 2.1.3).
 //!
 //! Storage sections (comparable since 2.0.2): bulk load, point lookup, entity scan, change
 //! feed, single-row commits with and without concurrency (group commit), heap size under update
@@ -298,7 +298,7 @@ fn relational(args: &Args) -> Result<serde_json::Value> {
 /// Runs every benchmark section and optionally writes a JSON report.
 fn main() -> Result<()> {
     let args = parse_args()?;
-    println!("Adaptive DB 2.1.3 Rust benchmark");
+    println!("Adaptive DB 2.2.3 Rust benchmark");
     println!(
         "rows={} iters={} threads={}",
         args.rows, args.iters, args.threads
@@ -487,7 +487,7 @@ fn main() -> Result<()> {
 
     if let Some(path) = args.output {
         let report = json!({
-            "milestone": "2.1.3",
+            "milestone": "2.2.3",
             "host": {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
