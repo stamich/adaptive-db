@@ -9,8 +9,17 @@ sealed trait Statement derives CanEqual
   * @param dataType   type name as written (resolved later by the binder)
   * @param nullable   false when `NOT NULL` (or `PRIMARY KEY`) was given
   * @param primaryKey true when the column is declared `PRIMARY KEY`
+  * @param references `REFERENCES table(column) NOT ENFORCED` target, if given
   */
-final case class ColumnDef(name: String, dataType: String, nullable: Boolean, primaryKey: Boolean) derives CanEqual
+final case class ColumnDef(
+    name: String,
+    dataType: String,
+    nullable: Boolean,
+    primaryKey: Boolean,
+    references: Option[ColumnReference] = None
+) derives CanEqual
+/** Target of a foreign-key hint: `table(column)` as written. */
+final case class ColumnReference(table: String, column: String) derives CanEqual
 /** `CREATE TABLE name (columns...)`. */
 final case class CreateTable(name: String, columns: Vector[ColumnDef]) extends Statement derives CanEqual
 /** `INSERT INTO table [(columns)] VALUES (values)`; without a column list the values follow declaration order. */
@@ -42,6 +51,10 @@ final case class Select(
 final case class Update(table: String, assignments: Vector[(String, SqlExpr)], where: SqlExpr) extends Statement derives CanEqual
 /** `DELETE FROM table WHERE ...`. */
 final case class Delete(table: String, where: SqlExpr) extends Statement derives CanEqual
+/** `ANALYZE [table]`: collect optimizer statistics of one table, or of every table. */
+final case class Analyze(table: Option[String]) extends Statement derives CanEqual
+/** `SET name = value` (or `SET name TO value`): a session setting such as `optimizer`. */
+final case class SetOption(name: String, value: String) extends Statement derives CanEqual
 /** `EXPLAIN [ANALYZE] statement`. */
 final case class Explain(statement: Statement, analyze: Boolean) extends Statement derives CanEqual
 

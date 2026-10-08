@@ -32,9 +32,10 @@ final class FileCatalog(path: Path) extends Catalog:
   override def createEntity(
       name: String,
       fields: Vector[(String, DataType, Boolean)],
-      primaryKey: String
+      primaryKey: String,
+      references: Map[String, ForeignKeyRef] = Map.empty
   ): Entity = synchronized {
-    val entity = delegate.createEntity(name, fields, primaryKey)
+    val entity = delegate.createEntity(name, fields, primaryKey, references)
     try
       save()
       entity
@@ -85,11 +86,18 @@ final class FileCatalog(path: Path) extends Catalog:
         requireName(fieldName, "field")
         val dataType = DataType.parse(required(props, s"$fp.type"))
           .getOrElse(throw new IllegalStateException(s"unsupported type in $fp"))
+        val reference = Option(props.getProperty(s"$fp.references.entity")).map { _ =>
+          ForeignKeyRef(
+            EntityId(parsePositiveLong(props, s"$fp.references.entity")),
+            FieldId(parsePositiveInt(props, s"$fp.references.field"))
+          )
+        }
         Field(
           FieldId(parsePositiveInt(props, s"$fp.id")),
           fieldName,
           dataType,
-          parseBoolean(props, s"$fp.nullable")
+          parseBoolean(props, s"$fp.nullable"),
+          reference
         )
       }
       Entity(id, name, fields, pk, schemaVersion)
@@ -120,6 +128,10 @@ final class FileCatalog(path: Path) extends Catalog:
         props.setProperty(s"$fp.name", field.name)
         props.setProperty(s"$fp.type", field.dataType.sqlName)
         props.setProperty(s"$fp.nullable", field.nullable.toString)
+        field.references.foreach { reference =>
+          props.setProperty(s"$fp.references.entity", reference.entity.value.toString)
+          props.setProperty(s"$fp.references.field", reference.field.value.toString)
+        }
       }
     }
 
@@ -197,6 +209,10 @@ final class FileCatalog(path: Path) extends Catalog:
       if entity.fields.map(_.name.toLowerCase).distinct.size != entity.fields.size then throw new IllegalStateException(s"duplicate field name in ${entity.name}")
       if !entity.fields.exists(_.id == entity.primaryKey) then throw new IllegalStateException(s"missing primary key field in ${entity.name}")
     }
+    val byId = restored.map(entity => entity.id.value -> entity).toMap
+    for entity <- restored; field <- entity.fields; reference <- field.references do
+      try InMemoryCatalog.validateReference(byId, s"${entity.name}.${field.name}", field.dataType, reference)
+      catch case error: IllegalArgumentException => throw new IllegalStateException(s"invalid foreign key: ${error.getMessage}")
     val maxId = restored.map(_.id.value).maxOption.getOrElse(0L)
     if nextEntityId <= maxId then throw new IllegalStateException("catalog.nextEntityId does not exceed existing entity ids")
     val maxVersion = restored.map(_.schemaVersion.value).maxOption.getOrElse(0L)

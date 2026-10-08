@@ -19,3 +19,25 @@ class SqlParserTest:
     val create = stmt.asInstanceOf[CreateTable]
     assertEquals("account", create.name)
     assertEquals(2, create.columns.size)
+
+  /** `ANALYZE` with and without a table, and `SET name = value` / `SET name TO value`. */
+  @Test def parsesAnalyzeAndSet(): Unit =
+    assertEquals(Analyze(Some("orders")), parser.parse("ANALYZE orders;"))
+    assertEquals(Analyze(None), parser.parse("analyze"))
+    assertEquals(SetOption("optimizer", "rule"), parser.parse("SET optimizer = rule"))
+    assertEquals(SetOption("optimizer", "cost"), parser.parse("SET optimizer TO cost;"))
+    assertEquals(Explain(Analyze(Some("t")), true), parser.parse("EXPLAIN ANALYZE ANALYZE t"))
+    assertThrows(classOf[IllegalArgumentException], () => parser.parse("SET optimizer"))
+
+  /** A foreign-key hint must say NOT ENFORCED and may appear once per column. */
+  @Test def parsesForeignKeyHints(): Unit =
+    val create = parser.parse(
+      "CREATE TABLE orders (id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL REFERENCES customer(id) NOT ENFORCED)"
+    ).asInstanceOf[CreateTable]
+    assertEquals(Some(ColumnReference("customer", "id")), create.columns(1).references)
+    assertFalse(create.columns(1).nullable)
+    assertEquals(None, create.columns(0).references)
+    val missing = assertThrows(classOf[IllegalArgumentException], () => parser.parse("CREATE TABLE o (id BIGINT PRIMARY KEY, c BIGINT REFERENCES customer(id))"))
+    assertTrue(missing.getMessage.contains("NOT ENFORCED"))
+    assertThrows(classOf[IllegalArgumentException], () =>
+      parser.parse("CREATE TABLE o (id BIGINT PRIMARY KEY, c BIGINT REFERENCES a(id) NOT ENFORCED REFERENCES b(id) NOT ENFORCED)"))

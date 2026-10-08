@@ -30,6 +30,11 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase, policy: P
   private val binder = new Binder(catalog)
   /** Logical-plan rewriter. */
   private val optimizer = new RuleOptimizer()
+  /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
+  @volatile private var mode: OptimizerMode = OptimizerMode.Cost
+
+  /** The session's optimizer mode. */
+  def optimizerMode: OptimizerMode = mode
 
   /** Executes one SQL statement.
     *
@@ -50,9 +55,20 @@ final class AdaptiveDatabase(catalog: Catalog, native: NativeDatabase, policy: P
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement): QueryResult = statement match
-    case BoundCreateTable(name, fields, pk) =>
-      val entity = catalog.createEntity(name, fields, pk)
+    case BoundCreateTable(name, fields, pk, references) =>
+      val entity = catalog.createEntity(name, fields, pk, references)
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
+
+    case BoundAnalyze(entities) =>
+      val lines = entities.map { entity =>
+        val statistics = io.adb.statistics.StatisticsCodec.decode(native.analyzeJson(entity.id.value, null))
+        s"ANALYZE ${entity.name} rows=${statistics.rowCount} sampled=${statistics.sampledRows} columns=${statistics.columns.size}"
+      }
+      QueryResult(Vector.empty, Vector.empty, Some(if lines.isEmpty then "ANALYZE (no tables)" else lines.mkString("\n")))
+
+    case BoundSetOptimizer(newMode) =>
+      mode = newMode
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET optimizer = ${newMode.toString.toLowerCase}"))
 
     case BoundInsert(entity, values) =>
       val pk = values.get(entity.primaryKeyField.id) match
