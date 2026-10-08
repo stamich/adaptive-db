@@ -15,6 +15,10 @@ public final class NativeDatabase implements AutoCloseable {
     private static final int MAX_JSON_BYTES = 8 * 1024 * 1024;
     /** Upper bound on the size of a change-feed JSON response. */
     private static final long MAX_CHANGES_JSON_BYTES = 64L * 1024 * 1024;
+    /** Upper bound on the size of a statistics document (matches the native 4 MiB limit). */
+    private static final long MAX_STATISTICS_JSON_BYTES = 4L * 1024 * 1024;
+    /** Upper bound on the UTF-8 length of ANALYZE options. */
+    private static final int MAX_ANALYZE_OPTIONS_BYTES = 64 * 1024;
     /** Upper bound on the UTF-8 length of a CDC consumer name. */
     private static final int MAX_CONSUMER_NAME_BYTES = 256;
 
@@ -178,6 +182,49 @@ public final class NativeDatabase implements AutoCloseable {
         try (var arena = Arena.ofConfined()) {
             var out = arena.allocate(ValueLayout.JAVA_LONG);
             library.check(library.invokeInt(library.vacuum, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    // ----- statistics (ABI 5) ----------------------------------------------------------------
+
+    /**
+     * Runs {@code ANALYZE} on one entity and returns its new statistics document as JSON
+     * (see {@code docs/statistics.md}). {@code optionsJson} may be {@code null} or empty for
+     * the default options.
+     */
+    public synchronized String analyzeJson(long entityId, String optionsJson) {
+        ensureOpen();
+        byte[] options = optionsJson == null ? new byte[0] : optionsJson.getBytes(StandardCharsets.UTF_8);
+        if (options.length > MAX_ANALYZE_OPTIONS_BYTES) throw new IllegalArgumentException("ANALYZE options JSON longer than " + MAX_ANALYZE_OPTIONS_BYTES + " bytes");
+        try (var arena = Arena.ofConfined()) {
+            var optionsSegment = options.length == 0 ? MemorySegment.NULL : arena.allocateFrom(ValueLayout.JAVA_BYTE, options);
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.analyzeEntity, handle, entityId, optionsSegment, (long) options.length, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_STATISTICS_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** The statistics document of one entity as JSON, or empty if it was never analyzed. */
+    public synchronized Optional<String> statisticsJson(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            int code = library.invokeInt(library.statistics, handle, entityId, out);
+            if (AdbStatus.fromCode(code) == AdbStatus.NOT_FOUND) return Optional.empty();
+            library.check(code);
+            return Optional.of(new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_STATISTICS_JSON_BYTES), StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Row mutations committed to an entity since its last {@code ANALYZE} (since creation if never analyzed). */
+    public synchronized long modificationsSinceAnalyze(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.modificationsSinceAnalyze, handle, entityId, out));
             return out.get(ValueLayout.JAVA_LONG, 0);
         }
     }

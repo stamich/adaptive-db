@@ -2,7 +2,7 @@ import io.adb.ffm.*;
 import java.nio.file.*;
 import java.util.Optional;
 
-/** Java FFM -> native engine smoke test of ABI v3: change feed, offsets, vacuum, entity scan. Needs only a JDK 22. */
+/** Java FFM -> native engine smoke test (ABI 5): change feed, offsets, vacuum, entity scan, statistics. Needs only a JDK 22. */
 public class CdcSmoke {
     /**
      * Fails the smoke test unless {@code ok} holds, otherwise prints a pass line.
@@ -40,6 +40,14 @@ public class CdcSmoke {
                 var batch = q.nextBatch();
                 check(batch.isPresent() && batch.get().rowCount() == 1, "entity_scan returns entity 1 only");
             }
+            check(db.statisticsJson(1).isEmpty(), "entity 1 has no statistics before ANALYZE");
+            check(db.modificationsSinceAnalyze(1) == 2, "insert + update counted as 2 modifications");
+            String stats = db.analyzeJson(1, null);
+            check(stats.contains("\"row_count\":1"), "ANALYZE counts entity 1's row");
+            check(db.statisticsJson(1).orElseThrow().equals(stats), "statistics document readable after ANALYZE");
+            check(db.modificationsSinceAnalyze(1) == 0, "ANALYZE resets the modification delta");
+            try { db.analyzeJson(1, "{\"sample_rows\":0}"); check(false, "invalid ANALYZE options"); }
+            catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "invalid ANALYZE options are INVALID_ARGUMENT"); }
             db.checkpoint();
             try { db.readChangesJson(3, 10); check(false, "mid-frame cursor rejected"); }
             catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "mid-frame cursor rejected with INVALID_ARGUMENT"); }
