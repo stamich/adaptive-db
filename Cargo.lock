@@ -57,6 +57,7 @@ dependencies = [
  "adb-core",
  "adb-execution",
  "adb-journal",
+ "adb-stats",
  "adb-storage",
  "adb-tx",
  "adb-wal",

@@ -8,6 +8,7 @@ license.workspace = true
 adb-core = { path = "../adb-core" }
 adb-execution = { path = "../adb-execution" }
 adb-journal = { path = "../adb-journal" }
+adb-stats = { path = "../adb-stats" }
 adb-storage = { path = "../adb-storage" }
 adb-tx = { path = "../adb-tx" }
 adb-wal = { path = "../adb-wal" }

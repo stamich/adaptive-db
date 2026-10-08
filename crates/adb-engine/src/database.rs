@@ -16,7 +16,10 @@
 //! (group commit), then publish the timestamp to new snapshots. Any failure after the first
 //! log append poisons the instance and is reported as [`DbError::CommitOutcomeUnknown`].
 //!
-//! Lock order: commit lock → log → projections → transaction manager.
+//! The same apply step adds the transaction's mutations to the per-entity modification
+//! counters that measure how stale the optimizer statistics are (see [`crate::statistics`]).
+//!
+//! Lock order: commit lock → log → projections → modification counters → transaction manager.
 
 use std::{
     fs,
@@ -32,6 +35,7 @@ use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
 };
 use adb_journal::{Journal, JOURNAL_FILE};
+use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_storage::{
     Checkpoint, CheckpointStore, Checkpointable, HistoricalVersion, IntegrityReport, StorageStats,
 };
@@ -47,6 +51,7 @@ use crate::{
     offsets::ConsumerOffsets,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
+    statistics::{modifications_path, ModificationCounters, StatisticsStore},
     DatabaseOptions, DbError,
 };
 
@@ -73,6 +78,8 @@ pub struct Database {
 
 /// State shared by all clones of a [`Database`].
 struct Inner {
+    /// Database directory.
+    dir: PathBuf,
     /// Configuration the instance was opened with.
     options: DatabaseOptions,
     /// Directory of the canonical log.
@@ -95,6 +102,10 @@ struct Inner {
     health: EngineHealth,
     /// Snapshots older than this may need the version index to enumerate rows (see vacuum).
     vacuumed_through: AtomicU64,
+    /// Row mutations committed per entity; updated by the commit apply step.
+    modifications: Mutex<ModificationCounters>,
+    /// Optimizer statistics written by `ANALYZE`.
+    statistics: StatisticsStore,
 }
 
 impl Database {
@@ -119,6 +130,7 @@ impl Database {
 
         Ok(Self {
             inner: Arc::new(Inner {
+                dir: dir.to_path_buf(),
                 options,
                 wal_dir,
                 log,
@@ -130,6 +142,8 @@ impl Database {
                 offsets: ConsumerOffsets::open(dir)?,
                 health: EngineHealth::default(),
                 vacuumed_through: AtomicU64::new(recovered.vacuumed_through.0),
+                modifications: Mutex::new(recovered.modifications),
+                statistics: StatisticsStore::open(dir)?,
             }),
         })
     }
@@ -138,6 +152,9 @@ impl Database {
     ///
     /// Use after [`DbError::is_corruption`] reports a damaged store. Requires the complete log
     /// (it is never pruned by Milestone 2.0.3+). The database must not be open elsewhere.
+    ///
+    /// The modification counters are recounted from the log too; statistics documents are
+    /// kept (they describe a snapshot, not the store).
     pub fn rebuild_projections(
         path: impl AsRef<Path>,
         options: DatabaseOptions,
@@ -157,8 +174,12 @@ impl Database {
                 fs::remove_dir_all(path)?;
             }
         }
-        for name in [CHECKPOINT_FILE, JOURNAL_FILE, "checkpoint.journal.tmp"] {
-            let path = dir.join(name);
+        for path in [
+            dir.join(CHECKPOINT_FILE),
+            dir.join(JOURNAL_FILE),
+            dir.join("checkpoint.journal.tmp"),
+            modifications_path(dir),
+        ] {
             if path.exists() {
                 fs::remove_file(path)?;
             }
@@ -217,6 +238,7 @@ impl Database {
                         .projections
                         .write()
                         .apply(&committed, appended.commit_lsn)?;
+                    self.inner.modifications.lock().record(&committed);
                     Ok(appended.end)
                 })
                 .map_err(DbError::CommitOutcomeUnknown)?;
@@ -323,6 +345,52 @@ impl Database {
         self.inner.offsets.get(name)
     }
 
+    // ----- statistics -----------------------------------------------------------------------
+
+    /// Collects optimizer statistics for `entity_id` and durably replaces its document.
+    ///
+    /// Scans one snapshot (the latest published commit) without blocking commits. The
+    /// document records the entity's modification counter at that moment, so
+    /// [`Database::modifications_since_analyze`] measures change since this run. Commits
+    /// applied but not yet published when the run starts are counted as already analyzed;
+    /// the counter is a staleness signal, not an exact delta.
+    pub fn analyze(
+        &self,
+        entity_id: u64,
+        options: &AnalyzeOptions,
+    ) -> Result<TableStatistics, DbError> {
+        self.inner.health.check()?;
+        let (snapshot, modifications) = {
+            let _commit = self.inner.commit_lock.lock();
+            (
+                self.latest_committed_ts(),
+                self.inner.modifications.lock().get(entity_id),
+            )
+        };
+        // Like a query, the scan reads the version index once vacuum passes its snapshot.
+        let mut statistics = adb_stats::analyze(self, entity_id, snapshot, options)?;
+        statistics.modifications_at_analyze = modifications;
+        self.inner.statistics.save(statistics.clone())?;
+        Ok(statistics)
+    }
+
+    /// The statistics document of `entity_id`, if it was analyzed.
+    pub fn statistics(&self, entity_id: u64) -> Option<TableStatistics> {
+        self.inner.statistics.get(entity_id)
+    }
+
+    /// Row mutations committed to `entity_id` since its last `ANALYZE` (since creation if it
+    /// was never analyzed).
+    pub fn modifications_since_analyze(&self, entity_id: u64) -> u64 {
+        let total = self.inner.modifications.lock().get(entity_id);
+        let at_analyze = self
+            .inner
+            .statistics
+            .get(entity_id)
+            .map_or(0, |statistics| statistics.modifications_at_analyze);
+        total.saturating_sub(at_analyze)
+    }
+
     // ----- maintenance ----------------------------------------------------------------------
 
     /// Persists all in-memory projection changes and moves the recovery start point forward.
@@ -348,9 +416,11 @@ impl Database {
                     }
                 };
                 write_checkpoint(
+                    &self.inner.dir,
                     &self.inner.journal,
                     &self.inner.checkpoints,
                     &self.inner.projections.read(),
+                    &self.inner.modifications.lock(),
                     &checkpoint,
                 )
             })
