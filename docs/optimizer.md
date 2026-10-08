@@ -148,9 +148,9 @@ It is also where declared intents (latency first, memory first, ...) will plug i
 ## Calibration
 
 `scripts/benchmark-ffi.sh` reports, for each workload, the estimated root cost next to the
-measured time (`calibration.ms_per_1k_cost`). On the reference VM workloads A and B land at
-0.60 and 0.68 ms per 1,000 cost units. That is consistent within 15%, so the default weights
-were kept. A machine whose ratios diverge between workloads should adjust `CostWeights`.
+measured time (`calibration.ms_per_1k_cost`). On the reference VM, workloads A and B landed
+between 0.44 and 0.68 ms per 1,000 cost units across runs. The spread between the workloads was
+no larger than the run-to-run variation, so the default weights were kept. A machine whose ratios diverge between workloads should adjust `CostWeights`.
 
 ## Known limitations
 

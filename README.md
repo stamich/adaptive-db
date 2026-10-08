@@ -33,11 +33,11 @@ orders, 100 iterations, 2-vCPU cloud VM; expect run-to-run variation):
 
 | Workload | rust_native p50 | ffi_prepared_plan p50 | scala_cbo_ffi_rust p50 |
 |---|---|---|---|
-| A: hash join + TopK | 0.82 ms | 1.24 ms | 4.34 ms |
-| B: hash join + aggregate + TopK | 0.87 ms | 1.12 ms | 3.34 ms |
+| A: hash join + TopK | 0.83 ms | 1.20 ms | 3.16 ms |
+| B: hash join + aggregate + TopK | 0.90 ms | 1.21 ms | 2.91 ms |
 
-Join order (20,000 → 2,000 → 20 rows, selective filter): cost mode `(a JOIN (b JOIN c))` 21.3 ms
-vs. rule mode `((a JOIN b) JOIN c)` 22.7 ms, identical results; `ANALYZE` of 100,000 rows ≈ 165 ms.
+Join order (20,000 → 2,000 → 20 rows, selective filter): cost mode `(a JOIN (b JOIN c))` 20.8 ms
+vs. rule mode `((a JOIN b) JOIN c)` 22.5 ms, identical results; `ANALYZE` of 100,000 rows ≈ 155 ms.
 Recorded runs: [examples/results/2.2.3-database.json](examples/results/2.2.3-database.json),
 [examples/results/2.2.3-ffi.json](examples/results/2.2.3-ffi.json).
 

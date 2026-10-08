@@ -1,0 +1,51 @@
+Adaptive DB Milestone 2.2.3 — validation record
+Date: 2026-10-08
+Base: 2.1.3 (master 3241b81)
+
+Environment
+  rustc 1.97.0 (2d8144b78 2026-07-07)
+  cargo 1.97.0 (c980f4866 2026-06-30)
+  openjdk version "22.0.2" 2024-07-16
+  Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44-fc-v80, 2 vCPU cloud VM
+
+Rust (equivalent of the cargo steps of ./build-milestone-2.2.3.sh)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 186 passed, 0 failed
+  rustdoc -D warnings ............................................ OK
+  release build of libadb_ffi ..................................... OK
+  cargo run -p adb-rust-demo ...................................... OK
+  data-plane benchmark -> examples/results/2.2.3-rust-local.json .. OK
+  scripts/benchmark-db.sh -> examples/results/2.2.3-database.json . OK
+  include/adb.h compiled from C with -Wall -Werror ................ OK
+
+Java / JVM
+  examples/jvm-cdc-smoke (Java FFM -> ABI v5, incl. ANALYZE) ...... PASS
+  JVM modules compiled with scalac 3.3.8 -Werror and javac 22 ..... OK
+  JVM tests (Scala + Java) ........................................ 90 passed, 0 failed
+  feature tour (io.adb.cli.Main --demo) against libadb_ffi ........ OK (46 statements, 1.0.1 -> 2.2.3)
+  JVM planner + gateway benchmark (SQL -> Rust) ................... OK
+  workload benchmark (ffi_prepared_plan, scala_cbo_ffi_rust)
+    -> examples/results/2.2.3-ffi.json ............................ OK
+
+  Gradle could not be run here: Maven Central is not reachable from the validation environment.
+  The JVM modules were therefore compiled and tested with the Scala 3.3.8 compiler and javac
+  directly, and the JVM entry points (demo, benchmarks) were run from those classes. The steps
+  scripts/benchmark-ffi.sh and demo/run-demo.sh run through the Gradle wrapper.
+
+Workload results (p50, 100 iterations; identical checksums on all three paths)
+  A_hash_join_topk             rust_native 0.83 ms  ffi_prepared_plan 1.20 ms  scala_cbo_ffi_rust 3.16 ms  checksum 9955
+  B_hash_join_aggregate_topk   rust_native 0.90 ms  ffi_prepared_plan 1.21 ms  scala_cbo_ffi_rust 2.91 ms  checksum 54550
+  join order (20,000 -> 2,000 -> 20)  cost (a JOIN (b JOIN c)) 20.8 ms   rule ((a JOIN b) JOIN c) 22.5 ms
+  max q-error with fresh statistics: 1.0 on workloads A, B and the join-order workload
+  ANALYZE: bench tables (1,100 rows) ~4 ms; 100,000 rows ~155 ms
+
+Independent review
+  A separate review agent read the full diff; it found no wrong-result defects in join
+  reordering or input swapping. Its findings (JVM lock held during ANALYZE, cache staleness
+  across clients, non-finite floats, working-set accounting, concurrent publication, the
+  foreign-key estimate for repeating parent sides, single-relation conjuncts, feedback-log
+  guarding, value equality of common values, missing local docs) were fixed in
+  "Fix independent-review findings".

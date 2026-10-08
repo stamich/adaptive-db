@@ -48,9 +48,9 @@ The design is described in [statistics.md](statistics.md) and [optimizer.md](opt
    bounded (64 MiB by default) because distinct values switch from a hash set to HyperLogLog at
    10,000.
 3. **Cost weights were checked, not refitted.** The benchmark reports the measured time per cost
-   unit for each workload. It was consistent within 15% on the reference VM, so the defaults
-   stayed. Fitting cpu, io and memory weights separately needs workloads that stress them
-   separately, which is follow-up work.
+   unit for each workload. On the reference VM the spread between workloads stayed within
+   run-to-run variation, so the defaults stayed. Fitting cpu, io and memory weights separately
+   needs workloads that stress them separately, which is follow-up work.
 4. **`Cost` has no network component.** Nothing in 2.2.3 crosses a network; the field arrives
    with distribution (3.x).
 5. **Statistics status in EXPLAIN** is a section per table (fresh, stale or missing, with the
