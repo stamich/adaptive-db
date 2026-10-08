@@ -10,11 +10,14 @@
 //! the JVM planner reads them as JSON ([`TableStatistics::to_json`]).
 //!
 //! [`DataSource`]: adb_execution::DataSource
+pub mod collector;
 pub mod error;
+pub mod hll;
 pub mod model;
 pub mod options;
 pub mod values;
 
+pub use collector::analyze;
 pub use error::StatsError;
 pub use model::{
     ColumnStatistics, HistogramBucket, MostCommonValue, TableStatistics, MAX_STATISTICS_JSON_BYTES,
