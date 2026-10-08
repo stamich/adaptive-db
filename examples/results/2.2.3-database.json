@@ -1,0 +1,41 @@
+{
+  "analyze": {
+    "bench_customer_rows": 100,
+    "bench_orders_distinct_customer_id": 100,
+    "bench_tables_ms": 3.329167,
+    "rows_100k_distinct_of_1000": 1000,
+    "rows_100k_distinct_of_100000": 99799,
+    "rows_100k_ms": 165.694992
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpus": 2,
+    "os": "linux"
+  },
+  "milestone": "2.2.3",
+  "path": "rust_native",
+  "setup": {
+    "bench_customer": 100,
+    "bench_orders": 1000,
+    "iterations": 100
+  },
+  "workloads": {
+    "A_hash_join_topk": {
+      "checksum": 9955,
+      "iterations": 100,
+      "mean_ms": 0.8587622399999998,
+      "p50_ms": 0.8227939999999999,
+      "p95_ms": 0.9870549999999999,
+      "rows_out": 10
+    },
+    "B_hash_join_aggregate_topk": {
+      "checksum": 54550,
+      "iterations": 100,
+      "mean_ms": 0.8926018699999999,
+      "p50_ms": 0.865465,
+      "p95_ms": 1.019851,
+      "rows_out": 10
+    }
+  }
+}
