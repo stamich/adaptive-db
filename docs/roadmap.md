@@ -28,21 +28,31 @@
   `DISTINCT`, ordinal ORDER BY
 - three-valued logic for AND / OR / NOT (today NULL behaves as false)
 - spilling for blocking operators once the memory budget is exceeded
-- right/full outer joins; choosing the hash-join build side by size
+- right/full outer joins; a left-build hash join for LEFT JOIN
 - streaming JVM results instead of materializing up to 1,000,000 rows in the gateway
 
-## 2.2 — statistics and cost-based optimizer
-- row counts / NDV / min-max / histograms
-- cardinality estimation
-- cost model as a `PlanningPolicy` (build side, join algorithm, join ordering), fed back by the
-  2.1 runtime profiles (estimated vs. actual rows per operator)
-- persisted statistics
+## 2.2.3 — statistics and cost-based optimizer (done)
+- native `ANALYZE`: row counts, NULLs, min/max, NDV (HyperLogLog), histograms, most common values
+- statistics persisted by the engine; per-entity modification counters through the checkpoint journal
+- `REFERENCES ... NOT ENFORCED` foreign-key hints
+- cardinality estimation with confidence; cost model with engine-limit feasibility
+- join ordering (DP ≤ 10, greedy ≤ 32) inside INNER blocks; cost-based build side and strategies
+- EXPLAIN estimates, EXPLAIN ANALYZE q-error by profile node id, planner feedback log; C ABI 5
 
-## 2.3 — secondary indexes
+## 2.2.x follow-ups
+- automatic `ANALYZE` driven by the modification counters
+- multi-column (correlated) statistics; distinct counts narrowed by filters
+- refitting `CostWeights` per machine from the feedback log
+- feeding q-errors back into planning (adaptive re-planning)
+
+## 2.3 — secondary indexes and order-preserving keys
+- **order-preserving key encoding** (sign-flipped BIGINT keys) with a one-time storage migration,
+  done together with the index key format so storage migrates once
 - secondary B+Tree
 - IndexScan
 - covering index metadata
 - cost-based SeqScan vs IndexScan
+- Sort elision from key and index order (needs the new key encoding)
 
 ## 2.4 — schema evolution v1
 - ADD/RENAME/logical DROP column

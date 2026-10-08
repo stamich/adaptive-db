@@ -1,4 +1,4 @@
-# Feature map: 1.0.1 → 2.1.3
+# Feature map: 1.0.1 → 2.2.3
 
 ## 1.0.1 — transactions, WAL and recovery
 
@@ -83,3 +83,28 @@ batch format v2 (slot columns) + runtime profile → EXPLAIN ANALYZE
 | `orders a JOIN orders b` | self-join: one entity, two relation instances, distinct slots |
 | `ON o.customer_id <> c.id` | nested-loop fallback, filter pushed below the join |
 | `EXPLAIN ANALYZE` | plans, planner decisions with reasons, per-operator profile |
+
+## 2.2.3 — statistics and cost-based optimization
+
+The last phase creates `region`, `shop` and `sale` (with foreign-key hints), loads 4 / 40 / 400
+rows and runs `sql/2.2.3-statistics.sql`:
+
+```text
+ANALYZE ─► adb-stats collector (snapshot scan) ─► stats/entity-<id>.stats
+commits ─► modification counters ─► checkpoint journal
+          │
+          ▼ C ABI 5
+StatisticsProvider ─► CardinalityEstimator ─► CostModel ─► JoinReorderRule + CostBasedPolicy
+          │
+          ▼
+EXPLAIN (estimates, join order, statistics, warnings) / EXPLAIN ANALYZE (q-error by node id)
+```
+
+| Step | Shows |
+|---|---|
+| `EXPLAIN` before `ANALYZE` | default estimates (1,000 rows, confidence 0.1) and "run ANALYZE" warnings |
+| `ANALYZE;` | statistics for every table |
+| `EXPLAIN ANALYZE` | the selective region filter joined first, estimates per node with their basis, actual rows and q-error |
+| same query in cost and rule mode | identical rows from different join orders |
+| 200 more sales | statistics of `sale` reported stale (50% changed) |
+
