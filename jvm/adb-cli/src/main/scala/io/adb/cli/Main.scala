@@ -2,7 +2,7 @@ package io.adb.cli
 
 import io.adb.catalog.FileCatalog
 import io.adb.ffm.NativeDatabase
-import io.adb.gateway.AdaptiveDatabase
+import io.adb.gateway.{AdaptiveDatabase, PlannerFeedbackLog}
 import java.nio.file.Path
 import scala.io.StdIn
 
@@ -23,7 +23,8 @@ object Main:
     )
     val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
-    val db = new AdaptiveDatabase(catalog, native)
+    val feedback = new PlannerFeedbackLog(dataDir.resolve("planner-feedback.jsonl"))
+    val db = new AdaptiveDatabase(catalog, native, feedbackLog = Some(feedback))
 
     println("Adaptive DB 2.1.3 shell. End statements with ';'. Type \\q to quit.")
     try

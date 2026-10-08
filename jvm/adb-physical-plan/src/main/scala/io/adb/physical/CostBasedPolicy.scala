@@ -12,8 +12,8 @@ import io.adb.optimizer.cost.{BuildSide, CostModel, JoinCost}
   *    the engine limits wins. Building the logical left input means swapping the inputs. When
   *    no alternative fits the limits, the cheapest is chosen anyway and a warning explains
   *    which limit the estimates exceed (the engine still enforces the limit at run time).
-  *  - '''ORDER BY + LIMIT''': a TopK whenever the engine accepts the limit, explained with the
-  *    estimated input size.
+  *  - '''ORDER BY + LIMIT''': a TopK whenever the engine accepts the limit (its memory is
+  *    bounded by the limit, a full sort's by the input), explained with the estimated input size.
   *
   * @param estimator cardinality estimates (shared with the cost model)
   * @param costModel operator costs
@@ -47,10 +47,7 @@ final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostMode
   def chooseTopK(limit: Int, keys: Vector[BoundOrder], input: LogicalPlan): (Boolean, String) =
     val rows = estimator.estimate(input).rows
     if limit > DefaultPlanningPolicy.MaxTopK then (false, s"LIMIT $limit exceeds the TopK bound ${DefaultPlanningPolicy.MaxTopK}; full sort")
-    else
-      val sort = costModel.total(costModel.ownCost(LogicalPlan.Sort(input, keys)))
-      val topK = costModel.total(costModel.topKCost(input, limit))
-      (true, f"keeps ${math.min(limit.toDouble, rows)}%.0f of ~$rows%.0f rows; cost ${topK}%.1f vs full sort ${sort}%.1f")
+    else (true, f"keeps ${math.min(limit.toDouble, rows)}%.0f of ~$rows%.0f rows in memory instead of sorting all of them")
 
   /** `; next best: cost N` for the cheapest rejected alternative, if any. */
   private def alternative(others: Vector[JoinCost]): String =

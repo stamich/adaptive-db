@@ -6,6 +6,17 @@ import io.adb.optimizer.{OptimizerConfig, Rule}
 import io.adb.optimizer.cardinality.{CardinalityEstimator, Estimate}
 import io.adb.optimizer.cost.CostModel
 
+/** What join ordering decided for one join block (shown by EXPLAIN).
+  *
+  * @param order  the chosen tree, e.g. `((d JOIN t) JOIN f)`
+  * @param method how it was found
+  * @param rows   estimated rows of the block
+  * @param cost   weighted cumulative cost of the block
+  */
+final case class JoinOrderNote(order: String, method: String, rows: Double, cost: Double) derives CanEqual:
+  /** `join order ((d JOIN t) JOIN f): dynamic programming over 3 relations, est. rows=… cost=…`. */
+  def display: String = f"join order $order: $method, est. rows=$rows%.0f cost=$cost%.1f"
+
 /** Chooses the order of INNER and CROSS joins by estimated cost.
   *
   * Every maximal block of INNER/CROSS joins (see [[JoinGraph]]) is reordered independently:
@@ -49,8 +60,8 @@ final class JoinReorderRule(estimator: CardinalityEstimator, costModel: CostMode
   def apply(plan: LogicalPlan): LogicalPlan = reorder(plan)._1
 
   /** Reorders every join block of `plan` and describes what was decided for each block. */
-  def reorder(plan: LogicalPlan): (LogicalPlan, Vector[String]) =
-    val notes = Vector.newBuilder[String]
+  def reorder(plan: LogicalPlan): (LogicalPlan, Vector[JoinOrderNote]) =
+    val notes = Vector.newBuilder[JoinOrderNote]
     def rewrite(node: LogicalPlan): LogicalPlan = node match
       case join: Join if JoinGraph.isReorderable(join) =>
         val graph = JoinGraph.of(join, rewrite)
@@ -62,14 +73,14 @@ final class JoinReorderRule(estimator: CardinalityEstimator, costModel: CostMode
     (result, notes.result())
 
   /** The cheapest join tree of `graph` and a note describing the method. */
-  private def order(graph: JoinGraph): (LogicalPlan, String) =
+  private def order(graph: JoinGraph): (LogicalPlan, JoinOrderNote) =
     val n = graph.relations.size
     val (best, method) =
       if n <= config.maxDpRelations then (dynamicProgramming(graph), s"dynamic programming over $n relations")
       else if n <= config.maxGreedyRelations then (greedy(graph), s"greedy ordering of $n relations")
       else (sqlOrder(graph), s"SQL order kept for $n relations (more than ${config.maxGreedyRelations})")
     val tree = withConstants(best.plan, graph.constant)
-    (tree, f"join order ${shape(tree)}: $method, est. rows=${best.estimate.rows}%.0f cost=${best.cost}%.1f")
+    (tree, JoinOrderNote(shape(tree), method, best.estimate.rows, best.cost))
 
   /** Exact search over all subsets: `best(S) = min over splits S1 ∪ S2 = S of best(S1) ⋈ best(S2)`. */
   private def dynamicProgramming(graph: JoinGraph): Candidate =

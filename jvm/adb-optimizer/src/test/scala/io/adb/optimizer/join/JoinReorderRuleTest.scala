@@ -38,7 +38,7 @@ final class JoinReorderRuleTest:
     new RuleOptimizer().optimize(LogicalPlanner.plan(new Binder(catalog).bind(new SqlParser().parse(sql)).asInstanceOf[BoundSelect]))
 
   /** Reorders `plan` with `config`. */
-  private def reorder(plan: LogicalPlan, config: OptimizerConfig = OptimizerConfig.Default): (LogicalPlan, Vector[String]) =
+  private def reorder(plan: LogicalPlan, config: OptimizerConfig = OptimizerConfig.Default): (LogicalPlan, Vector[JoinOrderNote]) =
     val estimator = new CardinalityEstimator(provider, catalog, config.estimation)
     new JoinReorderRule(estimator, new CostModel(estimator, config)).reorder(plan)
 
@@ -77,8 +77,8 @@ final class JoinReorderRuleTest:
     assertEquals(Set("f", "d", "t"), aliases(top))
     assertEquals(conjuncts(original), conjuncts(plan), "no condition lost or duplicated")
     assertEquals(original.output, plan.output, "the projection keeps the result columns")
-    assertTrue(notes.head.startsWith("join order ((d JOIN t) JOIN f)") || notes.head.startsWith("join order (f JOIN (d JOIN t))"), notes.head)
-    assertTrue(notes.head.contains("dynamic programming over 3 relations"), notes.head)
+    assertTrue(notes.head.display.startsWith("join order ((d JOIN t) JOIN f)") || notes.head.display.startsWith("join order (f JOIN (d JOIN t))"), notes.head.display)
+    assertTrue(notes.head.display.contains("dynamic programming over 3 relations"), notes.head.display)
 
   /** Greedy ordering beyond the DP threshold finds the same order; the SQL order is kept beyond
     * the greedy threshold.
@@ -87,10 +87,10 @@ final class JoinReorderRuleTest:
     val original = optimized(StarQuery)
     val (greedy, greedyNotes) = reorder(original, OptimizerConfig(maxDpRelations = 2, maxGreedyRelations = 3))
     assertEquals(Set("d", "t"), aliases(joins(greedy).last))
-    assertTrue(greedyNotes.head.contains("greedy ordering of 3 relations"), greedyNotes.head)
+    assertTrue(greedyNotes.head.display.contains("greedy ordering of 3 relations"), greedyNotes.head.display)
     val (kept, keptNotes) = reorder(original, OptimizerConfig(maxDpRelations = 2, maxGreedyRelations = 2))
     assertEquals(Set("f", "d"), aliases(joins(kept).last))
-    assertTrue(keptNotes.head.contains("SQL order kept"), keptNotes.head)
+    assertTrue(keptNotes.head.display.contains("SQL order kept"), keptNotes.head.display)
 
   /** A disconnected block still joins everything, with a cross product. */
   @Test def disconnectedBlockUsesCrossProduct(): Unit =
