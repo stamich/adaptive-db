@@ -26,34 +26,46 @@ enum JoinStrategy derives CanEqual:
 
 /** Everything the policy may look at to choose a join strategy.
   *
-  * @param joinType  logical join type
-  * @param equiKeys  `left = right` attribute pairs usable as hash keys
-  * @param residual  remaining condition (evaluated per key match)
-  * @param left      left input
-  * @param right     right input
+  * @param join     the logical join (inputs, type and condition)
+  * @param equiKeys `left = right` attribute pairs usable as hash keys
+  * @param residual remaining condition (evaluated per key match)
   */
-final case class JoinRequest(
-    joinType: JoinType,
-    equiKeys: Vector[(Attribute, Attribute)],
-    residual: Option[TypedExpr],
-    left: LogicalPlan,
-    right: LogicalPlan
-)
+final case class JoinRequest(join: LogicalPlan.Join, equiKeys: Vector[(Attribute, Attribute)], residual: Option[TypedExpr]):
+  /** Logical join type. */
+  def joinType: JoinType = join.joinType
+  /** Left input. */
+  def left: LogicalPlan = join.left
+  /** Right input. */
+  def right: LogicalPlan = join.right
+
+/** A join strategy decision.
+  *
+  * @param strategy   hash or nested-loop join
+  * @param swapInputs run the join with its inputs exchanged, so the engine materializes the
+  *                   logical left input (only for INNER joins; the engine always builds or
+  *                   materializes its right input)
+  * @param reason     why, for EXPLAIN
+  * @param warnings   problems the planner could not avoid (e.g. every strategy exceeds an
+  *                   engine limit), shown by EXPLAIN
+  */
+final case class JoinChoice(strategy: JoinStrategy, swapInputs: Boolean, reason: String, warnings: Vector[String] = Vector.empty) derives CanEqual
 
 /** Chooses physical strategies where a logical operator has several implementations.
   *
-  * This is the seam where adaptivity plugs in: the default policy is rule-based, a statistics-
-  * driven cost model (roadmap 2.2) or workload-driven advisors (5.x) replace it without
-  * touching the planner's translation logic (open for extension, closed for modification).
+  * This is the seam where adaptivity plugs in: [[DefaultPlanningPolicy]] is rule-based,
+  * [[CostBasedPolicy]] uses statistics and the cost model, workload-driven advisors (5.x) can
+  * replace both without touching the planner's translation logic.
   */
 trait PlanningPolicy:
   /** Strategy for one join, with its reason. */
-  def chooseJoin(request: JoinRequest): (JoinStrategy, String)
+  def chooseJoin(request: JoinRequest): JoinChoice
 
-  /** Whether `LIMIT limit` over `ORDER BY` runs as a TopK (`true`) or as Sort + Limit, with the reason. */
-  def chooseTopK(limit: Int, keys: Vector[BoundOrder]): (Boolean, String)
+  /** Whether `LIMIT limit` over `ORDER BY` runs as a TopK (`true`) or as Sort + Limit, with the
+    * reason; `input` is the plan being ordered.
+    */
+  def chooseTopK(limit: Int, keys: Vector[BoundOrder], input: LogicalPlan): (Boolean, String)
 
-/** Rule-based policy of Milestone 2.1 (no statistics yet). */
+/** Rule-based policy of Milestone 2.1 (no statistics), used by `SET optimizer = rule`. */
 object DefaultPlanningPolicy extends PlanningPolicy:
   /** Largest LIMIT run as TopK; matches the engine's TopK bound. */
   val MaxTopK: Int = 1_000_000
@@ -62,16 +74,16 @@ object DefaultPlanningPolicy extends PlanningPolicy:
     * is the right input, which LEFT JOIN requires and which, without statistics, is as good a
     * guess as any.
     */
-  def chooseJoin(request: JoinRequest): (JoinStrategy, String) =
+  def chooseJoin(request: JoinRequest): JoinChoice =
     if request.equiKeys.nonEmpty then
       val keys = request.equiKeys.map((l, r) => s"${l.name} = ${r.name}").mkString(", ")
-      (JoinStrategy.Hash, s"equality key $keys; builds the right input and streams the left, O(n + m)")
+      JoinChoice(JoinStrategy.Hash, false, s"equality key $keys; builds the right input and streams the left, O(n + m)")
     else if request.joinType == JoinType.Cross then
-      (JoinStrategy.NestedLoop, "CROSS JOIN pairs every row; bounded by the comparison limit")
+      JoinChoice(JoinStrategy.NestedLoop, false, "CROSS JOIN pairs every row; bounded by the comparison limit")
     else
-      (JoinStrategy.NestedLoop, "no equality between the two inputs in the join condition; bounded by the comparison limit")
+      JoinChoice(JoinStrategy.NestedLoop, false, "no equality between the two inputs in the join condition; bounded by the comparison limit")
 
   /** TopK for every LIMIT the engine accepts: memory O(limit) instead of O(input). */
-  def chooseTopK(limit: Int, keys: Vector[BoundOrder]): (Boolean, String) =
+  def chooseTopK(limit: Int, keys: Vector[BoundOrder], input: LogicalPlan): (Boolean, String) =
     if limit <= MaxTopK then (true, s"LIMIT $limit over ORDER BY keeps $limit rows in memory instead of sorting the whole input")
     else (false, s"LIMIT $limit exceeds the TopK bound $MaxTopK; full sort")
