@@ -205,6 +205,15 @@ impl PhysicalPlan {
         }
     }
 
+    /// Number of nodes in this plan (the node ids of its runtime profile are `0..node_count`).
+    pub fn node_count(&self) -> usize {
+        1 + self
+            .children()
+            .iter()
+            .map(|child| child.node_count())
+            .sum::<usize>()
+    }
+
     /// Slots this node outputs, in output-column order (assumes a validated plan).
     pub fn output_slots(&self) -> Vec<SlotId> {
         match self {
