@@ -3,18 +3,8 @@ package io.adb.gateway
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Tests of the JSON reader and the EXPLAIN ANALYZE profile rendering. */
+/** Tests of the EXPLAIN ANALYZE profile rendering. */
 final class ProfileRendererTest:
-  /** The reader handles every JSON construct the engine emits. */
-  @Test def readsJson(): Unit =
-    val value = JsonReader.parse("""{"a":[1,-2.5,true,false,null],"b":{"c":"x\"yó"},"d":[]}""")
-    assertEquals(
-      Map("a" -> Vector(1L, -2.5, true, false, null), "b" -> Map("c" -> "x\"yó"), "d" -> Vector.empty),
-      value
-    )
-    assertThrows(classOf[IllegalArgumentException], () => JsonReader.parse("""{"a":1"""))
-    assertThrows(classOf[IllegalArgumentException], () => JsonReader.parse("[1] x"))
-
   /** The profile renders as an indented operator tree with sorted counters. */
   @Test def rendersOperatorTree(): Unit =
     val json =

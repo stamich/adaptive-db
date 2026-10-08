@@ -2,6 +2,7 @@ rootProject.name = "adaptive-db-jvm"
 
 include(
     "adb-model",
+    "adb-statistics",
     "adb-catalog",
     "adb-sql",
     "adb-logical-plan",
