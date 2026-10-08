@@ -159,6 +159,47 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     case TypedExpr.Binary(TypedExpr.Column(a), BinaryOp.Ne, TypedExpr.Column(b), _) => 1 - columnEquality(a, b)
     case _ => config.defaultRangeSelectivity)
 
+  /** What the selectivity of each comparison in `predicate` rests on, for EXPLAIN:
+    * `primary key`, `mcv` (a most common value), `ndv` (distinct count), `histogram`,
+    * `min/max`, `null` (comparison with NULL), `constant` or `default`.
+    */
+  def basis(predicate: TypedExpr): Vector[String] = (predicate match
+    case TypedExpr.Binary(left, BinaryOp.And | BinaryOp.Or, right, _) => basis(left) ++ basis(right)
+    case TypedExpr.Not(inner) => basis(inner)
+    case TypedExpr.Binary(TypedExpr.Column(attribute), op, TypedExpr.Literal(value), _) => Vector(comparisonBasis(attribute, op, value))
+    case TypedExpr.Binary(TypedExpr.Literal(value), op, TypedExpr.Column(attribute), _) => Vector(comparisonBasis(attribute, flip(op), value))
+    case TypedExpr.Binary(TypedExpr.Column(a), BinaryOp.Eq | BinaryOp.Ne, TypedExpr.Column(b), _) =>
+      Vector(if columnStatistics(a).isDefined || columnStatistics(b).isDefined then "ndv" else "default")
+    case TypedExpr.Literal(_) => Vector("constant")
+    case _ => Vector("default")).distinct
+
+  /** What the estimate of `join` rests on: `foreign key`, `ndv`, `default` or `cross product`. */
+  def joinBasis(join: Join): String =
+    val conjuncts = join.condition.toVector.flatMap(TypedExpr.conjuncts)
+    val leftSlots = join.left.output.map(_.slot).toSet
+    val rightSlots = join.right.output.map(_.slot).toSet
+    val keys = conjuncts.flatMap(equiKey(_, leftSlots, rightSlots))
+    if join.joinType == JoinType.Cross || conjuncts.isEmpty then "cross product"
+    else if keys.exists(key => foreignKeyRows(key, 1, 1).isDefined) then "foreign key"
+    else if keys.exists((l, r) => columnStatistics(l).isDefined || columnStatistics(r).isDefined || isKey(l) || isKey(r)) then "ndv"
+    else "default"
+
+  /** Basis of one `attribute op value` comparison (see [[basis]]). */
+  private def comparisonBasis(attribute: Attribute, op: BinaryOp, value: DbValue): String =
+    if value == DbValue.NullValue then "null"
+    else if isKey(attribute) && (op == BinaryOp.Eq || op == BinaryOp.Ne) then "primary key"
+    else columnStatistics(attribute) match
+      case None => "default"
+      case Some((_, column)) if op == BinaryOp.Eq || op == BinaryOp.Ne =>
+        if column.mostCommon.exists(_.value == value) then "mcv" else if outside(column, value) then "min/max" else "ndv"
+      case Some((_, column)) =>
+        if column.histogram.nonEmpty then "histogram" else if column.min.isDefined && column.max.isDefined then "min/max" else "default"
+
+  /** Whether `attribute` is a stored primary-key column. */
+  private def isKey(attribute: Attribute): Boolean = attribute.origin match
+    case ColumnOrigin.Stored(_, entity, field) => isPrimaryKey(entity, field)
+    case ColumnOrigin.Computed(_) => false
+
   /** Distinct non-NULL values of `attribute` among `rows` rows. */
   def distinct(attribute: Attribute, rows: Double): Double =
     val all = attribute.origin match

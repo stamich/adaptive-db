@@ -18,7 +18,11 @@ object Explain:
 
   /** `[id] ` prefix and ` (est. rows=… cost=… conf=…)` suffix of one node. */
   private def annotation(id: Int, estimates: Map[Int, NodeEstimate]): (String, String) =
-    (s"[$id] ", estimates.get(id).fold("")(e => f" (est. rows=${e.rows}%.0f cost=${e.cost}%.1f conf=${e.confidence}%.2f)"))
+    val suffix = estimates.get(id).fold("") { e =>
+      val basis = if e.basis.isEmpty then "" else e.basis.mkString(" basis=", ",", "")
+      f" (est. rows=${e.rows}%.0f cost=${e.cost}%.1f conf=${e.confidence}%.2f$basis)"
+    }
+    (s"[$id] ", suffix)
 
   /** Renders one node and its inputs; `note` gives the prefix and suffix of a node. */
   private def render(plan: PhysicalPlan, names: Map[SlotId, String], depth: Int, note: PhysicalPlan => (String, String)): String =

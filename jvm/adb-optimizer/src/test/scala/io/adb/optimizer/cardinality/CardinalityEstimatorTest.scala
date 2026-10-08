@@ -149,3 +149,21 @@ final class CardinalityEstimatorTest:
     assertEquals(0.0, Estimate.bounded(-5, 0.5, EstimateSource.Default).rows)
     assertEquals(0.01, Estimate.bounded(5, Double.NaN, EstimateSource.Default).confidence)
     assertEquals(EstimateSource.Default, EstimateSource.weakest(EstimateSource.Statistics, EstimateSource.Default))
+
+  /** EXPLAIN's basis names the rule behind each comparison and join. */
+  @Test def selectivityBasis(): Unit =
+    val estimator = new CardinalityEstimator(fresh, catalog)
+    def basis(sql: String): Vector[String] =
+      estimator.basis(find(plan(sql)) { case f: Filter => f }.asInstanceOf[Filter].predicate)
+    assertEquals(Vector("mcv"), basis("SELECT name FROM customer WHERE country = 'PL'"))
+    assertEquals(Vector("min/max"), basis("SELECT name FROM customer WHERE country = 'ZZ'"))
+    assertEquals(Vector("histogram", "default"), basis("SELECT name FROM customer WHERE id < 5 OR name = 'x'"))
+    assertEquals(Vector("min/max"), basis("SELECT o.id FROM orders o WHERE o.amount > 3"))
+    assertEquals(Vector("primary key"), basis("SELECT name FROM customer WHERE id = 1 OR id = 2"))
+    val fk = find(plan("SELECT c.name FROM customer c JOIN orders o ON o.customer_id = c.id")) { case j: Join => j }
+    assertEquals("foreign key", estimator.joinBasis(fk.asInstanceOf[Join]))
+    val plain = find(plan("SELECT c.name FROM customer c JOIN plain p ON p.customer_id = c.id")) { case j: Join => j }
+    assertEquals("ndv", estimator.joinBasis(plain.asInstanceOf[Join]))
+    val cross = find(plan("SELECT c.name FROM customer c CROSS JOIN plain p")) { case j: Join => j }
+    assertEquals("cross product", estimator.joinBasis(cross.asInstanceOf[Join]))
+

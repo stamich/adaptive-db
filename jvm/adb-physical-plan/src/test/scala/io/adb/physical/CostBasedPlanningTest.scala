@@ -96,3 +96,21 @@ final class CostBasedPlanningTest:
     val q = planned("SELECT c.name FROM orders o JOIN customer c ON c.id = o.customer_id", rule = true)
     assertEquals(catalog.entity("customer").get.id.value, entity(hashJoin(q.plan).right))
     assertEquals(PhysicalPlan.preorder(q.plan).indices.toSet, q.estimates.keySet)
+
+  /** A build over the memory budget is rejected in favour of a feasible alternative. */
+  @Test def infeasibleBuildIsAvoided(): Unit =
+    // 1,000 customers need ~60 KiB to build; 10 orders a few hundred bytes. With 4 KiB only the
+    // orders side fits, even though the rule order would build customer.
+    val tight = OptimizerConfig(limits = EngineLimits(queryMemoryBytes = 4096))
+    val q = planned("SELECT c.name FROM orders o JOIN customer c ON c.id = o.customer_id", config = tight)
+    assertEquals(catalog.entity("orders").get.id.value, entity(hashJoin(q.plan).right))
+    assertTrue(q.warnings.isEmpty, q.warnings.toString)
+
+  /** Filters and joins carry the basis of their estimate. */
+  @Test def estimatesCarryTheirBasis(): Unit =
+    val q = planned("SELECT c.name FROM customer c JOIN orders o ON c.id = o.customer_id WHERE o.amount > 5")
+    val nodes = PhysicalPlan.preorder(q.plan)
+    assertEquals(Vector("default"), q.estimates(nodes.indexWhere(_.isInstanceOf[Filter])).basis)
+    assertEquals(Vector("ndv"), q.estimates(nodes.indexWhere(_.isInstanceOf[HashJoin])).basis)
+    assertTrue(Explain.physical(q.plan, q.slotNames, q.estimates).contains("basis=ndv"))
+

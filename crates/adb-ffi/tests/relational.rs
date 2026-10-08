@@ -142,6 +142,11 @@ fn join_aggregate_runs_and_reports_a_profile() {
     assert_eq!(profile["root"]["operator"], "aggregate");
     assert_eq!(profile["root"]["children"][0]["operator"], "hash_join");
     assert_eq!(profile["root"]["children"][0]["counters"]["build_rows"], 4);
+    // ABI 5: pre-order node ids (aggregate 0, hash_join 1, its inputs 2 and 3).
+    assert_eq!(profile["root"]["node_id"], 0);
+    assert_eq!(profile["root"]["children"][0]["node_id"], 1);
+    assert_eq!(profile["root"]["children"][0]["children"][0]["node_id"], 2);
+    assert_eq!(profile["root"]["children"][0]["children"][1]["node_id"], 3);
 
     assert_eq!(adb_query_close(query), AdbStatus::Ok);
     assert_eq!(adb_close(db), AdbStatus::Ok);

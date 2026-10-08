@@ -163,3 +163,26 @@ fn analyze_failures_are_reported() {
     let empty = db.analyze(ENTITY + 9, &AnalyzeOptions::default()).unwrap();
     assert_eq!(empty.row_count, 0);
 }
+
+/// A publication interrupted by a crash leaves at most a temporary file next to the document;
+/// it is ignored, and the previous document stays in force.
+#[test]
+fn interrupted_publication_keeps_the_previous_document() {
+    let dir = tempdir().unwrap();
+    let analyzed = {
+        let db = Database::open(dir.path()).unwrap();
+        load(&db, 0, 8);
+        let statistics = db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap();
+        db.close().unwrap();
+        statistics
+    };
+    let stats = dir.path().join("stats");
+    std::fs::write(
+        stats.join(format!("entity-{ENTITY}.stats.tmp")),
+        b"half-written",
+    )
+    .unwrap();
+    std::fs::write(stats.join("entity-x.stats"), b"not a document").unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(db.statistics(ENTITY), Some(analyzed));
+}

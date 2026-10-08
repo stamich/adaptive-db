@@ -13,8 +13,10 @@ import io.adb.physical.PhysicalPlan as PPlan
   * @param cost       weighted cumulative cost of the node and its inputs
   * @param confidence how far the row estimate can be trusted, in `(0, 1]`
   * @param source     what the estimate rests on
+  * @param basis      for filters and joins, the rules behind the selectivity (`mcv`,
+  *                   `histogram`, `ndv`, `foreign key`, `default`, ...)
   */
-final case class NodeEstimate(rows: Double, cost: Double, confidence: Double, source: String) derives CanEqual
+final case class NodeEstimate(rows: Double, cost: Double, confidence: Double, source: String, basis: Vector[String] = Vector.empty) derives CanEqual
 
 /** Estimator and cost model used to annotate a plan. */
 final case class PlanEstimation(estimator: CardinalityEstimator, costModel: CostModel)
@@ -106,7 +108,11 @@ object PhysicalPlanner:
         if !annotations.containsKey(physical) then
           val estimate = e.estimator.estimate(logical)
           val total = cost.getOrElse(e.costModel.total(e.costModel.cost(logical)))
-          annotations.put(physical, NodeEstimate(estimate.rows, total, estimate.confidence, estimate.source.label))
+          val basis = logical match
+            case LPlan.Filter(_, predicate) => e.estimator.basis(predicate)
+            case join: LPlan.Join => Vector(e.estimator.joinBasis(join))
+            case _ => Vector.empty
+          annotations.put(physical, NodeEstimate(estimate.rows, total, estimate.confidence, estimate.source.label, basis))
       }
       physical
 

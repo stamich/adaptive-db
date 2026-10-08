@@ -83,3 +83,19 @@ final class CostModelTest:
     assertEquals(Cost.Max, (huge + huge).total(CostWeights()))
     assertThrows(classOf[IllegalArgumentException], () => CostWeights(cpu = -1))
     assertThrows(classOf[IllegalArgumentException], () => OptimizerConfig(maxDpRelations = 20))
+
+  /** A hash join beats a nested loop on large inputs; on tiny inputs the nested loop is cheaper. */
+  @Test def hashVersusNestedLoop(): Unit =
+    val m = model()
+    val large = join(plan("SELECT s.v FROM big s JOIN big b ON b.small_id = s.id"))
+    val hash = m.strategyCost(hash = true, BuildSide.Right, large.left, large.right, 100_000)
+    val loop = m.strategyCost(hash = false, BuildSide.Right, large.left, large.right, 100_000)
+    assertTrue(m.total(hash.cost) < m.total(loop.cost))
+    val tinyProvider = StatisticsProvider.of(
+      EntityStatistics(TableStatistics(catalog.entity("small").get.id, 2, 20, 1, 0, 2, true, Map.empty), 0))
+    val tinyModel = new CostModel(new CardinalityEstimator(tinyProvider, catalog), OptimizerConfig.Default)
+    val tiny = join(plan("SELECT a.v FROM small a JOIN small b ON a.id = b.id"))
+    assertTrue(
+      tinyModel.total(tinyModel.strategyCost(hash = false, BuildSide.Right, tiny.left, tiny.right, 2).cost) <
+        tinyModel.total(tinyModel.strategyCost(hash = true, BuildSide.Right, tiny.left, tiny.right, 2).cost))
+
