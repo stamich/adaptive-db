@@ -1,0 +1,14 @@
+[package]
+name = "adb-stats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Table and column statistics of Adaptive DB (ANALYZE) for the cost-based optimizer"
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+adb-execution = { path = "../adb-execution" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
