@@ -68,7 +68,9 @@ final class PhysicalPlannerTest:
     */
   @Test def policyIsPluggable(): Unit =
     val nestedLoopOnly = new PlanningPolicy:
+      /** Always a nested-loop join. */
       def chooseJoin(request: JoinRequest) = JoinChoice(JoinStrategy.NestedLoop, false, "test policy")
+      /** Never a TopK. */
       def chooseTopK(limit: Int, keys: Vector[BoundOrder], input: LogicalPlan) = (false, "test policy")
     val q = PlanningFixtures.planned(
       "SELECT c.name FROM customer c JOIN orders o ON c.id = o.customer_id ORDER BY c.name LIMIT 2",

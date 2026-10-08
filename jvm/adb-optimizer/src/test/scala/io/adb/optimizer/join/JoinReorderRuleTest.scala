@@ -25,6 +25,7 @@ final class JoinReorderRuleTest:
     c
   /** Statistics: row counts plus a 20-value tag column on tiny. */
   private val provider =
+    /** Statistics of table `name`. */
     def table(name: String, rows: Long, columns: Map[FieldId, ColumnStatistics] = Map.empty) =
       EntityStatistics(TableStatistics(catalog.entity(name).get.id, rows, 24, 1, 0, rows, true, columns), 0)
     StatisticsProvider.of(
@@ -117,3 +118,16 @@ final class JoinReorderRuleTest:
   @Test def singleRelationUnchanged(): Unit =
     val original = optimized("SELECT v FROM fact WHERE v > 3")
     assertEquals((original, Vector.empty), reorder(original))
+
+  /** A condition reading one relation only (left in an ON clause when pushdown did not run) is
+    * kept as a filter on that relation, never lost.
+    */
+  @Test def singleRelationConditionsAreKept(): Unit =
+    val bound = new Binder(catalog).bind(new SqlParser().parse(
+      "SELECT f.v FROM fact f JOIN dim d ON f.dim_id = d.id AND f.v > 3 JOIN tiny t ON d.tiny_id = t.id"
+    )).asInstanceOf[BoundSelect]
+    val unpushed = LogicalPlanner.plan(bound)
+    val (plan, _) = reorder(unpushed)
+    assertEquals(conjuncts(unpushed), conjuncts(plan), LogicalPlan.render(plan))
+    assertTrue(joins(plan).forall(_.condition.forall(c => TypedExpr.conjuncts(c).forall(_.slots.size >= 2))), LogicalPlan.render(plan))
+

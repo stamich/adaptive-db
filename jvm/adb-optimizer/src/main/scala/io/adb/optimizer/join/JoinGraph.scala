@@ -53,6 +53,7 @@ object JoinGraph:
   def of(root: Join, relation: LogicalPlan => LogicalPlan): JoinGraph =
     val relations = Vector.newBuilder[LogicalPlan]
     val conjuncts = Vector.newBuilder[TypedExpr]
+    /** Collects the relations and conjuncts below `plan`. */
     def walk(plan: LogicalPlan): Unit = plan match
       case join: Join if isReorderable(join) =>
         walk(join.left)
@@ -67,4 +68,10 @@ object JoinGraph:
       val mask = slotsOf.indices.foldLeft(0L)((mask, i) => if slots.exists(slotsOf(i)) then mask | (1L << i) else mask)
       JoinPredicate(expr, mask)
     }
-    JoinGraph(inputs, predicates)
+    // A conjunct that reads one relation only (normally pushed down already) stays with it as a
+    // filter, so no join order can lose it.
+    val (single, multi) = predicates.partition(p => java.lang.Long.bitCount(p.relations) == 1)
+    val filteredInputs = inputs.indices.toVector.map { i =>
+      filtered(inputs(i), single.collect { case p if p.relations == (1L << i) => p.expr })
+    }
+    JoinGraph(filteredInputs, multi)

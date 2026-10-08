@@ -20,9 +20,9 @@ statistics and a cost-based optimizer.
 | SQL | joins, GROUP BY, ORDER BY | + `ANALYZE [table]`, `SET optimizer = cost \| rule`, `REFERENCES t(c) NOT ENFORCED` foreign-key hints |
 | Planning | rules, SQL join order, right side built | **cardinality estimation** with confidence, **cost model** checked against engine limits, **join ordering** (DP ≤ 10, greedy ≤ 32), **build-side swap** |
 | Observability | EXPLAIN decisions, EXPLAIN ANALYZE profile | + **estimates per node**, statistics status and warnings; **q-error** per operator matched by profile **node id**; planner feedback log |
-| Boundary | C ABI 4 | **C ABI 5** (`adb_analyze_entity_json`, `adb_statistics_json`, `adb_modifications_since_analyze`); plan wire and batch format unchanged |
+| Boundary | C ABI 4 | **C ABI 5** (`adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze`); plan wire and batch format unchanged |
 | Version | 2.1.3 | engine, crates and JVM build **2.2.3** |
-| Tests | 158 Rust, 40 JVM | **182 Rust, 89 JVM** (incl. DP-optimality and result-equality properties) |
+| Tests | 158 Rust, 40 JVM | **186 Rust, 90 JVM** (incl. DP-optimality and result-equality properties) |
 
 Order-preserving key encoding (needed for Sort elision) is planned for 2.3 together with secondary
 indexes, so storage migrates once. How the 2.2.3 proposal was adapted, and why:

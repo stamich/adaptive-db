@@ -191,7 +191,7 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     else columnStatistics(attribute) match
       case None => "default"
       case Some((_, column)) if op == BinaryOp.Eq || op == BinaryOp.Ne =>
-        if column.mostCommon.exists(_.value == value) then "mcv" else if outside(column, value) then "min/max" else "ndv"
+        if column.mostCommon.exists(common => same(common.value, value)) then "mcv" else if outside(column, value) then "min/max" else "ndv"
       case Some((_, column)) =>
         if column.histogram.nonEmpty then "histogram" else if column.min.isDefined && column.max.isDefined then "min/max" else "default"
 
@@ -242,7 +242,7 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     if table.rowCount == 0 then 0.0
     else
       val rows = table.rowCount.toDouble
-      column.mostCommon.find(_.value == value) match
+      column.mostCommon.find(common => same(common.value, value)) match
         case Some(common) => common.rows / rows
         case None if outside(column, value) => 0.0
         case None =>
@@ -298,16 +298,18 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     (1 - nullFraction(l)) * (1 - nullFraction(r)) / math.max(distinct(l, leftRows), distinct(r, rightRows))
 
   /** Join rows implied by a foreign-key hint on `key`, if one side references the other's
-    * primary key: each non-NULL child row matches at most one parent row, and a filtered
-    * parent side keeps its share of the parent table.
+    * primary key: each non-NULL child row matches one parent row, scaled by the parent side's
+    * rows per parent-table row. That ratio is below one for a filtered parent side and above
+    * one when the parent side is itself a join that repeats parent rows.
     */
   private def foreignKeyRows(key: (Attribute, Attribute), leftRows: Double, rightRows: Double): Option[Double] =
     val (l, r) = key
+    /** Rows when `child` references `parent`'s primary key. */
     def rows(child: Attribute, parent: Attribute, childRows: Double, parentRows: Double): Option[Double] =
       (child.origin, parent.origin) match
         case (ColumnOrigin.Stored(_, childEntity, childField), ColumnOrigin.Stored(_, parentEntity, parentField))
             if references(childEntity, childField).contains(ForeignKeyRef(parentEntity, parentField)) =>
-          val parentShare = math.min(1.0, parentRows / math.max(1.0, tableRows(parentEntity)))
+          val parentShare = parentRows / math.max(1.0, tableRows(parentEntity))
           Some(childRows * (1 - nullFraction(child)) * parentShare)
         case _ => None
     rows(l, r, leftRows, rightRows).orElse(rows(r, l, rightRows, leftRows))
@@ -349,6 +351,11 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     case DbValue.Int64Value(v) => Some(v.toDouble)
     case DbValue.Float64Value(v) => Some(v)
     case _ => None
+
+  /** Value equality as SQL sees it: numerically across BIGINT and DOUBLE, by content for BYTES. */
+  private def same(a: DbValue, b: DbValue): Boolean = (a, b) match
+    case (DbValue.BytesValue(x), DbValue.BytesValue(y)) => java.util.Arrays.equals(x, y)
+    case _ => order(a, b).contains(0)
 
   /** Order of two values of the same comparable type (`None` across types). */
   private def order(a: DbValue, b: DbValue): Option[Int] = (a, b) match

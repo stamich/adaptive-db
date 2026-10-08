@@ -153,6 +153,7 @@ final class CardinalityEstimatorTest:
   /** EXPLAIN's basis names the rule behind each comparison and join. */
   @Test def selectivityBasis(): Unit =
     val estimator = new CardinalityEstimator(fresh, catalog)
+    /** Basis of the first filter of `sql`. */
     def basis(sql: String): Vector[String] =
       estimator.basis(find(plan(sql)) { case f: Filter => f }.asInstanceOf[Filter].predicate)
     assertEquals(Vector("mcv"), basis("SELECT name FROM customer WHERE country = 'PL'"))

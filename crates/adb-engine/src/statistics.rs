@@ -18,12 +18,13 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use adb_journal::{envelope, replace_file, sync_dir, FileWrite};
 use adb_stats::{TableStatistics, MAX_STATISTICS_JSON_BYTES};
 use adb_storage::StorageError;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::{committed::CommittedTx, DbError};
 
@@ -98,11 +99,19 @@ impl ModificationCounters {
 }
 
 /// The statistics documents of one database, cached in memory.
+///
+/// Every published document gets a **generation** from a counter of this instance, so a client
+/// that caches decoded documents can detect a newer one with a single cheap call. Generations
+/// are not persisted; they only need to differ within one open database. 0 means "none".
 pub(crate) struct StatisticsStore {
     /// The `stats` directory.
     dir: PathBuf,
-    /// Every readable document, by entity id.
-    documents: RwLock<BTreeMap<u64, TableStatistics>>,
+    /// Every readable document and its generation, by entity id.
+    documents: RwLock<BTreeMap<u64, (TableStatistics, u64)>>,
+    /// Last generation handed out.
+    generation: AtomicU64,
+    /// Serializes publication, so concurrent `ANALYZE`s never interleave their file writes.
+    publish: Mutex<()>,
 }
 
 impl StatisticsStore {
@@ -123,29 +132,57 @@ impl StatisticsStore {
                 .ok()
                 .filter(|statistics| statistics.entity_id == entity_id)
             {
-                documents.insert(entity_id, statistics);
+                let generation = documents.len() as u64 + 1;
+                documents.insert(entity_id, (statistics, generation));
             }
         }
+        let generation = AtomicU64::new(documents.len() as u64);
         Ok(Self {
             dir: stats_dir,
             documents: RwLock::new(documents),
+            generation,
+            publish: Mutex::new(()),
         })
     }
 
     /// The document of `entity_id`, if it was analyzed.
     pub fn get(&self, entity_id: u64) -> Option<TableStatistics> {
-        self.documents.read().get(&entity_id).cloned()
+        self.documents
+            .read()
+            .get(&entity_id)
+            .map(|(statistics, _)| statistics.clone())
+    }
+
+    /// Generation of the document of `entity_id`; 0 if there is none.
+    pub fn generation(&self, entity_id: u64) -> u64 {
+        self.documents
+            .read()
+            .get(&entity_id)
+            .map_or(0, |(_, generation)| *generation)
     }
 
     /// Durably replaces the document of its entity, then publishes it.
+    ///
+    /// A document of an older snapshot than the published one is not written (two concurrent
+    /// `ANALYZE`s of one entity: the later snapshot wins whichever finishes last).
     pub fn save(&self, statistics: TableStatistics) -> Result<(), DbError> {
+        let _publish = self.publish.lock();
+        if self
+            .documents
+            .read()
+            .get(&statistics.entity_id)
+            .is_some_and(|(current, _)| current.analyzed_at_ts > statistics.analyzed_at_ts)
+        {
+            return Ok(());
+        }
         let path = self.dir.join(file_name(statistics.entity_id));
         let json = statistics.to_json()?;
         replace_file(&path, &envelope::seal(STATS_MAGIC, STATS_VERSION, &json))?;
         sync_dir(&self.dir)?;
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.documents
             .write()
-            .insert(statistics.entity_id, statistics);
+            .insert(statistics.entity_id, (statistics, generation));
         Ok(())
     }
 }

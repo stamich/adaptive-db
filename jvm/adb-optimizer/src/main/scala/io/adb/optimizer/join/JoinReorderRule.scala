@@ -62,6 +62,7 @@ final class JoinReorderRule(estimator: CardinalityEstimator, costModel: CostMode
   /** Reorders every join block of `plan` and describes what was decided for each block. */
   def reorder(plan: LogicalPlan): (LogicalPlan, Vector[JoinOrderNote]) =
     val notes = Vector.newBuilder[JoinOrderNote]
+    /** Reorders the block rooted at `node`, or recurses into its inputs. */
     def rewrite(node: LogicalPlan): LogicalPlan = node match
       case join: Join if JoinGraph.isReorderable(join) =>
         val graph = JoinGraph.of(join, rewrite)

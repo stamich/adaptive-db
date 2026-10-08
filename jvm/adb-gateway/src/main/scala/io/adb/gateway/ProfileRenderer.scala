@@ -40,6 +40,7 @@ object ProfileRenderer:
   /** Every operator of the profile that has an estimate, in pre-order. */
   def compare(json: String, estimates: Map[Int, NodeEstimate]): Vector[Comparison] =
     val profile = JsonReader.parse(json).asInstanceOf[Map[String, Any]]
+    /** Comparisons of `node` and its inputs, in pre-order. */
     def walk(node: Any): Vector[Comparison] =
       val operator = node.asInstanceOf[Map[String, Any]]
       val own = nodeId(operator).flatMap(id => estimates.get(id).map(e =>

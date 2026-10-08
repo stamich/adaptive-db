@@ -18,7 +18,7 @@ declarations are in `include/adb.h`.
 | Lifecycle | `adb_open`, `adb_close` (checkpoints, always releases the handle) |
 | Queries | `adb_execute_plan_json`, `adb_execute_plan_json_at` (plan wire v2, see [plan-wire-format.md](plan-wire-format.md)), `adb_query_next_batch` (batch format v2, see [batch-format.md](batch-format.md)), `adb_query_cancel`, `adb_query_close` |
 | Profiles *(4)* | `adb_query_profile_json`: the query's per-operator runtime profile, each operator with its pre-order `node_id` *(5)* (see [execution.md](execution.md#runtime-profile)) |
-| Statistics *(new in 5)* | `adb_analyze_entity_json` (ANALYZE one entity, returns the document), `adb_statistics_json` (`NOT_FOUND` if never analyzed), `adb_modifications_since_analyze` (see [statistics.md](statistics.md)) |
+| Statistics *(new in 5)* | `adb_analyze_entity_json` (ANALYZE one entity, returns the document), `adb_statistics_json` (`NOT_FOUND` if never analyzed), `adb_statistics_generation` (changes with every published document; 0 = none), `adb_modifications_since_analyze` (see [statistics.md](statistics.md)) |
 | Buffers | `adb_batch_data`, `adb_batch_len`, `adb_batch_release` |
 | Mutations | `adb_insert_row_json`, `adb_update_fields_json`, `adb_delete_row` (each one serializable transaction) |
 | Metadata | `adb_latest_committed_ts`, `adb_abi_version`, `adb_engine_version` |
@@ -48,8 +48,8 @@ declarations are in `include/adb.h`.
 `adb_abi_version()` returns `5` and `adb_engine_version()` returns the release version (`2.2.3`).
 `io.adb.ffm.NativeLibrary` refuses any other ABI version.
 
-Changes from ABI 4: the three statistics functions (`NativeDatabase.analyzeJson`,
-`statisticsJson`, `modificationsSinceAnalyze` in Java) and the `node_id` of every profile
+Changes from ABI 4: the four statistics functions (`NativeDatabase.analyzeJson`,
+`statisticsJson`, `statisticsGeneration`, `modificationsSinceAnalyze` in Java) and the `node_id` of every profile
 operator. Plan wire v2 and batch format v2 are unchanged: node ids are positions in a pre-order
 walk of the plan, so the plan needs no id field.
 

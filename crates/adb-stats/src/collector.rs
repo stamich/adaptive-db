@@ -27,12 +27,20 @@ use crate::{
 pub const EXACT_DISTINCT_LIMIT: usize = 10_000;
 /// Rows requested per scan page.
 const PAGE_ROWS: usize = 1024;
-/// Bytes charged per field of a sampled row besides the value (map entry overhead).
+/// Bytes charged per field when computing the average row size (an estimate of the encoded size).
 const FIELD_OVERHEAD_BYTES: usize = 8;
+/// Bytes a sampled row holds besides its fields: the `Vec` header plus allocator overhead.
+const SAMPLED_ROW_OVERHEAD_BYTES: usize = std::mem::size_of::<SampledRow>() + 16;
+/// Bytes a sampled field holds besides heap payload: the `(FieldId, Value)` entry.
+const SAMPLED_FIELD_BYTES: usize = std::mem::size_of::<(FieldId, Value)>();
 /// Bytes charged per hash in an exact distinct set.
 const DISTINCT_ENTRY_BYTES: usize = 16;
 /// A common value must be at least this many times more frequent than the average value.
 const COMMON_VALUE_FACTOR: f64 = 1.25;
+
+/// One sampled row: its analyzed non-NULL fields, sorted by field id. A sorted vector holds a
+/// row in one allocation, so the working-set accounting below is close to the real footprint.
+type SampledRow = Vec<(FieldId, Value)>;
 
 /// Analyzes `entity_id` as of `snapshot`.
 ///
@@ -84,7 +92,7 @@ struct Run<'a> {
     /// Per-field accumulators.
     columns: BTreeMap<FieldId, ColumnAccumulator>,
     /// Reservoir sample of rows (restricted to the analyzed fields).
-    sample: Vec<Row>,
+    sample: Vec<SampledRow>,
     /// Bytes held by `sample`.
     sample_bytes: usize,
     /// Deterministic generator for reservoir replacement.
@@ -96,6 +104,8 @@ struct Run<'a> {
 struct ColumnAccumulator {
     /// Non-NULL values seen.
     non_null: u64,
+    /// Non-NULL values that take part in ordering (all but non-finite floats).
+    ordered: u64,
     /// Sum of the non-NULL values' widths.
     width_sum: u64,
     /// Smallest value seen.
@@ -190,8 +200,7 @@ impl<'a> Run<'a> {
             )));
         }
         let restricted = self.options.fields.is_some();
-        let mut kept = Row::new();
-        let mut kept_bytes = 0;
+        let mut kept = SampledRow::new();
         for (field, value) in &row.fields {
             self.row_bytes += (values::width(value) + FIELD_OVERHEAD_BYTES) as u64;
             if restricted && !self.columns.contains_key(field) {
@@ -208,16 +217,18 @@ impl<'a> Run<'a> {
                 continue;
             }
             column.add(value);
-            kept_bytes += values::width(value) + FIELD_OVERHEAD_BYTES;
-            kept.fields.insert(*field, value.clone());
+            kept.push((*field, value.clone()));
         }
-        self.sample_row(kept, kept_bytes);
+        // `row.fields` iterates in field order, so `kept` is sorted.
+        kept.shrink_to_fit();
+        let bytes = sampled_row_bytes(&kept);
+        self.sample_row(kept, bytes);
         Ok(())
     }
 
     /// Algorithm R: the first `sample_rows` rows, then each row replaces a random one with
     /// probability `sample_rows / rows`.
-    fn sample_row(&mut self, row: Row, bytes: usize) {
+    fn sample_row(&mut self, row: SampledRow, bytes: usize) {
         let capacity = self.options.sample_rows;
         if self.sample.len() < capacity {
             self.sample.push(row);
@@ -227,7 +238,7 @@ impl<'a> Run<'a> {
         let slot = (self.random.next() % self.rows) as usize;
         if slot < capacity {
             let old = std::mem::replace(&mut self.sample[slot], row);
-            self.sample_bytes = self.sample_bytes + bytes - row_bytes(&old);
+            self.sample_bytes = self.sample_bytes + bytes - sampled_row_bytes(&old);
         }
     }
 
@@ -282,7 +293,11 @@ impl ColumnAccumulator {
             Some(_) => {}
         }
         self.distinct.add(values::hash(value));
-        if self.mixed_types || matches!(value, Value::Float64(v) if v.is_nan()) {
+        if !orderable(value) {
+            return;
+        }
+        self.ordered += 1;
+        if self.mixed_types {
             return;
         }
         if self
@@ -306,7 +321,7 @@ impl ColumnAccumulator {
         &self,
         field: FieldId,
         rows: u64,
-        sample: &[Row],
+        sample: &[SampledRow],
         options: &AnalyzeOptions,
     ) -> ColumnStatistics {
         let (distinct_count, distinct_exact) = self.distinct.count(self.non_null);
@@ -334,13 +349,18 @@ impl ColumnAccumulator {
 
         let mut sampled: Vec<&Value> = sample
             .iter()
-            .filter_map(|row| row.get(field))
-            .filter(|value| !matches!(value, Value::Float64(v) if v.is_nan()))
+            .filter_map(|row| {
+                row.binary_search_by_key(&field, |(id, _)| *id)
+                    .ok()
+                    .map(|index| &row[index].1)
+            })
+            .filter(|value| orderable(value))
             .collect();
         if sampled.is_empty() {
             return statistics;
         }
-        let scale = self.non_null as f64 / sampled.len() as f64;
+        // Histogram and common values describe the orderable values only.
+        let scale = self.ordered as f64 / sampled.len() as f64;
         statistics.most_common = most_common(&sampled, scale, options.most_common_values);
         sampled.sort_by(|a, b| values::compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
         statistics.histogram = histogram(&sampled, scale, options.histogram_buckets);
@@ -403,12 +423,25 @@ fn histogram(sorted: &[&Value], scale: f64, buckets: usize) -> Vec<HistogramBuck
         .collect()
 }
 
-/// Bytes charged for a sampled row.
-fn row_bytes(row: &Row) -> usize {
-    row.fields
-        .values()
-        .map(|value| values::width(value) + FIELD_OVERHEAD_BYTES)
-        .sum()
+/// Bytes a sampled row holds: entries, heap payload of strings and byte arrays, overhead.
+fn sampled_row_bytes(row: &SampledRow) -> usize {
+    SAMPLED_ROW_OVERHEAD_BYTES
+        + row
+            .iter()
+            .map(|(_, value)| {
+                SAMPLED_FIELD_BYTES
+                    + match value {
+                        Value::String(_) | Value::Bytes(_) => values::width(value),
+                        _ => 0,
+                    }
+            })
+            .sum::<usize>()
+}
+
+/// Whether a value can take part in min/max, histograms and common values: every value except
+/// non-finite floats (NaN has no order; infinities have no JSON form).
+fn orderable(value: &Value) -> bool {
+    !matches!(value, Value::Float64(v) if !v.is_finite())
 }
 
 /// SplitMix64: a tiny, well-mixed, seedable generator.

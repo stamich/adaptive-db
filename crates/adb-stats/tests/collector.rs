@@ -251,3 +251,50 @@ fn runs_are_deterministic() {
     let second = run(80_000, generate, &AnalyzeOptions::default()).unwrap();
     assert_eq!(first.to_json().unwrap(), second.to_json().unwrap());
 }
+
+/// Infinite floats are counted but stay out of min/max, histograms and common values, so the
+/// document always has a JSON form.
+#[test]
+fn non_finite_floats_are_not_ordered() {
+    let statistics = run(
+        50,
+        |pk| {
+            Row::new().with_field(
+                1,
+                Value::Float64(match pk % 5 {
+                    0 => f64::INFINITY,
+                    1 => f64::NEG_INFINITY,
+                    2 => f64::NAN,
+                    _ => pk as f64,
+                }),
+            )
+        },
+        &AnalyzeOptions::default(),
+    )
+    .unwrap();
+    let column = statistics.column(1).unwrap();
+    assert_eq!(column.null_count, 0);
+    assert_eq!(column.min, Some(Value::Float64(3.0)));
+    assert_eq!(column.max, Some(Value::Float64(49.0)));
+    assert_eq!(column.histogram.iter().map(|b| b.rows).sum::<u64>(), 20);
+    let json = statistics.to_json().unwrap();
+    assert_eq!(TableStatistics::from_json(&json).unwrap(), statistics);
+}
+
+/// The working set charges the real footprint of sampled rows: 30,000 one-field rows need well
+/// over 1 MiB (40-byte entries plus vector overhead), so a 1 MiB budget fails.
+#[test]
+fn sample_memory_is_charged_realistically() {
+    let limited = AnalyzeOptions {
+        max_working_set_bytes: 1024 * 1024,
+        ..AnalyzeOptions::default()
+    };
+    assert!(matches!(
+        run(
+            30_000,
+            |pk| Row::new().with_field(1, Value::Int64((pk % 100) as i64)),
+            &limited
+        ),
+        Err(StatsError::Limit(_))
+    ));
+}

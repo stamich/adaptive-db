@@ -46,6 +46,7 @@ public class CdcSmoke {
             check(stats.contains("\"row_count\":1"), "ANALYZE counts entity 1's row");
             check(db.statisticsJson(1).orElseThrow().equals(stats), "statistics document readable after ANALYZE");
             check(db.modificationsSinceAnalyze(1) == 0, "ANALYZE resets the modification delta");
+            check(db.statisticsGeneration(1) > 0 && db.statisticsGeneration(2) == 0, "statistics generation identifies documents");
             try { db.analyzeJson(1, "{\"sample_rows\":0}"); check(false, "invalid ANALYZE options"); }
             catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "invalid ANALYZE options are INVALID_ARGUMENT"); }
             db.checkpoint();

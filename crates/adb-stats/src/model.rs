@@ -161,6 +161,21 @@ impl TableStatistics {
             if !column.avg_width_bytes.is_finite() || column.avg_width_bytes < 0.0 {
                 return fail(format!("field {}: invalid average width", column.field_id));
             }
+            let values = column
+                .min
+                .iter()
+                .chain(&column.max)
+                .chain(column.histogram.iter().flat_map(|b| [&b.lower, &b.upper]))
+                .chain(column.most_common.iter().map(|c| &c.value));
+            if values
+                .into_iter()
+                .any(|value| matches!(value, Value::Float64(v) if !v.is_finite()))
+            {
+                return fail(format!(
+                    "field {}: non-finite floats have no JSON form",
+                    column.field_id
+                ));
+            }
         }
         Ok(())
     }

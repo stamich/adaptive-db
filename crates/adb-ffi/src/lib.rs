@@ -36,7 +36,8 @@ pub use query::{
     adb_query_next_batch, adb_query_profile_json,
 };
 pub use statistics::{
-    adb_analyze_entity_json, adb_modifications_since_analyze, adb_statistics_json,
+    adb_analyze_entity_json, adb_modifications_since_analyze, adb_statistics_generation,
+    adb_statistics_json,
 };
 pub use status::AdbStatus;
 pub use version::{adb_abi_version, adb_engine_version};

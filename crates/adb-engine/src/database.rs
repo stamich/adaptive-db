@@ -353,7 +353,11 @@ impl Database {
     /// document records the entity's modification counter at that moment, so
     /// [`Database::modifications_since_analyze`] measures change since this run. Commits
     /// applied but not yet published when the run starts are counted as already analyzed;
-    /// the counter is a staleness signal, not an exact delta.
+    /// the counter is a staleness signal, not an exact delta. If a concurrent `ANALYZE` of the
+    /// same entity already published a newer snapshot, that document stays in force.
+    ///
+    /// The entity id is not checked against a catalog (the engine has none): analyzing an
+    /// entity without rows publishes an empty document.
     pub fn analyze(
         &self,
         entity_id: u64,
@@ -379,8 +383,15 @@ impl Database {
         self.inner.statistics.get(entity_id)
     }
 
-    /// Row mutations committed to `entity_id` since its last `ANALYZE` (since creation if it
-    /// was never analyzed).
+    /// Generation of the statistics document of `entity_id` (0 if there is none). It changes
+    /// whenever `ANALYZE` publishes a new document, so a client can cache decoded documents and
+    /// re-read them only when it changes.
+    pub fn statistics_generation(&self, entity_id: u64) -> u64 {
+        self.inner.statistics.generation(entity_id)
+    }
+
+    /// Row mutations committed to `entity_id` since its last `ANALYZE` (since creation, or
+    /// since the upgrade to 2.2.3 for older databases, if it was never analyzed).
     pub fn modifications_since_analyze(&self, entity_id: u64) -> u64 {
         let total = self.inner.modifications.lock().get(entity_id);
         let at_analyze = self

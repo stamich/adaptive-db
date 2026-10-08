@@ -23,7 +23,7 @@ by the engine; foreign-key hints are included; order-preserving key encoding is 
   recounted by `rebuild_projections`; `DbError::Statistics`.
 - Execution: `OperatorProfile.node_id` (plan pre-order), `PhysicalPlan::node_count`.
 - C ABI 5: `adb_analyze_entity_json`, `adb_statistics_json` (`NOT_FOUND` if never analyzed),
-  `adb_modifications_since_analyze`; invalid options → `INVALID_ARGUMENT`, ANALYZE limits →
+  `adb_statistics_generation`, `adb_modifications_since_analyze`; invalid options → `INVALID_ARGUMENT`, ANALYZE limits →
   `RESOURCE_LIMIT`.
 - `adb-benchmark-rust --bin workloads` (`rust_native` path of the 2.2.3 workloads).
 
@@ -41,9 +41,10 @@ by the engine; foreign-key hints are included; order-preserving key encoding is 
   statistics warnings in `PlannedQuery`.
 - Gateway: cost mode by default and rule mode; EXPLAIN with estimates, join order, statistics
   section and warnings; EXPLAIN ANALYZE with estimate and q-error per operator;
-  `EngineStatisticsProvider` (cached documents); `PlannerFeedbackLog`
+  `EngineStatisticsProvider` (documents cached by generation, undecodable = missing); `PlannerFeedbackLog`
   (`planner-feedback.jsonl`, bounded, rotating, SQL fingerprinted).
-- Java binding: `NativeDatabase.analyzeJson`, `statisticsJson`, `modificationsSinceAnalyze`.
+- Java binding: `NativeDatabase.analyzeJson` (runs outside the object monitor; `close()` waits
+  for it), `statisticsJson`, `statisticsGeneration`, `modificationsSinceAnalyze`.
 - JVM benchmark `--workloads`: `ffi_prepared_plan` and `scala_cbo_ffi_rust` paths, join-order
   workload in cost and rule mode, cost calibration. Demo tour phase 2.2.3.
 - `scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, `build-milestone-2.2.3.sh`.
@@ -56,8 +57,8 @@ by the engine; foreign-key hints are included; order-preserving key encoding is 
 - Engine, crates and JVM build report version 2.2.3; C ABI 5 (`EXPECTED_ABI = 5` in Java).
 
 ### Tests
-- Rust: 158 → 182 (collector accuracy and limits, persistence, counters across crash /
-  checkpoint / rebuild, ABI 5, profile node ids). JVM: 40 → 89, including DP equal to
+- Rust: 158 → 186 (collector accuracy and limits, persistence, counters across crash /
+  checkpoint / rebuild, ABI 5, profile node ids). JVM: 40 → 90, including DP equal to
   exhaustive enumeration on random graphs and result equality of reordered plans (INNER, LEFT,
   CROSS) under a reference interpreter.
 

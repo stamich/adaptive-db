@@ -2,8 +2,9 @@
  * Adaptive DB native C ABI, version 5 (Milestone 2.2.3).
  *
  * ABI 5 changes (vs. 4): optimizer statistics — adb_analyze_entity_json, adb_statistics_json,
- * adb_modifications_since_analyze (see docs/statistics.md); every operator of a query profile
- * carries a pre-order "node_id". Plan wire v2 and batch format v2 are unchanged.
+ * adb_statistics_generation, adb_modifications_since_analyze (see docs/statistics.md); every
+ * operator of a query profile carries a pre-order "node_id". Plan wire v2 and batch format v2
+ * are unchanged.
  *
  * ABI 4 changes (vs. 3): plans are plan wire v2 documents ({"wire_version":2,"plan":...},
  * see docs/plan-wire-format.md); batches are batch format v2 (optional row ids, column ids are
@@ -174,7 +175,16 @@ AdbStatus adb_analyze_entity_json(
 /* The persisted statistics document of one entity; ADB_NOT_FOUND if it was never analyzed. */
 AdbStatus adb_statistics_json(AdbDatabaseHandle* db, uint64_t entity_id, AdbBatchHandle** out_json);
 
-/* Row mutations committed to an entity since its last ANALYZE (since creation if never). */
+/*
+ * Generation of an entity's statistics document (0 if there is none); it changes whenever
+ * ANALYZE publishes a new document, so clients can cache decoded documents by it.
+ */
+AdbStatus adb_statistics_generation(AdbDatabaseHandle* db, uint64_t entity_id, uint64_t* out_generation);
+
+/*
+ * Row mutations committed to an entity since its last ANALYZE (since creation if never; for a
+ * database created before 2.2.3, since its first open by 2.2.3).
+ */
 AdbStatus adb_modifications_since_analyze(
     AdbDatabaseHandle* db,
     uint64_t entity_id,

@@ -12,6 +12,7 @@ import io.adb.physical.*
 import io.adb.sql.SqlParser
 import io.adb.statistics.{StatisticsCodec, StatisticsProvider}
 import java.util.Optional
+import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters.*
 
 /** SQL front door of the JVM control plane:
@@ -75,7 +76,6 @@ final class AdaptiveDatabase(
     case BoundAnalyze(entities) =>
       val lines = entities.map { entity =>
         val table = StatisticsCodec.decode(native.analyzeJson(entity.id.value, null))
-        statistics.invalidate(entity.id)
         s"ANALYZE ${entity.name} rows=${table.rowCount} sampled=${table.sampledRows} columns=${table.columns.size}"
       }
       QueryResult(Vector.empty, Vector.empty, Some(if lines.isEmpty then "ANALYZE (no tables)" else lines.mkString("\n")))
@@ -140,7 +140,11 @@ final class AdaptiveDatabase(
           materializedRows += 1
         next = query.nextBatch()
       val profile = query.profileJson()
-      feedbackLog.foreach(_.record(sql, plans.mode.toString.toLowerCase, ProfileRenderer.compare(profile, plans.physical.estimates)))
+      // Feedback must never fail a query that already ran.
+      feedbackLog.foreach { log =>
+        try log.record(sql, plans.mode.toString.toLowerCase, ProfileRenderer.compare(profile, plans.physical.estimates))
+        catch case NonFatal(_) => ()
+      }
       (QueryResult(select.output.map(_.name), rows.result()), profile)
     finally query.close()
 

@@ -106,6 +106,7 @@ final class Binder(catalog: Catalog):
     * be qualified with the table name), the only filter UPDATE and DELETE support.
     */
   private def extractPkEquality(entity: Entity, expr: SqlExpr): Long =
+    /** Whether `column` names this entity's primary key. */
     def isPk(column: Column): Boolean =
       column.qualifier.forall(_.equalsIgnoreCase(entity.name)) && requireField(entity, column.name).id == entity.primaryKey
     expr match

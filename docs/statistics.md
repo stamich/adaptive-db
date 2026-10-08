@@ -11,7 +11,7 @@ missing; it only plans with less confidence.
 | Collect | Rust, `adb-stats::analyze` | one snapshot scan of one entity |
 | Persist | Rust, `adb-engine::statistics` | `stats/entity-<id>.stats`, atomic replace |
 | Count changes | Rust, commit pipeline | per-entity modification counters, checkpointed |
-| Expose | C ABI 5 | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_modifications_since_analyze` |
+| Expose | C ABI 5 | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze` |
 | Decode, judge freshness | JVM, `adb-statistics` | `StatisticsCodec`, `EntityStatistics`, `StatisticsProvider` |
 | Use | JVM, `adb-optimizer` | cardinality estimation, cost model, join order |
 
@@ -27,7 +27,10 @@ ANALYZE;          -- every table of the catalog
 ```
 
 `Database::analyze(entity_id, &AnalyzeOptions)` scans the entity's key range at the latest
-published snapshot, in pages of 1,024 rows, without holding any lock that blocks commits. A
+published snapshot, in pages of 1,024 rows, without holding any lock that blocks commits. The
+Java binding runs it outside the `NativeDatabase` monitor too, so other calls proceed during a
+long `ANALYZE`; only `close()` waits for it. The engine has no catalog, so analyzing an entity
+id without rows publishes an empty document. A
 single pass collects the following:
 
 | Statistic | How | Exact? |
@@ -38,11 +41,14 @@ single pass collects the following:
 | equi-depth histogram (≤ 64 buckets) | seeded reservoir sample (Algorithm R, 30,000 rows) | exact when the sample holds every row |
 | most common values (≤ 32) | the same sample: values at least 1.25× more frequent than the average, seen at least twice | scaled from the sample |
 
-Sampled counts are scaled to the full row count. Histogram buckets use cumulative rounding, so
+Sampled counts are scaled to the full row count. The working set charges sampled rows at their
+real in-memory size (40 bytes per field entry plus string payload and vector overhead), so
+`max_working_set_bytes` bounds the actual footprint. Histogram buckets use cumulative rounding, so
 their rows always add up to the non-NULL count. The reservoir is seeded with the entity id, so
 two runs over the same data produce the same document. A field whose values change type gets
-counts but no min/max, histogram or common values. Stored values longer than 256 bytes are
-truncated.
+counts but no min/max, histogram or common values. NaN and infinite floats are counted but take
+no part in min/max, histograms or common values (they have no order or no JSON form). Stored
+values longer than 256 bytes are truncated.
 
 ### Options and limits
 
@@ -75,7 +81,10 @@ most 4 MiB, `deny_unknown_fields`):
    "most_common":[]}]}
 ```
 
-It is written with `replace_file` (write to `.tmp`, `fsync`, rename, directory `fsync`). On open,
+It is written with `replace_file` (write to `.tmp`, `fsync`, rename, directory `fsync`). Publication is
+serialized, and a document of an older snapshot never replaces a newer one, so concurrent
+`ANALYZE`s of one entity leave the latest snapshot's document. Every published document gets a
+**generation** (`adb_statistics_generation`), which clients use to cache decoded documents. On open,
 an unreadable document or a stray `.tmp` file is ignored: the entity counts as never analyzed.
 Values use the engine's JSON form (`"Null"`, `{"Int64": 5}`, `{"String": "x"}`, ...).
 
@@ -88,6 +97,14 @@ log replay. They therefore always count exactly the committed mutations
 (`statistics::modification_counters_track_commits`). `rebuild_projections` deletes the file and
 recounts from the complete log. Unlike a statistics document, a damaged counters file is
 reported as corruption, like every other checkpointed file.
+
+Two edge cases make the counter a staleness signal rather than an exact delta:
+
+* A commit is counted when it is applied, before it is durable. If the process crashes before
+  durability, the commit is lost but an `ANALYZE` that ran in between already recorded it.
+  The delta then under-counts by those few mutations.
+* A database created before 2.2.3 starts counting at its first open by 2.2.3. A full
+  `rebuild_projections` recounts from the beginning of the log.
 
 A document records the counter at its snapshot (`modifications_at_analyze`), so
 
@@ -105,9 +122,10 @@ an automatic trigger will use later.
 
 * `StatisticsCodec.decode` is strict: unknown format versions, missing or mistyped fields and
   impossible counts (more NULLs than rows, more distinct values than non-NULL rows) are rejected.
-* `EngineStatisticsProvider` decodes a document once and caches it until the gateway runs
-  `ANALYZE`. The modification count is read on every call, which is one native call per entity
-  and query.
+* `EngineStatisticsProvider` caches decoded documents by generation, so an `ANALYZE` by any
+  client is picked up at the next query. Each planning step reads the generation and the
+  modification count, which is two cheap native calls per entity and query. A document that
+  cannot be decoded counts as missing, so a query never fails because of statistics.
 * `StatisticsProvider.of(...)` serves fixed statistics for tests, benchmarks and what-if planning.
 
 `AS OF VERSION` queries are estimated with the current statistics. Version-store statistics are

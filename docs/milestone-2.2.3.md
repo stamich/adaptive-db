@@ -23,9 +23,9 @@ The design is described in [statistics.md](statistics.md) and [optimizer.md](opt
 | Area | Delivered |
 |---|---|
 | Rust `adb-stats` | model, options, collector (exact counts, HyperLogLog, reservoir sample, histograms, MCVs), limits |
-| Engine | `Database::analyze`, `statistics`, `modifications_since_analyze`; `stats/` directory; counters through the checkpoint journal; `DbError::Statistics` |
+| Engine | `Database::analyze`, `statistics`, `statistics_generation`, `modifications_since_analyze`; `stats/` directory; counters through the checkpoint journal; `DbError::Statistics` |
 | Execution | `OperatorProfile.node_id` (pre-order), `PhysicalPlan::node_count` |
-| C ABI 5 | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_modifications_since_analyze`; Java binding |
+| C ABI 5 | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze`; Java binding |
 | JVM `adb-statistics` | model, strict codec, `EntityStatistics` (freshness, confidence), `StatisticsProvider` |
 | SQL / catalog | `ANALYZE [table]`, `SET optimizer = cost \| rule`, `REFERENCES t(c) NOT ENFORCED`, `Field.references` |
 | Optimizer | `CardinalityEstimator`, `CostModel`, `OptimizerConfig` / `EngineLimits`, `JoinGraph`, `JoinReorderRule` |

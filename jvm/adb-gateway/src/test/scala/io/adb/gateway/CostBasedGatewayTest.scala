@@ -58,24 +58,36 @@ final class CostBasedGatewayTest:
     assertTrue(text.contains("builds the right input"), text)
     assertTrue(text.contains("est. rows="), text)
 
-  /** Documents are decoded once until invalidated; the modification count is always current. */
-  @Test def engineStatisticsAreCached(): Unit =
+  /** Documents are decoded once per generation; the modification count is always current; an
+    * undecodable document counts as missing.
+    */
+  @Test def engineStatisticsAreCachedByGeneration(): Unit =
     var documents = 0
     var modifications = 0L
-    val json =
+    var generation = 1L
+    var json =
       """{"format_version":1,"entity_id":1,"row_count":5,"avg_row_bytes":8.0,"analyzed_at_ts":1,
         |"modifications_at_analyze":0,"sampled_rows":5,"exact":true,"columns":[]}""".stripMargin
-    val engine = new EngineStatisticsProvider(id => { documents += 1; Option.when(id == 1)(json) }, _ => modifications)
+    val engine = new EngineStatisticsProvider(
+      id => { documents += 1; Option.when(id == 1)(json) },
+      id => if id == 1 then generation else 0L,
+      _ => modifications
+    )
     assertEquals(None, engine.statistics(EntityId(2)))
+    assertEquals(0, documents, "no document is fetched without a generation")
     assertEquals(5L, engine.statistics(EntityId(1)).get.table.rowCount)
     modifications = 3
     assertEquals(3L, engine.statistics(EntityId(1)).get.modificationsSinceAnalyze)
+    assertEquals(1, documents)
+    json = json.replace("\"row_count\":5", "\"row_count\":7").replace("\"sampled_rows\":5", "\"sampled_rows\":7")
+    generation = 2
+    assertEquals(7L, engine.statistics(EntityId(1)).get.table.rowCount, "a new generation is re-read")
     assertEquals(2, documents)
-    engine.statistics(EntityId(2))
-    assertEquals(2, documents, "a missing document is cached too")
-    engine.invalidate(EntityId(1))
+    json = "{broken"
+    generation = 3
+    assertEquals(None, engine.statistics(EntityId(1)))
     engine.statistics(EntityId(1))
-    assertEquals(3, documents)
+    assertEquals(3, documents, "a broken document is not re-read until the next generation")
 
   /** The feedback log writes one line per query without SQL literals and rotates at its bound. */
   @Test def feedbackLogRotates(): Unit =

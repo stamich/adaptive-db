@@ -6,7 +6,7 @@ use adb_engine::{Database, TableStatistics};
 use adb_ffi::{
     adb_analyze_entity_json, adb_batch_data, adb_batch_len, adb_batch_release, adb_close,
     adb_last_error_len, adb_last_error_ptr, adb_modifications_since_analyze, adb_open,
-    adb_statistics_json,
+    adb_statistics_generation, adb_statistics_json,
     handle::{AdbBatchHandle, AdbDatabaseHandle},
     AdbStatus,
 };
@@ -94,6 +94,16 @@ fn analyze_and_read_statistics() {
         AdbStatus::Ok
     );
     assert_eq!(count, 0);
+    let mut generation = 0;
+    assert_eq!(
+        adb_statistics_generation(db, ENTITY, &mut generation),
+        AdbStatus::Ok
+    );
+    assert!(generation > 0);
+    assert_eq!(
+        adb_statistics_generation(db, ENTITY, ptr::null_mut()),
+        AdbStatus::InvalidArgument
+    );
 
     // Default options: zero-length input with a null pointer.
     let mut buffer = ptr::null_mut();

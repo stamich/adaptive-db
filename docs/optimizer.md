@@ -31,7 +31,7 @@ input: fresh statistics, stale statistics, or defaults.
 | no column statistics | equality 0.1, range 1/3 |
 | `AND`, `OR`, `NOT` | `a·b`, `a + b − a·b`, `1 − a` (independence) |
 | `a = b` (columns) | `1 / max(distinct)` × both non-NULL fractions |
-| inner join with foreign-key hint | `|child| · (1 − nullFraction) · |parent| / |parent table|` |
+| inner join with foreign-key hint | `|child| · (1 − nullFraction) · |parent side| / |parent table|` (below 1× for a filtered parent side, above 1× when the parent side repeats parent rows) |
 | other inner join | `|L| · |R| / max(distinct(l), distinct(r))` per key; distinct counts capped by their side's rows; default 200 distinct values without statistics |
 | LEFT JOIN | at least `|L|` |
 | CROSS JOIN | `|L| · |R|` |
@@ -86,7 +86,8 @@ still enforces the limits at run time.
 `JoinGraph` flattens each maximal block of INNER and CROSS joins into its relations and the
 conjuncts of their conditions. LEFT JOINs, aggregates and other operators are boundaries: their
 inputs are reordered on their own, but nothing moves across them, so null-filling stays
-correct. Each block is ordered as follows:
+correct. A conjunct that reads a single relation (normally pushed down already) stays on that
+relation as a filter. Each block is ordered as follows:
 
 | Relations | Method |
 |---|---|
@@ -153,6 +154,8 @@ were kept. A machine whose ratios diverge between workloads should adjust `CostW
 
 ## Known limitations
 
+* Most-common-value matching compares values numerically across BIGINT and DOUBLE and by content
+  for BYTES.
 * Independence between predicates and between join keys: correlated columns are
   under-estimated. Confidence drops with every such assumption, and the q-error shows where it
   matters.

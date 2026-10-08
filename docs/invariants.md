@@ -87,15 +87,18 @@ Each invariant names the test that guards it.
 
 29. Statistics are derived data: a missing, damaged or half-published document only makes
     the entity count as never analyzed; queries still run.
-    *(statistics::damaged_document_counts_as_missing, statistics::interrupted_publication_keeps_the_previous_document)*
+    *(statistics::damaged_document_counts_as_missing, statistics::interrupted_publication_keeps_the_previous_document,
+    statistics::concurrent_analyze_publishes_a_consistent_document, CostBasedGatewayTest.engineStatisticsAreCachedByGeneration)*
 30. The modification counters equal the committed mutations of the log after a crash, a clean
     shutdown and a projection rebuild. *(statistics::modification_counters_track_commits, statistics::rebuild_recounts_modifications)*
 31. `ANALYZE` never exceeds its row, working-set, time or column limits and persists nothing
-    when it fails. *(collector::limits_are_enforced, statistics::analyze_failures_are_reported)*
+    when it fails. *(collector::limits_are_enforced, collector::sample_memory_is_charged_realistically,
+    statistics::analyze_failures_are_reported)*
 32. The JVM never plans on a misread statistics document.
     *(StatisticsCodecTest.rejectsMalformedDocuments)*
 33. Join reordering never changes a query's result; LEFT JOINs are never reordered across.
-    *(JoinOrderPropertiesTest.reorderingPreservesResults, JoinReorderRuleTest.leftJoinIsABoundary)*
+    *(JoinOrderPropertiesTest.reorderingPreservesResults, JoinReorderRuleTest.leftJoinIsABoundary,
+    JoinReorderRuleTest.singleRelationConditionsAreKept)*
 34. A LEFT JOIN is never executed with swapped inputs.
     *(CostBasedPlanningTest.leftJoinNeverSwaps, CostModelTest.leftJoinBuildsRight)*
 35. Estimates and costs are finite and non-negative whatever the statistics.

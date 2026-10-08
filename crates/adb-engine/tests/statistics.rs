@@ -186,3 +186,45 @@ fn interrupted_publication_keeps_the_previous_document() {
     let db = Database::open(dir.path()).unwrap();
     assert_eq!(db.statistics(ENTITY), Some(analyzed));
 }
+
+/// Every published document gets a new generation; an older snapshot never replaces a newer one.
+#[test]
+fn generations_identify_documents() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(db.statistics_generation(ENTITY), 0);
+    load(&db, 0, 4);
+    db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap();
+    let first = db.statistics_generation(ENTITY);
+    assert!(first > 0);
+    load(&db, 10, 2);
+    db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap();
+    let second = db.statistics_generation(ENTITY);
+    assert!(second > first);
+    assert_eq!(db.statistics(ENTITY).unwrap().row_count, 6);
+    drop(db);
+    let reopened = Database::open(dir.path()).unwrap();
+    assert!(reopened.statistics_generation(ENTITY) > 0);
+}
+
+/// Concurrent `ANALYZE`s of one entity leave a readable document of the latest snapshot.
+#[test]
+fn concurrent_analyze_publishes_a_consistent_document() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    load(&db, 0, 200);
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let db = db.clone();
+            std::thread::spawn(move || db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap())
+        })
+        .collect();
+    handles.into_iter().for_each(|handle| {
+        handle.join().unwrap();
+    });
+    let published = db.statistics(ENTITY).unwrap();
+    db.close().unwrap();
+    drop(db);
+    let reopened = Database::open(dir.path()).unwrap();
+    assert_eq!(reopened.statistics(ENTITY), Some(published));
+}

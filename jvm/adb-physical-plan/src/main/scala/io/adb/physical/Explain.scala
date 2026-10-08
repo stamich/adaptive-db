@@ -26,11 +26,15 @@ object Explain:
 
   /** Renders one node and its inputs; `note` gives the prefix and suffix of a node. */
   private def render(plan: PhysicalPlan, names: Map[SlotId, String], depth: Int, note: PhysicalPlan => (String, String)): String =
+    /** `name#slot`. */
     def slot(s: SlotId): String = s"${names.getOrElse(s, "")}#${s.value}"
+    /** `[f1->name#slot, ...]`. */
     def columns(cs: Vector[ScanColumn]): String =
       cs.map(c => s"f${c.fieldId.value}->${slot(c.slot)}").mkString("[", ", ", "]")
+    /** `[name#slot DESC, ...]`. */
     def keys(ks: Vector[SortKey]): String =
       ks.map(k => slot(k.slot) + (if k.descending then " DESC" else "")).mkString("[", ", ", "]")
+    /** Infix rendering of an expression. */
     def expr(e: PhysicalExpr): String = e match
       case PhysicalExpr.Slot(s) => slot(s)
       case PhysicalExpr.Literal(value) => PlanJsonEncoder.encodeRustValue(value)

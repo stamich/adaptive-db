@@ -77,6 +77,22 @@ pub extern "C" fn adb_modifications_since_analyze(
     })
 }
 
+/// Writes the generation of the statistics document of `entity_id` (0 if there is none). It
+/// changes whenever `ANALYZE` publishes a new document; clients cache decoded documents by it.
+#[no_mangle]
+pub extern "C" fn adb_statistics_generation(
+    db: *mut AdbDatabaseHandle,
+    entity_id: u64,
+    out_generation: *mut u64,
+) -> AdbStatus {
+    ffi_guard(|| {
+        init_out(out_generation, 0)?;
+        let generation = database(db)?.statistics_generation(entity_id);
+        init_out(out_generation, generation)?;
+        Ok(AdbStatus::Ok)
+    })
+}
+
 /// Serializes `statistics` into a library-owned buffer stored in `out_json`.
 fn write_document(
     statistics: &TableStatistics,

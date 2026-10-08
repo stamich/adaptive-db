@@ -76,6 +76,8 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle statistics;
     /** {@code adb_modifications_since_analyze}: mutations since an entity's last ANALYZE (ABI 5). */
     final MethodHandle modificationsSinceAnalyze;
+    /** {@code adb_statistics_generation}: generation of an entity's statistics document (ABI 5). */
+    final MethodHandle statisticsGeneration;
 
     /**
      * Loads the library, binds every downcall, and verifies the ABI version.
@@ -113,6 +115,7 @@ final class NativeLibrary implements AutoCloseable {
         analyzeEntity = downcall("adb_analyze_entity_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         statistics = downcall("adb_statistics_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         modificationsSinceAnalyze = downcall("adb_modifications_since_analyze", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        statisticsGeneration = downcall("adb_statistics_generation", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);
