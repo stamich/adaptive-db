@@ -56,7 +56,7 @@ final class StatisticsCodecTest:
         document.replace("\"field_id\":3", "\"field_id\":2"),
         "[]"
       )
-    do assertThrows(classOf[IllegalArgumentException], () => StatisticsCodec.decode(bad), bad)
+    do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
 
   /** Statistics turn stale above 20% changed rows and lose half their confidence. */
   @Test def freshnessAndConfidence(): Unit =

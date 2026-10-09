@@ -21,4 +21,4 @@ final class JsonReaderTest:
   /** Malformed documents fail with `IllegalArgumentException`, never another exception. */
   @Test def rejectsMalformedJson(): Unit =
     for bad <- Vector("""{"a":1""", "[1] x", "\"abc", "\"\\u12\"", "\"\\q\"", "-", "[" * 100 + "]" * 100, "") do
-      assertThrows(classOf[IllegalArgumentException], () => JsonReader.parse(bad), bad)
+      assertThrows(classOf[IllegalArgumentException], () => { JsonReader.parse(bad); () }, bad)

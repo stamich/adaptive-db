@@ -37,7 +37,7 @@ class BinderTest:
         "SET optimizer = fast",
         "SET planner = cost"
       )
-    do assertThrows(classOf[IllegalArgumentException], () => binder.bind(parser.parse(bad)), bad)
+    do assertThrows(classOf[IllegalArgumentException], () => { binder.bind(parser.parse(bad)); () }, bad)
 
     assertEquals(BoundAnalyze(Vector(customer)), binder.bind(parser.parse("ANALYZE customer")))
     assertEquals(BoundAnalyze(catalog.entities), binder.bind(parser.parse("ANALYZE")))
