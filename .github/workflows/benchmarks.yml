@@ -39,7 +39,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "22"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: rust_native
         run: ./scripts/benchmark-db.sh
         env:
