@@ -48,6 +48,16 @@ by the engine; foreign-key hints are included; order-preserving key encoding is 
 - JVM benchmark `--workloads`: `ffi_prepared_plan` and `scala_cbo_ffi_rust` paths, join-order
   workload in cost and rule mode, cost calibration. Demo tour phase 2.2.3.
 - `scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, `build-milestone-2.2.3.sh`.
+- Extended workload benchmark: one Rust-defined dataset of 10 tables at a scale factor
+  (`ADB_BENCH_SCALE`; the Rust binary prepares the database the JVM opens), time-based warm-up
+  and p99, planning time separated, peak memory and rows/s, a star schema whose SQL order
+  exceeds the memory budget at scale 10, estimation stress (Zipf, correlation, stale statistics),
+  planner timing for 2–12 relations, calibration over every plan, and
+  `scripts/check-benchmarks.py` for the invariants of the results.
+- GitHub Actions: `ci.yml` (Rust, JVM, integration with a checked benchmark smoke run on every
+  push to master and pull request), `benchmarks.yml` (manual, scale 1 or 10), Dependabot.
+- The join-order DP forms only connected subsets (10-relation joins planned in milliseconds
+  instead of ~250 ms).
 
 ### Changed
 - `PlanningPolicy.chooseJoin` returns a `JoinChoice`; `chooseTopK` also receives its input;

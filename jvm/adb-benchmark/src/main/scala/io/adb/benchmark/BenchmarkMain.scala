@@ -27,6 +27,8 @@ object BenchmarkMain:
     * @param nativeLib         path of the native library for the gateway benchmark
     * @param workloads         run the 2.2.3 workload benchmark (needs `dataDir` and `nativeLib`)
     * @param out               where the workload benchmark writes its JSON report
+    * @param scale             scale factor the workload data was prepared with
+    * @param warmupMs          minimum warm-up time of each timed workload path
     */
   private final case class Config(
       iterations: Int = 10000,
@@ -34,7 +36,9 @@ object BenchmarkMain:
       dataDir: Option[Path] = None,
       nativeLib: Option[Path] = None,
       workloads: Boolean = false,
-      out: Option[Path] = None
+      out: Option[Path] = None,
+      scale: Int = 1,
+      warmupMs: Long = 2000
   )
 
   /** Point lookup used since 2.0. */
@@ -49,7 +53,8 @@ object BenchmarkMain:
     val cfg = parseArgs(args.toList, Config())
     if cfg.workloads then
       (cfg.dataDir, cfg.nativeLib) match
-        case (Some(data), Some(lib)) => WorkloadBenchmark.run(data, lib, cfg.iterations, cfg.out)
+        case (Some(data), Some(lib)) =>
+          WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
     println(s"Adaptive DB 2.2.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
@@ -159,8 +164,8 @@ object BenchmarkMain:
     val ops = if totalNs == 0 then 0.0 else iterations.toDouble / (totalNs.toDouble / 1e9)
     println(f"$name%-42s ops/s=$ops%12.0f ns/op=$nsOp%12.1f")
 
-  /** Parses `--iterations`, `--gateway-iterations`, `--data`, `--native-lib`, `--workloads` and
-    * `--out` into `cfg`.
+  /** Parses `--iterations`, `--gateway-iterations`, `--data`, `--native-lib`, `--workloads`,
+    * `--out`, `--scale` and `--warmup-ms` into `cfg`.
     */
   @tailrec
   private def parseArgs(args: List[String], cfg: Config): Config = args match
@@ -170,5 +175,7 @@ object BenchmarkMain:
     case "--data" :: value :: tail => parseArgs(tail, cfg.copy(dataDir = Some(Path.of(value).toAbsolutePath.normalize())))
     case "--native-lib" :: value :: tail => parseArgs(tail, cfg.copy(nativeLib = Some(Path.of(value).toAbsolutePath.normalize())))
     case "--workloads" :: tail => parseArgs(tail, cfg.copy(workloads = true))
+    case "--scale" :: value :: tail => parseArgs(tail, cfg.copy(scale = value.toInt))
+    case "--warmup-ms" :: value :: tail => parseArgs(tail, cfg.copy(warmupMs = value.toLong))
     case "--out" :: value :: tail => parseArgs(tail, cfg.copy(out = Some(Path.of(value).toAbsolutePath.normalize())))
     case other :: _ => throw new IllegalArgumentException(s"unknown/incomplete argument: $other")

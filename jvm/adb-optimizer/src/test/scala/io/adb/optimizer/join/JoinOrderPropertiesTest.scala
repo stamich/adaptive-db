@@ -63,8 +63,8 @@ final class JoinOrderPropertiesTest:
       treeCost(left, estimator, model) + treeCost(right, estimator, model) + model.total(step.cost) + step.violations.size * 1e15
     case leaf => model.total(model.cost(leaf))
 
-  /** Cheapest tree of `graph` over relation set `mask`, enumerating every tree (connected
-    * splits only, unless none exists) without memoization.
+  /** Every tree of `graph` over the connected relation set `mask` without cross products (both
+    * halves connected and linked by a predicate), enumerated without memoization.
     */
   private def exhaustive(graph: JoinGraph, mask: Long, estimator: CardinalityEstimator, model: CostModel): Vector[LogicalPlan] =
     if java.lang.Long.bitCount(mask) == 1 then Vector(graph.relations(java.lang.Long.numberOfTrailingZeros(mask)))
@@ -72,9 +72,9 @@ final class JoinOrderPropertiesTest:
       val lowest = java.lang.Long.lowestOneBit(mask)
       val splits = Iterator.iterate((mask - 1) & mask)(s => (s - 1) & mask).takeWhile(_ != 0).filter(s => (s & lowest) != 0)
         .map(s => (s, mask & ~s)).toVector
-      val connected = splits.filter((a, b) => graph.connected(a, b))
+      val connected = splits.filter((a, b) => graph.isConnected(a) && graph.isConnected(b) && graph.connected(a, b))
       for
-        (a, b) <- if connected.nonEmpty then connected else splits
+        (a, b) <- connected
         left <- exhaustive(graph, a, estimator, model)
         right <- exhaustive(graph, b, estimator, model)
       yield

@@ -1,0 +1,114 @@
+# Continuous integration: the checks of build-milestone-2.2.3.sh, split into jobs.
+#
+#   rust         format, lints (incl. documentation of every item), tests, rustdoc, C header
+#   jvm          Gradle wrapper validation, Scala/Java compile (-Werror) and tests
+#   integration  Java FFM -> C ABI -> engine smoke test, Rust demo, JVM feature tour, and a small
+#                workload benchmark whose results are checked for consistency (never for speed)
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (incl. missing docs)
+        run: cargo clippy --workspace --all-targets -- -D warnings -W missing_docs -W clippy::missing_docs_in_private_items
+      - name: Tests
+        run: cargo test --workspace
+      - name: Rustdoc
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: C header compiles
+        run: gcc -fsyntax-only -Wall -Werror -x c include/adb.h
+
+  jvm:
+    name: JVM
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "22"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile and test (Scala -Werror, Java)
+        working-directory: jvm
+        run: ./gradlew --no-daemon clean test
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-test-reports
+          path: jvm/**/build/reports/tests/
+          if-no-files-found: ignore
+
+  integration:
+    name: Integration
+    needs: [rust, jvm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ADB_BENCH_ITERATIONS: "20"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "22"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Native library (release)
+        run: cargo build --release -p adb-ffi
+      - name: Java FFM -> C ABI v5 smoke test
+        run: ./examples/jvm-cdc-smoke/run.sh
+      - name: Rust relational demo
+        run: cargo run --release -p adb-rust-demo
+      - name: JVM feature tour
+        run: ./demo/run-demo.sh
+      - name: Workload benchmark, rust_native (scale 1)
+        run: ./scripts/benchmark-db.sh
+        env:
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-database.json
+      - name: Workload benchmark, JVM paths (scale 1)
+        run: ./scripts/benchmark-ffi.sh
+        env:
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-ffi.json
+          ADB_BENCH_WARMUP_MS: "500"
+      - name: Check benchmark consistency
+        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.2.3-database.json" "$RUNNER_TEMP/2.2.3-ffi.json"
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: ${{ runner.temp }}/2.2.3-*.json
+          if-no-files-found: ignore

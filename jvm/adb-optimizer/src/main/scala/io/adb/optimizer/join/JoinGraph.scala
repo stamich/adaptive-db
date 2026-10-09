@@ -37,6 +37,37 @@ final case class JoinGraph(relations: Vector[LogicalPlan], predicates: Vector[Jo
   def joining(a: Long, b: Long): Vector[TypedExpr] =
     predicates.collect { case p if (p.relations & a) != 0 && (p.relations & b) != 0 && (p.relations & ~(a | b)) == 0 => p.expr }
 
+  /** Whether the relations of `mask` form one connected subgraph (predicates that read only
+    * relations of `mask` link them).
+    */
+  def isConnected(mask: Long): Boolean =
+    if mask == 0 then false
+    else
+      var reached = java.lang.Long.lowestOneBit(mask)
+      var grown = true
+      while grown do
+        grown = false
+        for p <- predicates if (p.relations & ~mask) == 0 && (p.relations & reached) != 0 && (p.relations & ~reached) != 0 do
+          reached |= p.relations
+          grown = true
+      reached == mask
+
+  /** The connected components of the whole graph, as relation masks, lowest relation first. */
+  def components: Vector[Long] =
+    var remaining = all
+    val out = Vector.newBuilder[Long]
+    while remaining != 0 do
+      var component = java.lang.Long.lowestOneBit(remaining)
+      var grown = true
+      while grown do
+        grown = false
+        for p <- predicates if p.relations != 0 && (p.relations & component) != 0 && (p.relations & ~component) != 0 do
+          component |= p.relations
+          grown = true
+      out += component
+      remaining &= ~component
+    out.result()
+
   /** Predicates that read no relation. */
   def constant: Vector[TypedExpr] = predicates.collect { case p if p.relations == 0 => p.expr }
 

@@ -1,0 +1,59 @@
+# Manually started workload benchmark at a chosen scale factor. Hosted runners are shared
+# machines: use the results for consistency checks and rough trends, and record reference
+# numbers on dedicated hardware (see examples/results/README.md).
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: Scale factor (1 = 324k rows, 10 = 3.2M rows)
+        required: true
+        default: "10"
+        type: choice
+        options: ["1", "10"]
+      iterations:
+        description: Timed iterations per path
+        required: true
+        default: "100"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Workload benchmark (scale ${{ inputs.scale }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ADB_BENCH_SCALE: ${{ inputs.scale }}
+      ADB_BENCH_ITERATIONS: ${{ inputs.iterations }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "22"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: rust_native
+        run: ./scripts/benchmark-db.sh
+        env:
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-database.json
+      - name: JVM paths
+        run: ./scripts/benchmark-ffi.sh
+        env:
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-ffi.json
+      - name: Check consistency
+        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.2.3-database.json" "$RUNNER_TEMP/2.2.3-ffi.json"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-sf${{ inputs.scale }}
+          path: ${{ runner.temp }}/2.2.3-*.json
+          if-no-files-found: ignore
