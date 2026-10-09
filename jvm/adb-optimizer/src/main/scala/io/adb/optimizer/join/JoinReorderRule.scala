@@ -21,9 +21,9 @@ final case class JoinOrderNote(order: String, method: String, rows: Double, cost
   *
   * Every maximal block of INNER/CROSS joins (see [[JoinGraph]]) is reordered independently:
   *
-  *  - up to [[OptimizerConfig.maxDpRelations]] relations: dynamic programming over relation
-  *    subsets (bushy trees included), considering only splits joined by a predicate unless no
-  *    such split exists (then the block is disconnected and a cross product is unavoidable);
+  *  - up to [[OptimizerConfig.maxDpRelations]] relations: dynamic programming over connected
+  *    relation subsets (bushy trees included, no cross products); a disconnected block is
+  *    ordered per component and the components are cross-joined, smallest first;
   *  - up to [[OptimizerConfig.maxGreedyRelations]]: greedy pairing, repeatedly joining the two
   *    connected parts with the smallest estimated result;
   *  - beyond that the SQL order is kept.
@@ -83,19 +83,32 @@ final class JoinReorderRule(estimator: CardinalityEstimator, costModel: CostMode
     val tree = withConstants(best.plan, graph.constant)
     (tree, JoinOrderNote(shape(tree), method, best.estimate.rows, best.cost))
 
-  /** Exact search over all subsets: `best(S) = min over splits S1 ∪ S2 = S of best(S1) ⋈ best(S2)`. */
+  /** Exact search without cross products: `best(S) = min over S1 ∪ S2 = S of best(S1) ⋈ best(S2)`
+    * for connected `S`, `S1` and `S2` linked by a predicate (the classic DPccp search space).
+    * Disconnected subsets are never formed, so a chain or a star of `n` relations costs far
+    * fewer than the `3^n` splits of an unrestricted search. A disconnected block is ordered per
+    * connected component, and the components are then cross-joined, smallest first.
+    */
   private def dynamicProgramming(graph: JoinGraph): Candidate =
     val n = graph.relations.size
     val best = new Array[Candidate](1 << n)
     for i <- 0 until n do best(1 << i) = leaf(graph.relations(i))
-    for subset <- (1 until (1 << n)).sortBy(Integer.bitCount) if Integer.bitCount(subset) >= 2 do
+    val connected = Array.tabulate(1 << n)(mask => Integer.bitCount(mask) == 1 || graph.isConnected(mask.toLong))
+    for subset <- (1 until (1 << n)).sortBy(Integer.bitCount) if Integer.bitCount(subset) >= 2 && connected(subset) do
       val lowest = Integer.lowestOneBit(subset)
-      val splits = Iterator.iterate((subset - 1) & subset)(s => (s - 1) & subset).takeWhile(_ != 0)
-        .filter(s => (s & lowest) != 0).map(s => (s.toLong, (subset & ~s).toLong)).toVector
-      val connected = splits.filter((a, b) => graph.connected(a, b))
-      val usable = if connected.nonEmpty then connected else splits
-      best(subset) = usable.map((a, b) => joined(graph, best(a.toInt), best(b.toInt), a, b)).reduce((x, y) => if y.cost < x.cost then y else x)
-    best((1 << n) - 1)
+      var choice: Candidate = null
+      var part = (subset - 1) & subset
+      while part != 0 do
+        val rest = subset & ~part
+        if (part & lowest) != 0 && connected(part) && connected(rest) && graph.connected(part.toLong, rest.toLong) then
+          val candidate = joined(graph, best(part), best(rest), part.toLong, rest.toLong)
+          if choice == null || candidate.cost < choice.cost then choice = candidate
+        part = (part - 1) & subset
+      best(subset) = choice
+    val parts = graph.components.map(mask => mask -> best(mask.toInt)).sortBy((_, c) => (c.estimate.rows, c.cost))
+    parts.tail.foldLeft(parts.head) { case ((mask, acc), (next, candidate)) =>
+      (mask | next, joined(graph, acc, candidate, mask, next))
+    }._2
 
   /** Greedy operator ordering: join the connected pair with the smallest result until one part remains. */
   private def greedy(graph: JoinGraph): Candidate =
