@@ -1,0 +1,112 @@
+{
+  "analyze": {
+    "bench_customer": {
+      "exact": true,
+      "ms": 4.37076,
+      "rows": 1000
+    },
+    "bench_orders": {
+      "exact": true,
+      "ms": 27.138164,
+      "rows": 10000
+    },
+    "jo_a": {
+      "exact": false,
+      "ms": 401.78845,
+      "rows": 200000
+    },
+    "jo_b": {
+      "exact": true,
+      "ms": 36.166239000000004,
+      "rows": 20000
+    },
+    "jo_c": {
+      "exact": true,
+      "ms": 0.873774,
+      "rows": 20
+    },
+    "sk_events": {
+      "exact": false,
+      "ms": 1589.6949789999999,
+      "rows": 1000000
+    },
+    "sk_events_distinct_ids": {
+      "actual": 1000000,
+      "estimated": 993358
+    },
+    "sk_stale": {
+      "exact": false,
+      "ms": 1586.749183,
+      "rows": 1000000
+    },
+    "st_dim": {
+      "exact": true,
+      "ms": 24.211713,
+      "rows": 10000
+    },
+    "st_fact": {
+      "exact": false,
+      "ms": 1756.7303430000002,
+      "rows": 1000000
+    },
+    "st_region": {
+      "exact": true,
+      "ms": 2.8427029999999998,
+      "rows": 100
+    },
+    "total": {
+      "ms": 5430.631195,
+      "rows": 3241120,
+      "rows_per_s": 596821.9685004774
+    }
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cpus": 2,
+    "os": "linux"
+  },
+  "load": {
+    "rows": 3241120,
+    "rows_per_s": 55738.78373899683,
+    "seconds": 58.148380402
+  },
+  "milestone": "2.2.3",
+  "path": "rust_native",
+  "setup": {
+    "bench_customer": 1000,
+    "bench_orders": 10000,
+    "iterations": 100,
+    "scale": 10,
+    "warmup_ms": 200
+  },
+  "workloads": {
+    "A_hash_join_topk": {
+      "checksum": 10000,
+      "input_rows": 11000,
+      "input_rows_per_s": 1437586.0264547195,
+      "iterations": 100,
+      "mean_ms": 8.18618302,
+      "p50_ms": 7.651716,
+      "p95_ms": 11.813687999999999,
+      "p99_ms": 13.073876,
+      "peak_memory_bytes": 287973,
+      "rows_out": 10,
+      "warmup_runs": 25
+    },
+    "B_hash_join_aggregate_topk": {
+      "checksum": 99550,
+      "input_rows": 11000,
+      "input_rows_per_s": 1319992.449643188,
+      "iterations": 100,
+      "mean_ms": 8.78293452,
+      "p50_ms": 8.333381000000001,
+      "p95_ms": 12.024333,
+      "p99_ms": 14.184892,
+      "peak_memory_bytes": 520399,
+      "rows_out": 10,
+      "warmup_runs": 24
+    }
+  }
+}

@@ -34,6 +34,7 @@ if (( ${#GRADLE[@]} )); then
   (cd jvm && "${GRADLE[@]}" clean test)
   (cd jvm && "${GRADLE[@]}" :adb-benchmark:run --args='--iterations 1000')
   ./scripts/benchmark-ffi.sh
+  python3 scripts/check-benchmarks.py examples/results/2.2.3-database.json examples/results/2.2.3-ffi.json
   ./demo/run-demo.sh
 else
   echo "== SKIPPED Scala/JVM tests, FFI benchmark and demo: neither jvm/gradlew nor gradle found"

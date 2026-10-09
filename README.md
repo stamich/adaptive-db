@@ -28,18 +28,21 @@ Order-preserving key encoding (needed for Sort elision) is planned for 2.3 toget
 indexes, so storage migrates once. How the 2.2.3 proposal was adapted, and why:
 [docs/milestone-2.2.3.md](docs/milestone-2.2.3.md).
 
-Workload benchmark (`scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`; 100 customers, 1,000
-orders, 100 iterations, 2-vCPU cloud VM; expect run-to-run variation):
+Workload benchmark (`scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, `ADB_BENCH_SCALE`;
+2-vCPU cloud VM, p50 of 100 iterations after warm-up; expect run-to-run variation). Scale 1 holds
+324,000 rows in 10 tables, scale 10 holds 3.2 million.
 
-| Workload | rust_native p50 | ffi_prepared_plan p50 | scala_cbo_ffi_rust p50 |
-|---|---|---|---|
-| A: hash join + TopK | 0.83 ms | 1.20 ms | 3.16 ms |
-| B: hash join + aggregate + TopK | 0.90 ms | 1.21 ms | 2.91 ms |
+| | scale 1 | scale 10 |
+|---|---|---|
+| A: hash join + TopK — rust_native / ffi_prepared_plan / full SQL | 0.66 / 1.05 / 1.01 ms | 7.7 / 8.5 / 8.9 ms |
+| B: + aggregate — rust_native / ffi_prepared_plan / full SQL | 0.71 / 0.81 / 1.60 ms | 8.3 / 8.8 / 9.6 ms |
+| join order, chain — cost / rule mode | 17 / 22 ms | 194 / 292 ms |
+| join order, star (SQL order builds the fact table) — cost / rule mode | 78 / 125 ms | 820 ms / **aborted** (`RESOURCE_LIMIT`, 256 MiB) |
+| `ANALYZE` throughput | 530,000 rows/s | 600,000 rows/s |
+| estimate q-error: Zipf most common / correlated pair / stale → after `ANALYZE` | 1.0 / 37.7 / 25 → 1.0 | 1.0 / 37 / 25 → 1.0 |
 
-Join order (20,000 → 2,000 → 20 rows, selective filter): cost mode `(a JOIN (b JOIN c))` 20.8 ms
-vs. rule mode `((a JOIN b) JOIN c)` 22.5 ms, identical results; `ANALYZE` of 100,000 rows ≈ 155 ms.
-Recorded runs: [examples/results/2.2.3-database.json](examples/results/2.2.3-database.json),
-[examples/results/2.2.3-ffi.json](examples/results/2.2.3-ffi.json).
+Planning a 10-relation chain takes about 1.5 ms, a 10-relation star about 11 ms. Recorded runs and
+how to read them: [examples/results/README.md](examples/results/README.md).
 
 ## Architecture
 

@@ -149,10 +149,14 @@ It is also where declared intents (latency first, memory first, ...) will plug i
 
 ## Calibration
 
-`scripts/benchmark-ffi.sh` reports, for each workload, the estimated root cost next to the
-measured time (`calibration.ms_per_1k_cost`). On the reference VM, workloads A and B landed
-between 0.44 and 0.68 ms per 1,000 cost units across runs. The spread between the workloads was
-no larger than the run-to-run variation, so the default weights were kept. A machine whose ratios diverge between workloads should adjust `CostWeights`.
+`scripts/benchmark-ffi.sh` reports, for every measured plan, the engine time per 1,000 estimated
+cost units (`calibration.ms_per_1k_cost`, prepared-plan path, so planning is excluded) and the
+spread between the plans. On the reference VM, the TopK workloads land at about 0.12–0.18 ms
+and the join-order plans at about 0.28–0.42 ms per 1,000 units: a spread of about 3×. Join-heavy
+plans are therefore under-costed relative to scans and TopK. That does not change the choices the
+benchmarks exercise, because the alternatives compared there differ by more than 3×, but it
+should be fixed by fitting `CostWeights` (and a per-probe-row hash join cost) to the
+calibration points. This is follow-up work.
 
 ## Known limitations
 
