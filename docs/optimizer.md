@@ -91,7 +91,7 @@ relation as a filter. Each block is ordered as follows:
 
 | Relations | Method |
 |---|---|
-| ≤ 10 | dynamic programming over subsets (bushy trees), connected splits only unless the block is disconnected |
+| ≤ 10 | dynamic programming over connected subsets (bushy trees, no cross products); a disconnected block is ordered per component and the components are cross-joined, smallest first |
 | ≤ 32 | greedy: repeatedly join the connected pair with the smallest estimated result |
 | > 32 | SQL order |
 
@@ -99,7 +99,9 @@ Every candidate join is costed with its cheapest strategy and build side. Condit
 to the lowest join that sees all their relations. Operators above a join address columns by slot,
 so the result is unaffected by the new attribute order
 (`JoinOrderPropertiesTest.reorderingPreservesResults`). The DP is checked against exhaustive
-enumeration on random graphs (`dynamicProgrammingIsOptimal`).
+enumeration of the same search space on random graphs (`dynamicProgrammingIsOptimal`).
+Planning a 10-relation chain takes about 2 ms and a 10-relation star about 10 ms
+(`planner` section of the workload benchmark).
 
 ## Strategies (`CostBasedPolicy`)
 
