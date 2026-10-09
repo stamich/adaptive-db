@@ -20,7 +20,7 @@ subprojects {
         }
 
         // Gradle 9.x requires the JUnit Platform launcher explicitly on the test runtime path.
-        dependencies.add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher:1.11.0")
+        dependencies.add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher:6.1.3")
     }
 
     // Scala 3.3.8 supports JDK 22 bytecode output, so Scala and Java now share
