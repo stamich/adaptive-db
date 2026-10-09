@@ -8,7 +8,7 @@ dependencies {
     implementation(project(":adb-gateway"))
     implementation(project(":adb-catalog"))
     implementation(project(":adb-native"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
 }
 
 application {
