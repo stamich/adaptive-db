@@ -1,5 +1,7 @@
 # Adaptive DB — Milestone 2.2.3
 
+[![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
+
 Adaptive DB is an adaptive, intent-driven database in which **the canonical log is the source of
 truth** and every physical structure (the current store, the version store, optimizer statistics
 and, in the future, columnar, search and graph projections) is rebuildable, derived data. Physical
@@ -132,6 +134,14 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ./scripts/benchmark-db.sh    # 2.2.3 workloads, rust_native path
 ./scripts/benchmark-ffi.sh   # 2.2.3 workloads, FFI and full SQL paths, join order, calibration
 ```
+
+**CI** (`.github/workflows/ci.yml`) runs the same checks on every push to `master` and every
+pull request. The **Rust** job runs format, clippy with the documentation lints, tests, rustdoc
+and the C header. The **JVM** job validates the Gradle wrapper and runs the Gradle tests. The
+**integration** job runs the FFM smoke test, both demos and a scale-1 workload benchmark checked
+by `scripts/check-benchmarks.py`. `Benchmarks` (`.github/workflows/benchmarks.yml`) is started by
+hand at scale 1 or 10 and uploads its reports. Dependabot proposes weekly updates for actions,
+crates and Gradle dependencies.
 
 Requirements: Rust (stable) and JDK 22+. The Scala/JVM part uses the Gradle wrapper in `jvm/` and
 needs access to Maven Central. The Java FFM → Rust path is also checked without Gradle by

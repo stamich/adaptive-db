@@ -54,6 +54,8 @@ by the engine; foreign-key hints are included; order-preserving key encoding is 
   exceeds the memory budget at scale 10, estimation stress (Zipf, correlation, stale statistics),
   planner timing for 2–12 relations, calibration over every plan, and
   `scripts/check-benchmarks.py` for the invariants of the results.
+- GitHub Actions: `ci.yml` (Rust, JVM, integration with a checked benchmark smoke run on every
+  push to master and pull request), `benchmarks.yml` (manual, scale 1 or 10), Dependabot.
 - The join-order DP forms only connected subsets (10-relation joins planned in milliseconds
   instead of ~250 ms).
 
