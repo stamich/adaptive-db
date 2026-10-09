@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    implementation("org.scala-lang:scala3-library_3:3.3.8")
+    implementation("org.scala-lang:scala3-library_3:3.9.0")
     implementation(project(":adb-gateway"))
     implementation(project(":adb-catalog"))
     implementation(project(":adb-native"))
