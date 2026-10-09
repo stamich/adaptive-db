@@ -11,11 +11,12 @@ import io.adb.sql.SqlParser
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.1.3) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.2.3) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
-  * native engine.
+  * native engine. `--workloads` runs the 2.2.3 workload benchmark instead
+  * ([[WorkloadBenchmark]]).
   */
 object BenchmarkMain:
   /** Command-line options.
@@ -24,8 +25,17 @@ object BenchmarkMain:
     * @param gatewayIterations iterations of the SQL-to-native gateway benchmark
     * @param dataDir           database directory for the gateway benchmark
     * @param nativeLib         path of the native library for the gateway benchmark
+    * @param workloads         run the 2.2.3 workload benchmark (needs `dataDir` and `nativeLib`)
+    * @param out               where the workload benchmark writes its JSON report
     */
-  private final case class Config(iterations: Int = 10000, gatewayIterations: Int = 1000, dataDir: Option[Path] = None, nativeLib: Option[Path] = None)
+  private final case class Config(
+      iterations: Int = 10000,
+      gatewayIterations: Int = 1000,
+      dataDir: Option[Path] = None,
+      nativeLib: Option[Path] = None,
+      workloads: Boolean = false,
+      out: Option[Path] = None
+  )
 
   /** Point lookup used since 2.0. */
   private val PointSql = "SELECT id, owner, balance FROM account WHERE id = 42 LIMIT 10;"
@@ -37,7 +47,12 @@ object BenchmarkMain:
   /** Runs the planner benchmark, then the gateway benchmark when both `--data` and `--native-lib` are given. */
   def main(args: Array[String]): Unit =
     val cfg = parseArgs(args.toList, Config())
-    println(s"Adaptive DB 2.1.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    if cfg.workloads then
+      (cfg.dataDir, cfg.nativeLib) match
+        case (Some(data), Some(lib)) => WorkloadBenchmark.run(data, lib, cfg.iterations, cfg.out)
+        case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
+      return
+    println(s"Adaptive DB 2.2.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
@@ -144,7 +159,9 @@ object BenchmarkMain:
     val ops = if totalNs == 0 then 0.0 else iterations.toDouble / (totalNs.toDouble / 1e9)
     println(f"$name%-42s ops/s=$ops%12.0f ns/op=$nsOp%12.1f")
 
-  /** Parses `--iterations`, `--gateway-iterations`, `--data` and `--native-lib` into `cfg`. */
+  /** Parses `--iterations`, `--gateway-iterations`, `--data`, `--native-lib`, `--workloads` and
+    * `--out` into `cfg`.
+    */
   @tailrec
   private def parseArgs(args: List[String], cfg: Config): Config = args match
     case Nil => cfg
@@ -152,4 +169,6 @@ object BenchmarkMain:
     case "--gateway-iterations" :: value :: tail => parseArgs(tail, cfg.copy(gatewayIterations = value.toInt))
     case "--data" :: value :: tail => parseArgs(tail, cfg.copy(dataDir = Some(Path.of(value).toAbsolutePath.normalize())))
     case "--native-lib" :: value :: tail => parseArgs(tail, cfg.copy(nativeLib = Some(Path.of(value).toAbsolutePath.normalize())))
+    case "--workloads" :: tail => parseArgs(tail, cfg.copy(workloads = true))
+    case "--out" :: value :: tail => parseArgs(tail, cfg.copy(out = Some(Path.of(value).toAbsolutePath.normalize())))
     case other :: _ => throw new IllegalArgumentException(s"unknown/incomplete argument: $other")

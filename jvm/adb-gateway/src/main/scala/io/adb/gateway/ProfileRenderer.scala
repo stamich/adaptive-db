@@ -1,31 +1,78 @@
 package io.adb.gateway
 
+import io.adb.model.JsonReader
+import io.adb.physical.NodeEstimate
+
 /** Renders the native query profile (`adb_query_profile_json`) as an indented operator tree:
   *
   * {{{
   * peak memory 18.2 KiB of 256.0 MiB
-  * top_k rows=3 batches=1 time=0.21ms rows_in=4 compactions=1 peak_memory_bytes=1296
-  *   aggregate rows=4 ...
+  * [0] top_k rows=3 est=3 q=1.0 batches=1 time=0.21ms rows_in=4 compactions=1 peak_memory_bytes=1296
+  *   [1] aggregate rows=4 est=2 q=2.0 ...
+  * max q-error 2.0 at [1] aggregate
   * }}}
+  *
+  * With estimates (keyed by the same pre-order node ids the engine reports) every operator
+  * shows its estimated rows and the q-error `max(est, actual) / min(est, actual)` (both
+  * counted as at least one row), the standard measure of cardinality-estimation quality.
   */
 object ProfileRenderer:
-  /** Renders a profile document. */
-  def render(json: String): String =
+  /** One operator's estimate compared with what it actually produced.
+    *
+    * @param nodeId    pre-order node id
+    * @param operator  operator name
+    * @param estimated estimated rows
+    * @param actual    rows the operator returned
+    */
+  final case class Comparison(nodeId: Int, operator: String, estimated: Double, actual: Long) derives CanEqual:
+    /** `max(est, actual) / min(est, actual)`, both at least one row. */
+    def qError: Double = ProfileRenderer.qError(estimated, actual.toDouble)
+
+  /** Renders a profile document, comparing it with `estimates` when given. */
+  def render(json: String, estimates: Map[Int, NodeEstimate] = Map.empty): String =
     val profile = JsonReader.parse(json).asInstanceOf[Map[String, Any]]
     val peak = number(profile("peak_memory_bytes"))
     val limit = number(profile("memory_limit_bytes"))
-    (s"peak memory ${bytes(peak)} of ${bytes(limit)}" +: renderOperator(profile("root"), 0)).mkString("\n")
+    val lines = renderOperator(profile("root"), 0, estimates)
+    val worst = compare(json, estimates).maxByOption(_.qError).map(c => f"max q-error ${c.qError}%.1f at [${c.nodeId}] ${c.operator}")
+    ((s"peak memory ${bytes(peak)} of ${bytes(limit)}" +: lines) ++ worst).mkString("\n")
+
+  /** Every operator of the profile that has an estimate, in pre-order. */
+  def compare(json: String, estimates: Map[Int, NodeEstimate]): Vector[Comparison] =
+    val profile = JsonReader.parse(json).asInstanceOf[Map[String, Any]]
+    /** Comparisons of `node` and its inputs, in pre-order. */
+    def walk(node: Any): Vector[Comparison] =
+      val operator = node.asInstanceOf[Map[String, Any]]
+      val own = nodeId(operator).flatMap(id => estimates.get(id).map(e =>
+        Comparison(id, operator("operator").toString, e.rows, number(operator("rows_out")))))
+      own.toVector ++ children(operator).flatMap(walk)
+    walk(profile("root"))
+
+  /** `max(a, b) / min(a, b)` with both at least one. */
+  def qError(estimated: Double, actual: Double): Double =
+    val (e, a) = (math.max(1.0, estimated), math.max(1.0, actual))
+    math.max(e, a) / math.min(e, a)
 
   /** Lines of one operator and its inputs. */
-  private def renderOperator(node: Any, depth: Int): Vector[String] =
+  private def renderOperator(node: Any, depth: Int, estimates: Map[Int, NodeEstimate]): Vector[String] =
     val operator = node.asInstanceOf[Map[String, Any]]
     val counters = operator.get("counters").map(_.asInstanceOf[Map[String, Any]]).getOrElse(Map.empty)
     val micros = number(operator("elapsed_us"))
-    val line = ("  " * depth) + s"${operator("operator")} rows=${number(operator("rows_out"))} " +
+    val rows = number(operator("rows_out"))
+    val id = nodeId(operator)
+    val prefix = if estimates.isEmpty then "" else id.fold("")(i => s"[$i] ")
+    val estimate = id.flatMap(estimates.get).fold("")(e => f" est=${e.rows}%.0f q=${qError(e.rows, rows.toDouble)}%.1f")
+    val line = ("  " * depth) + s"$prefix${operator("operator")} rows=$rows$estimate " +
       s"batches=${number(operator("batches_out"))} time=${f"${micros / 1000.0}%.2f"}ms" +
       counters.toVector.sortBy(_._1).map((name, value) => s" $name=${number(value)}").mkString
-    val children = operator.get("children").map(_.asInstanceOf[Vector[Any]]).getOrElse(Vector.empty)
-    line +: children.flatMap(renderOperator(_, depth + 1))
+    line +: children(operator).flatMap(renderOperator(_, depth + 1, estimates))
+
+  /** The operator's `node_id` (absent in profiles of engines before 2.2.3). */
+  private def nodeId(operator: Map[String, Any]): Option[Int] = operator.get("node_id").map(number(_).toInt)
+
+  /** Inputs of an operator. */
+  private def children(operator: Map[String, Any]): Vector[Any] =
+    operator.get("children").map(_.asInstanceOf[Vector[Any]]).getOrElse(Vector.empty)
 
   /** A JSON number as `Long`. */
   private def number(value: Any): Long = value match
@@ -38,121 +85,3 @@ object ProfileRenderer:
     if value < 1024 then s"$value B"
     else if value < 1024 * 1024 then f"${value / 1024.0}%.1f KiB"
     else f"${value / (1024.0 * 1024)}%.1f MiB"
-
-/** Minimal strict JSON reader for engine-produced documents (objects become `Map[String, Any]`,
-  * arrays `Vector[Any]`, integers `Long`, other numbers `Double`, plus `String`, `Boolean` and
-  * `null`). The JVM modules have no JSON dependency and the profile is the only JSON they read.
-  */
-object JsonReader:
-  /** Parses one complete JSON document.
-    *
-    * @throws IllegalArgumentException on malformed input
-    */
-  def parse(text: String): Any =
-    val reader = new Cursor(text)
-    val value = reader.value()
-    reader.skipWhitespace()
-    if reader.position != text.length then reader.fail("trailing characters")
-    value
-
-  /** Position-tracking recursive-descent reader. */
-  private final class Cursor(text: String):
-    /** Index of the next character. */
-    var position = 0
-
-    /** Reads any value. */
-    def value(): Any =
-      skipWhitespace()
-      if position >= text.length then fail("unexpected end")
-      text(position) match
-        case '{' => obj()
-        case '[' => array()
-        case '"' => string()
-        case 't' => literal("true", true)
-        case 'f' => literal("false", false)
-        case 'n' => literal("null", null)
-        case _ => numberValue()
-
-    /** Reads an object. */
-    private def obj(): Map[String, Any] =
-      position += 1
-      val out = Map.newBuilder[String, Any]
-      skipWhitespace()
-      if peek == '}' then { position += 1; return out.result() }
-      var more = true
-      while more do
-        skipWhitespace()
-        val key = string()
-        skipWhitespace()
-        expect(':')
-        out += key -> value()
-        skipWhitespace()
-        if peek == ',' then position += 1 else { expect('}'); more = false }
-      out.result()
-
-    /** Reads an array. */
-    private def array(): Vector[Any] =
-      position += 1
-      val out = Vector.newBuilder[Any]
-      skipWhitespace()
-      if peek == ']' then { position += 1; return out.result() }
-      var more = true
-      while more do
-        out += value()
-        skipWhitespace()
-        if peek == ',' then position += 1 else { expect(']'); more = false }
-      out.result()
-
-    /** Reads a string with the standard escapes. */
-    private def string(): String =
-      expect('"')
-      val out = new StringBuilder
-      while peek != '"' do
-        val c = text(position)
-        position += 1
-        if c == '\\' then
-          val escaped = text(position)
-          position += 1
-          escaped match
-            case 'n' => out += '\n'
-            case 't' => out += '\t'
-            case 'r' => out += '\r'
-            case 'b' => out += '\b'
-            case 'f' => out += '\f'
-            case 'u' =>
-              out += Integer.parseInt(text.substring(position, position + 4), 16).toChar
-              position += 4
-            case other => out += other
-        else out += c
-      position += 1
-      out.result()
-
-    /** Reads a number: `Long` when integral, `Double` otherwise. */
-    private def numberValue(): Any =
-      val start = position
-      while position < text.length && "+-0123456789.eE".contains(text(position)) do position += 1
-      val token = text.substring(start, position)
-      if token.isEmpty then fail("unexpected character")
-      token.toLongOption.getOrElse(token.toDoubleOption.getOrElse(fail(s"bad number $token")))
-
-    /** Reads an exact keyword. */
-    private def literal(word: String, result: Any): Any =
-      if !text.startsWith(word, position) then fail(s"expected $word")
-      position += word.length
-      result
-
-    /** Skips JSON whitespace. */
-    def skipWhitespace(): Unit = while position < text.length && text(position).isWhitespace do position += 1
-
-    /** The next character (fails at the end). */
-    private def peek: Char =
-      if position >= text.length then fail("unexpected end")
-      text(position)
-
-    /** Consumes `c` or fails. */
-    private def expect(c: Char): Unit =
-      if peek != c then fail(s"expected '$c'")
-      position += 1
-
-    /** Throws a parse error at the current position. */
-    def fail(message: String): Nothing = throw new IllegalArgumentException(s"invalid JSON at $position: $message")

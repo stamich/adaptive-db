@@ -7,6 +7,10 @@
 //!    the checkpoint ever reached the projection files).
 //! 3. A fresh checkpoint is written if anything was replayed.
 //!
+//! The per-entity modification counters (see [`crate::statistics`]) travel with the
+//! projections: they are written by the same journal commit and brought forward by the same
+//! replay, so after recovery they count exactly the committed mutations in the log.
+//!
 //! Recovery cost is therefore proportional to the log written since the last checkpoint.
 
 use std::path::Path;
@@ -16,7 +20,10 @@ use adb_journal::Journal;
 use adb_storage::{Checkpoint, CheckpointStore, Checkpointable};
 use adb_wal::{earliest_lsn, WalCursor, WalRecord};
 
-use crate::{committed::TxAssembler, projections::Projections, DatabaseOptions, DbError};
+use crate::{
+    committed::TxAssembler, projections::Projections, statistics::ModificationCounters,
+    DatabaseOptions, DbError,
+};
 
 /// State reconstructed by [`recover`].
 pub(crate) struct Recovered {
@@ -28,16 +35,22 @@ pub(crate) struct Recovered {
     pub last_tx_id: u64,
     /// Vacuum horizon restored from the checkpoint.
     pub vacuumed_through: CommitTs,
+    /// Modification counters brought up to the end of the log.
+    pub modifications: ModificationCounters,
 }
 
-/// Publishes the projections' dirty pages and `checkpoint` atomically.
+/// Publishes the projections' dirty pages, the modification counters of the database in `dir`
+/// and `checkpoint` atomically.
 pub(crate) fn write_checkpoint(
+    dir: &Path,
     journal: &Journal,
     store: &CheckpointStore,
     projections: &Projections,
+    modifications: &ModificationCounters,
     checkpoint: &Checkpoint,
 ) -> Result<(), DbError> {
     let mut writes = projections.journal_writes()?;
+    writes.push(modifications.journal_write(dir)?);
     writes.push(store.journal_write(checkpoint)?);
     journal.commit(&writes)?;
     projections.mark_clean();
@@ -68,6 +81,7 @@ pub(crate) fn recover(
         last_commit_ts: checkpoint.last_commit_ts,
         last_tx_id: checkpoint.last_tx_id,
         vacuumed_through: checkpoint.vacuumed_through,
+        modifications: ModificationCounters::load(dir)?,
     };
     let mut replayed = checkpoint.applied_through.is_some();
     let mut end = start;
@@ -85,6 +99,7 @@ pub(crate) fn recover(
             continue;
         }
         state.projections.apply(&logged.tx, logged.commit_lsn)?;
+        state.modifications.record(&logged.tx);
         state.last_commit_ts = state.last_commit_ts.max(logged.tx.commit_ts);
         replayed = true;
 
@@ -92,16 +107,25 @@ pub(crate) fn recover(
             && !assembler.is_mid_transaction()
         {
             write_checkpoint(
+                dir,
                 journal,
                 store,
                 &state.projections,
+                &state.modifications,
                 &state.checkpoint(logged.end),
             )?;
         }
     }
 
     if replayed {
-        write_checkpoint(journal, store, &state.projections, &state.checkpoint(end))?;
+        write_checkpoint(
+            dir,
+            journal,
+            store,
+            &state.projections,
+            &state.modifications,
+            &state.checkpoint(end),
+        )?;
     }
     Ok(state)
 }

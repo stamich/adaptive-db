@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Milestone 2.1.3 validation.
+# Milestone 2.2.3 validation.
 #
 # Rust (cargo) and the Java FFM smoke test need only cargo + JDK 22. The Scala/JVM part uses the
 # Gradle wrapper in jvm/ (or a Gradle 9 on PATH) and needs access to Maven Central; it is skipped
@@ -18,23 +18,25 @@ cargo clippy --workspace --all-targets -- -D warnings -W missing_docs -W clippy:
 cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-echo "== Rust: release build, relational demo and benchmark"
+echo "== Rust: release build, relational demo, data-plane benchmark, workload benchmark (rust_native)"
 cargo build --release -p adb-ffi
 cargo run --release -p adb-rust-demo
 cargo run --release -p adb-benchmark-rust -- --rows 5000 --iters 1000 --groups 100 \
-  --nested-rows 1000 --relational-iters 5 --output examples/results/2.1.3-rust-local.json
+  --nested-rows 1000 --relational-iters 5 --output examples/results/2.2.3-rust-local.json
+./scripts/benchmark-db.sh
 
-echo "== Java FFM -> C ABI v4 -> engine smoke test"
+echo "== Java FFM -> C ABI v5 -> engine smoke test (incl. ANALYZE and statistics)"
 ./examples/jvm-cdc-smoke/run.sh
 
 if [[ -x jvm/gradlew ]]; then GRADLE=(./gradlew); elif command -v gradle >/dev/null; then GRADLE=(gradle); else GRADLE=(); fi
 if (( ${#GRADLE[@]} )); then
-  echo "== Scala/JVM tests, benchmark and demo"
+  echo "== Scala/JVM tests, planner benchmark, workload benchmark (FFI paths) and demo"
   (cd jvm && "${GRADLE[@]}" clean test)
   (cd jvm && "${GRADLE[@]}" :adb-benchmark:run --args='--iterations 1000')
+  ./scripts/benchmark-ffi.sh
   ./demo/run-demo.sh
 else
-  echo "== SKIPPED Scala/JVM tests and demo: neither jvm/gradlew nor gradle found"
+  echo "== SKIPPED Scala/JVM tests, FFI benchmark and demo: neither jvm/gradlew nor gradle found"
 fi
 
-echo "Milestone 2.1.3 validation completed."
+echo "Milestone 2.2.3 validation completed."

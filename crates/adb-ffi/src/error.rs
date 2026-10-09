@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, panic::AssertUnwindSafe};
 
-use adb_engine::DbError;
+use adb_engine::{DbError, StatsError};
 use adb_execution::ExecutionError;
 
 use crate::AdbStatus;
@@ -37,11 +37,26 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
         DbError::ChangeLogTruncated { .. } => AdbStatus::LogTruncated,
         DbError::InvalidArgument(_) | DbError::TransactionClosed => AdbStatus::InvalidArgument,
         DbError::Execution(error) => map_execution_error(error),
+        DbError::Statistics(error) => map_stats_error_status(error),
         _ if error.is_corruption() => AdbStatus::Corruption,
         DbError::Io(_) => AdbStatus::IoError,
         _ => AdbStatus::Internal,
     };
     (status, error.to_string())
+}
+
+/// Maps a statistics error onto a status and message.
+pub fn map_stats_error(error: StatsError) -> (AdbStatus, String) {
+    (map_stats_error_status(&error), error.to_string())
+}
+
+/// Status category of a statistics error.
+fn map_stats_error_status(error: &StatsError) -> AdbStatus {
+    match error {
+        StatsError::InvalidOptions(_) => AdbStatus::InvalidArgument,
+        StatsError::Limit(_) => AdbStatus::ResourceLimit,
+        StatsError::Source(_) | StatsError::Format(_) => AdbStatus::Internal,
+    }
 }
 
 /// Maps query execution errors onto status categories.

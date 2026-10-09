@@ -3,6 +3,8 @@ name = "adb-benchmark-rust"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# `cargo run -p adb-benchmark-rust` runs the data-plane benchmark; `--bin workloads` the 2.2.3 workloads.
+default-run = "adb-benchmark-rust"
 
 [dependencies]
 adb-core = { path = "../../crates/adb-core" }

@@ -4,8 +4,35 @@ import io.adb.model.*
 
 /** A statement whose names are resolved against the catalog and whose expressions are type-checked. */
 sealed trait BoundStatement derives CanEqual
-/** `CREATE TABLE`: entity name, `(column, type, nullable)` definitions, and primary-key column name. */
-final case class BoundCreateTable(name: String, fields: Vector[(String, DataType, Boolean)], primaryKey: String) extends BoundStatement
+/** `CREATE TABLE`: entity name, `(column, type, nullable)` definitions, primary-key column name
+  * and the foreign-key hints by column name.
+  */
+final case class BoundCreateTable(
+    name: String,
+    fields: Vector[(String, DataType, Boolean)],
+    primaryKey: String,
+    references: Map[String, ForeignKeyRef] = Map.empty
+) extends BoundStatement
+/** `ANALYZE`: the entities to analyze (one, or every entity of the catalog). */
+final case class BoundAnalyze(entities: Vector[Entity]) extends BoundStatement
+/** `SET optimizer = cost | rule`. */
+final case class BoundSetOptimizer(mode: OptimizerMode) extends BoundStatement
+
+/** How SELECT statements are optimized. */
+enum OptimizerMode derives CanEqual:
+  /** Statistics-driven: cardinality estimates, cost model, join ordering, cost-based
+    * strategies (the default since 2.2.3).
+    */
+  case Cost
+  /** The rule-based planning of 2.1.3 (SQL join order, fixed strategy rules); estimates are
+    * still shown by EXPLAIN.
+    */
+  case Rule
+
+/** Parsing of [[OptimizerMode]] names. */
+object OptimizerMode:
+  /** The mode named `name` (`cost` or `rule`, case-insensitive). */
+  def named(name: String): Option[OptimizerMode] = values.find(_.toString.equalsIgnoreCase(name))
 /** `INSERT` of one row: values keyed by field id. */
 final case class BoundInsert(entity: Entity, values: Map[FieldId, DbValue]) extends BoundStatement
 /** `UPDATE` of one row identified by its primary key: new values keyed by field id. */

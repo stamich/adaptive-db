@@ -1,7 +1,9 @@
-# Architecture — Milestone 2.1.3
+# Architecture — Milestone 2.2.3
 
-Milestone 2.1.3 adds relational execution (joins, aggregation, sorting) on top of the 2.0.3
-storage architecture below, which is unchanged. See [Query path](#query-path-milestone-21).
+Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
+storage architecture below, which is unchanged. 2.2.3 adds optimizer statistics owned by the
+engine and a cost-based planner in the JVM. See [Query path](#query-path-milestone-21) and
+[Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223).
 
 ## The one decision everything follows from
 
@@ -53,8 +55,9 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
 | `adb-tx` | Transactions, isolation levels, OCC validation, snapshot registry. Storage-agnostic. |
 | `adb-execution` | Slot-addressed, pull-based operators: scans, filter, project, limit, hash and nested-loop joins, aggregate, sort, TopK; plan validation; query `MemoryTracker`; runtime profiles. |
 | `adb-plan-wire` | Versioned JSON plan wire format (v2): bounded, version-checked, strict decoding plus validation. |
-| `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets. |
-| `adb-ffi` | C ABI v4 (`include/adb.h`). |
+| `adb-stats` | Optimizer statistics: document model, `ANALYZE` options and limits, collector (exact counts, HyperLogLog, reservoir sample, histograms, most common values). |
+| `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets, `ANALYZE`, statistics store, modification counters. |
+| `adb-ffi` | C ABI v5 (`include/adb.h`). |
 
 ## Write path
 
@@ -126,7 +129,7 @@ transaction is committed, rolled back or simply dropped.
 
 ## Lock order
 
-`commit lock → log writer → projections (RwLock) → transaction manager`. The durability lock is
+`commit lock → log writer → projections (RwLock) → modification counters → transaction manager`. The durability lock is
 taken without the commit lock (group commit) and only nests the log writer briefly.
 
 ## Query path (Milestone 2.1)
@@ -138,7 +141,7 @@ SQL ─► SqlParser ─► SelectBinder ─► LogicalPlanner ─► RuleOptimi
          ORDER BY)        GROUP BY rules)    tree)             lookups)          TopK; decisions + reasons)
                                                                                          │ plan wire v2
                                                                                          ▼
- JVM ◄── batch format v2 + profile JSON ─── C ABI v4 ◄── QueryCursor ◄── operators ◄── adb-plan-wire::decode_json
+ JVM ◄── batch format v2 + profile JSON ─── C ABI v5 ◄── QueryCursor ◄── operators ◄── adb-plan-wire::decode_json
 ```
 
 **Who decides what.** Scala owns meaning: name resolution, types, GROUP BY rules, join-condition
@@ -157,8 +160,9 @@ statistics it does not have yet:
 
 * *Decide and explain:* every strategy choice (join algorithm, build side, TopK vs. sort) goes
   through a replaceable `PlanningPolicy` and is recorded as a `PlanDecision` with its reason,
-  shown by `EXPLAIN`. The default policy is rule-based; the statistics-driven cost model (2.2) and
-  workload or intent advisors (5.x) replace the policy, not the planner.
+  shown by `EXPLAIN`. Since 2.2.3 the default is the statistics-driven `CostBasedPolicy` (the
+  rule-based policy remains as `SET optimizer = rule`); workload or intent advisors (5.x)
+  replace the policy, not the planner.
 * *Observe:* every operator reports rows, time, memory and operator-specific counters
   (`adb_query_profile_json`, shown by `EXPLAIN ANALYZE`), so the same plan can be compared with
   what it actually cost.
@@ -167,6 +171,34 @@ statistics it does not have yet:
 `MemoryTracker` before holding it, materialization and join fanout are capped, nested-loop work is
 capped, and INT64 aggregation is checked. A runaway query fails with `RESOURCE_LIMIT` or
 `ARITHMETIC_OVERFLOW`; the database is never affected.
+
+## Statistics and cost-based planning (Milestone 2.2.3)
+
+```text
+            ANALYZE                                 commit apply
+               │                                         │
+     adb-stats::analyze (snapshot scan)        modification counters ──► checkpoint journal
+               │                                         │                 (stats/modifications.meta)
+     stats/entity-<id>.stats ◄── atomic replace          │
+               │                                         │
+               └──── C ABI 5: adb_statistics_json, adb_modifications_since_analyze ────┐
+                                                                                        ▼
+ JVM: StatisticsProvider ─► CardinalityEstimator ─► CostModel ─► JoinReorderRule + CostBasedPolicy
+                                                                       │ estimates by pre-order node id
+                                                                       ▼
+          EXPLAIN (estimates, decisions, statistics, warnings)   EXPLAIN ANALYZE ◄── profile node_id
+                                                                       │ q-error
+                                                                       ▼
+                                                           planner-feedback.jsonl
+```
+
+Statistics are derived data, like the projections. They are collected and persisted by the engine,
+because only the commit pipeline can count the changes that make them stale. The counters travel
+with the projections through the checkpoint journal and log replay. The JVM decides how to use
+them: estimates, costs, join order and build sides. Every decision stays explained, and every
+estimate is compared with what the engine measured. That comparison closes the adaptive loop:
+2.1.3 could decide and observe, and 2.2.3 can now also predict and measure how good the
+prediction was. Details: [statistics.md](statistics.md), [optimizer.md](optimizer.md).
 
 ## Control plane
 

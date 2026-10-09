@@ -7,12 +7,13 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 /**
- * Runs the Adaptive DB feature tour (Milestone 2.1.3).
+ * Runs the Adaptive DB feature tour (Milestone 2.2.3).
  *
  * The demo executes on one current engine while presenting features in the order in which they
  * entered the project: WAL/recovery, persistent current storage, persistent history, native
- * batch execution, the Scala SQL/control plane, and finally relational execution (joins,
- * aggregation, sorting) with explained planning decisions and runtime profiles.
+ * batch execution, the Scala SQL/control plane, relational execution (joins, aggregation,
+ * sorting) with explained planning decisions and runtime profiles, and finally statistics and
+ * cost-based optimization.
  */
 object DemoMain:
   /** Extracts the commit timestamp from a mutation result message. */
@@ -31,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.1.3 - chronological feature tour")
+    banner("Adaptive DB 2.2.3 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -80,6 +81,7 @@ object DemoMain:
       println("Feature shown: end-to-end SQL is parsed and bound in Scala, planned/optimized, then executed by the Rust engine.")
 
       relationalPhase(db)
+      statisticsPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -112,6 +114,38 @@ object DemoMain:
 
     execute(db, "EXPLAIN ANALYZE SELECT c.city, SUM(o.amount) AS total FROM customer c JOIN orders o ON o.customer_id = c.id WHERE o.amount >= 50 GROUP BY c.city ORDER BY total DESC LIMIT 2;")
     println("Feature shown: EXPLAIN ANALYZE prints the optimized plan, the planner's decisions with reasons, and the native per-operator profile.")
+
+  /** Milestone 2.2.3: ANALYZE, foreign-key hints, estimates, join ordering, cost vs rule mode. */
+  private def statisticsPhase(db: AdaptiveDatabase): Unit =
+    phase("2.2.3", "statistics + cost-based optimizer: ANALYZE, estimates, join order, q-error")
+    execute(db, "CREATE TABLE region (id BIGINT PRIMARY KEY, name STRING NOT NULL);")
+    execute(db, "CREATE TABLE shop (id BIGINT PRIMARY KEY, region_id BIGINT NOT NULL REFERENCES region(id) NOT ENFORCED, name STRING NOT NULL);")
+    execute(db, "CREATE TABLE sale (id BIGINT PRIMARY KEY, shop_id BIGINT NOT NULL REFERENCES shop(id) NOT ENFORCED, amount BIGINT NOT NULL);")
+    println("Feature shown: REFERENCES ... NOT ENFORCED declares a foreign key the engine never checks; the optimizer uses it.")
+    for id <- 1 to 4 do db.execute(s"INSERT INTO region VALUES ($id, 'region-$id');")
+    for id <- 1 to 40 do db.execute(s"INSERT INTO shop VALUES ($id, ${1 + id % 4}, 'shop-$id');")
+    for id <- 1 to 400 do db.execute(s"INSERT INTO sale VALUES ($id, ${1 + (id * 7) % 40}, ${(id * 37) % 500 + 1});")
+    println("Loaded 4 regions, 40 shops and 400 sales (single-row INSERTs, not echoed).")
+
+    val query = "SELECT r.name, SUM(s.amount) AS total FROM sale s JOIN shop sh ON s.shop_id = sh.id " +
+      "JOIN region r ON sh.region_id = r.id WHERE r.name = 'region-2' GROUP BY r.name"
+    execute(db, s"EXPLAIN $query;")
+    println("Feature shown: without statistics every table is assumed to hold 1,000 rows; EXPLAIN warns and suggests ANALYZE.")
+
+    execute(db, "ANALYZE;")
+    execute(db, s"EXPLAIN ANALYZE $query;")
+    println("Feature shown: with statistics the joins are reordered (the selective region filter first), every operator")
+    println("carries an estimate, and EXPLAIN ANALYZE compares it with the native profile (q-error).")
+
+    execute(db, s"$query;")
+    execute(db, "SET optimizer = rule;")
+    execute(db, s"$query;")
+    execute(db, "SET optimizer = cost;")
+    println("Feature shown: SET optimizer = rule restores the 2.1.3 planner (SQL join order); both modes return the same rows.")
+
+    for id <- 401 to 600 do db.execute(s"INSERT INTO sale VALUES ($id, ${1 + id % 40}, 1);")
+    execute(db, "EXPLAIN SELECT COUNT(*) FROM sale;")
+    println("Feature shown: after 200 more sales (50% of the analyzed rows) the statistics of 'sale' are reported stale.")
 
   /** Opens one native database and matching persistent JVM catalog for a demo phase. */
   private def withDatabase(dataDir: Path, nativeLib: Path)(body: AdaptiveDatabase => Unit): Unit =

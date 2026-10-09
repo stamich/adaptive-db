@@ -5,7 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v3
+/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v5
  * function as a downcall handle, and translates native status codes into exceptions. */
 final class NativeLibrary implements AutoCloseable {
     /** Upper bound on the length of a native error message. */
@@ -13,7 +13,7 @@ final class NativeLibrary implements AutoCloseable {
     /** Whether {@link #close()} already released the arena. */
     private boolean closed;
     /** C ABI version this binding was written against; any other version is rejected. */
-    static final int EXPECTED_ABI = 4;
+    static final int EXPECTED_ABI = 5;
 
     /** Shared arena that keeps the library mapped until {@link #close()}. */
     final Arena arena = Arena.ofShared();
@@ -70,6 +70,14 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle checkpoint;
     /** {@code adb_vacuum}: removes tombstones below the snapshot horizon. */
     final MethodHandle vacuum;
+    /** {@code adb_analyze_entity_json}: collects and persists statistics of one entity (ABI 5). */
+    final MethodHandle analyzeEntity;
+    /** {@code adb_statistics_json}: the statistics document of one entity (ABI 5). */
+    final MethodHandle statistics;
+    /** {@code adb_modifications_since_analyze}: mutations since an entity's last ANALYZE (ABI 5). */
+    final MethodHandle modificationsSinceAnalyze;
+    /** {@code adb_statistics_generation}: generation of an entity's statistics document (ABI 5). */
+    final MethodHandle statisticsGeneration;
 
     /**
      * Loads the library, binds every downcall, and verifies the ABI version.
@@ -104,6 +112,10 @@ final class NativeLibrary implements AutoCloseable {
         consumerOffset = downcall("adb_consumer_offset", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         checkpoint = downcall("adb_checkpoint", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
         vacuum = downcall("adb_vacuum", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        analyzeEntity = downcall("adb_analyze_entity_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        statistics = downcall("adb_statistics_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        modificationsSinceAnalyze = downcall("adb_modifications_since_analyze", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        statisticsGeneration = downcall("adb_statistics_generation", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);

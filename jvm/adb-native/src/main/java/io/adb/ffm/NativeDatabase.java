@@ -6,8 +6,16 @@ import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/** Safe-ish Java ownership wrapper around one native Adaptive DB database handle. */
+/**
+ * Safe-ish Java ownership wrapper around one native Adaptive DB database handle.
+ *
+ * <p>Short calls are serialized on the object monitor. {@link #analyzeJson} scans a whole
+ * entity, so it runs outside the monitor under the read side of {@code lifecycle} (the native
+ * database is thread-safe); {@link #close} takes the write side, so the handle is never released
+ * while an {@code ANALYZE} still uses it.
+ */
 public final class NativeDatabase implements AutoCloseable {
     /** Upper bound on the UTF-8 length of a database directory path. */
     private static final int MAX_PATH_BYTES = 64 * 1024;
@@ -15,13 +23,19 @@ public final class NativeDatabase implements AutoCloseable {
     private static final int MAX_JSON_BYTES = 8 * 1024 * 1024;
     /** Upper bound on the size of a change-feed JSON response. */
     private static final long MAX_CHANGES_JSON_BYTES = 64L * 1024 * 1024;
+    /** Upper bound on the size of a statistics document (matches the native 4 MiB limit). */
+    private static final long MAX_STATISTICS_JSON_BYTES = 4L * 1024 * 1024;
+    /** Upper bound on the UTF-8 length of ANALYZE options. */
+    private static final int MAX_ANALYZE_OPTIONS_BYTES = 64 * 1024;
     /** Upper bound on the UTF-8 length of a CDC consumer name. */
     private static final int MAX_CONSUMER_NAME_BYTES = 256;
 
     /** Loaded native library and its downcall handles. */
     private final NativeLibrary library;
     /** Native database handle; {@code MemorySegment.NULL} once closed. */
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    /** Read side: long native calls outside the monitor; write side: {@link #close}. */
+    private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
 
     /** Opens the native library and one database directory. */
     public static NativeDatabase open(Path libraryPath, Path dataPath) {
@@ -182,13 +196,84 @@ public final class NativeDatabase implements AutoCloseable {
         }
     }
 
+    // ----- statistics (ABI 5) ----------------------------------------------------------------
+
+    /**
+     * Runs {@code ANALYZE} on one entity and returns its new statistics document as JSON
+     * (see {@code docs/statistics.md}). {@code optionsJson} may be {@code null} or empty for
+     * the default options.
+     */
+    public String analyzeJson(long entityId, String optionsJson) {
+        lifecycle.readLock().lock();
+        try {
+            return analyzeOpen(entityId, optionsJson);
+        } finally {
+            lifecycle.readLock().unlock();
+        }
+    }
+
+    /** Body of {@link #analyzeJson}; the caller holds the read side of {@code lifecycle}. */
+    private String analyzeOpen(long entityId, String optionsJson) {
+        ensureOpen();
+        byte[] options = optionsJson == null ? new byte[0] : optionsJson.getBytes(StandardCharsets.UTF_8);
+        if (options.length > MAX_ANALYZE_OPTIONS_BYTES) throw new IllegalArgumentException("ANALYZE options JSON longer than " + MAX_ANALYZE_OPTIONS_BYTES + " bytes");
+        try (var arena = Arena.ofConfined()) {
+            var optionsSegment = options.length == 0 ? MemorySegment.NULL : arena.allocateFrom(ValueLayout.JAVA_BYTE, options);
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.analyzeEntity, handle, entityId, optionsSegment, (long) options.length, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_STATISTICS_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** The statistics document of one entity as JSON, or empty if it was never analyzed. */
+    public synchronized Optional<String> statisticsJson(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            int code = library.invokeInt(library.statistics, handle, entityId, out);
+            if (AdbStatus.fromCode(code) == AdbStatus.NOT_FOUND) return Optional.empty();
+            library.check(code);
+            return Optional.of(new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_STATISTICS_JSON_BYTES), StandardCharsets.UTF_8));
+        }
+    }
+
+    /**
+     * Generation of an entity's statistics document (0 if there is none); it changes whenever
+     * {@code ANALYZE} publishes a new document, so decoded documents can be cached by it.
+     */
+    public synchronized long statisticsGeneration(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.statisticsGeneration, handle, entityId, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /** Row mutations committed to an entity since its last {@code ANALYZE} (since creation if never analyzed). */
+    public synchronized long modificationsSinceAnalyze(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.modificationsSinceAnalyze, handle, entityId, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
     /** Checkpoints and releases the native database exactly once, then closes the library arena. */
     @Override public synchronized void close() {
-        if (handle != null && handle.address() != 0) {
-            library.check(library.invokeInt(library.close, handle));
-            handle = MemorySegment.NULL;
+        lifecycle.writeLock().lock();
+        try {
+            if (handle != null && handle.address() != 0) {
+                library.check(library.invokeInt(library.close, handle));
+                handle = MemorySegment.NULL;
+            }
+            library.close();
+        } finally {
+            lifecycle.writeLock().unlock();
         }
-        library.close();
     }
 
     /** Rejects method calls after native ownership has been released. */

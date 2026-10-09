@@ -1,5 +1,10 @@
 /*
- * Adaptive DB native C ABI, version 4 (Milestone 2.1).
+ * Adaptive DB native C ABI, version 5 (Milestone 2.2.3).
+ *
+ * ABI 5 changes (vs. 4): optimizer statistics — adb_analyze_entity_json, adb_statistics_json,
+ * adb_statistics_generation, adb_modifications_since_analyze (see docs/statistics.md); every
+ * operator of a query profile carries a pre-order "node_id". Plan wire v2 and batch format v2
+ * are unchanged.
  *
  * ABI 4 changes (vs. 3): plans are plan wire v2 documents ({"wire_version":2,"plan":...},
  * see docs/plan-wire-format.md); batches are batch format v2 (optional row ids, column ids are
@@ -41,7 +46,7 @@ typedef enum AdbStatus {
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 4
+#define ADB_ABI_VERSION 5
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -147,6 +152,43 @@ AdbStatus adb_consumer_offset(
     const uint8_t* name_ptr,
     size_t name_len,
     uint64_t* out_cursor);
+
+/* ---- optimizer statistics (ABI 5) ---- */
+
+/*
+ * Runs ANALYZE on one entity: scans the latest snapshot without blocking commits, persists the
+ * statistics document and returns it as a UTF-8 JSON buffer (an AdbBatchHandle; read with
+ * adb_batch_data/len, free with adb_batch_release). options_len == 0 uses the default options
+ * (options_ptr may then be NULL); otherwise options is a JSON object with any of
+ *   fields (array of field ids), sample_rows, histogram_buckets, most_common_values, max_rows,
+ *   max_working_set_bytes, deadline_ms   (at most 64 KiB; unknown keys are rejected).
+ * Errors: ADB_INVALID_ARGUMENT for bad options, ADB_RESOURCE_LIMIT when a row, memory or time
+ * limit is exceeded (nothing is persisted then).
+ */
+AdbStatus adb_analyze_entity_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    const uint8_t* options_ptr,
+    size_t options_len,
+    AdbBatchHandle** out_json);
+
+/* The persisted statistics document of one entity; ADB_NOT_FOUND if it was never analyzed. */
+AdbStatus adb_statistics_json(AdbDatabaseHandle* db, uint64_t entity_id, AdbBatchHandle** out_json);
+
+/*
+ * Generation of an entity's statistics document (0 if there is none); it changes whenever
+ * ANALYZE publishes a new document, so clients can cache decoded documents by it.
+ */
+AdbStatus adb_statistics_generation(AdbDatabaseHandle* db, uint64_t entity_id, uint64_t* out_generation);
+
+/*
+ * Row mutations committed to an entity since its last ANALYZE (since creation if never; for a
+ * database created before 2.2.3, since its first open by 2.2.3).
+ */
+AdbStatus adb_modifications_since_analyze(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t* out_count);
 
 #ifdef __cplusplus
 }

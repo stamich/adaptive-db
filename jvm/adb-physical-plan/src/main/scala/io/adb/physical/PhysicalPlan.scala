@@ -21,6 +21,11 @@ sealed trait PhysicalPlan derives CanEqual:
 
 /** Physical plan operators. */
 object PhysicalPlan:
+  /** Every node of `plan` in pre-order (node, then the first input's subtree, then the
+    * second's): position `i` is the node the engine's runtime profile reports as `node_id = i`.
+    */
+  def preorder(plan: PhysicalPlan): Vector[PhysicalPlan] = plan +: plan.children.flatMap(preorder)
+
   /** Reads one row by its 128-bit storage key `(entity << 64) | primary key`. */
   final case class PointLookup(rowId: BigInt, columns: Vector[ScanColumn]) extends PhysicalPlan
   /** Scans every row of every entity (diagnostics only; planners emit `EntityScan`). */

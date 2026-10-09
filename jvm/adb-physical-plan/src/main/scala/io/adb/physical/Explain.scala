@@ -4,20 +4,37 @@ import io.adb.model.*
 import io.adb.physical.PhysicalPlan.*
 
 /** Human-readable EXPLAIN rendering of physical plans: one operator per line, indented by depth,
-  * with slots shown as `name#slot`.
+  * with slots shown as `name#slot` and, when estimates are given, each node's pre-order id and
+  * estimate: `[2] HashJoin ... (est. rows=950 cost=4321.0 conf=0.95)`.
   */
 object Explain:
-  /** Renders `plan`, naming slots with `names` (unknown slots render as `#n`). */
-  def physical(plan: PhysicalPlan, names: Map[SlotId, String]): String =
-    render(plan, names, 0)
+  /** Renders `plan`, naming slots with `names` (unknown slots render as `#n`) and annotating
+    * nodes with `estimates` by pre-order id.
+    */
+  def physical(plan: PhysicalPlan, names: Map[SlotId, String], estimates: Map[Int, NodeEstimate] = Map.empty): String =
+    val ids = new java.util.IdentityHashMap[PhysicalPlan, Integer]()
+    PhysicalPlan.preorder(plan).zipWithIndex.foreach((node, id) => ids.put(node, id))
+    render(plan, names, 0, node => if estimates.isEmpty then ("", "") else annotation(ids.get(node), estimates))
 
-  /** Renders one node and its inputs. */
-  private def render(plan: PhysicalPlan, names: Map[SlotId, String], depth: Int): String =
+  /** `[id] ` prefix and ` (est. rows=… cost=… conf=…)` suffix of one node. */
+  private def annotation(id: Int, estimates: Map[Int, NodeEstimate]): (String, String) =
+    val suffix = estimates.get(id).fold("") { e =>
+      val basis = if e.basis.isEmpty then "" else e.basis.mkString(" basis=", ",", "")
+      f" (est. rows=${e.rows}%.0f cost=${e.cost}%.1f conf=${e.confidence}%.2f$basis)"
+    }
+    (s"[$id] ", suffix)
+
+  /** Renders one node and its inputs; `note` gives the prefix and suffix of a node. */
+  private def render(plan: PhysicalPlan, names: Map[SlotId, String], depth: Int, note: PhysicalPlan => (String, String)): String =
+    /** `name#slot`. */
     def slot(s: SlotId): String = s"${names.getOrElse(s, "")}#${s.value}"
+    /** `[f1->name#slot, ...]`. */
     def columns(cs: Vector[ScanColumn]): String =
       cs.map(c => s"f${c.fieldId.value}->${slot(c.slot)}").mkString("[", ", ", "]")
+    /** `[name#slot DESC, ...]`. */
     def keys(ks: Vector[SortKey]): String =
       ks.map(k => slot(k.slot) + (if k.descending then " DESC" else "")).mkString("[", ", ", "]")
+    /** Infix rendering of an expression. */
     def expr(e: PhysicalExpr): String = e match
       case PhysicalExpr.Slot(s) => slot(s)
       case PhysicalExpr.Literal(value) => PlanJsonEncoder.encodeRustValue(value)
@@ -40,4 +57,6 @@ object Explain:
         s"Aggregate group=${groupBy.map(slot).mkString("[", ", ", "]")} aggregates=${aggs.mkString("[", ", ", "]")}"
       case Sort(_, ks) => s"Sort ${keys(ks)}"
       case TopK(_, ks, limit) => s"TopK ${keys(ks)} limit=$limit"
-    (("  " * depth + line) +: plan.children.map(render(_, names, depth + 1))).mkString("\n")
+    val (prefix, suffix) = note(plan)
+    val annotated = prefix + line + suffix
+    (("  " * depth + annotated) +: plan.children.map(render(_, names, depth + 1, note))).mkString("\n")

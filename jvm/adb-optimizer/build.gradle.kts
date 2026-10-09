@@ -12,4 +12,7 @@ tasks.test {
     useJUnitPlatform()
 }
 
-dependencies { api(project(":adb-logical-plan")) }
+dependencies {
+    api(project(":adb-logical-plan"))
+    api(project(":adb-statistics"))
+}

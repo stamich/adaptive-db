@@ -4,6 +4,11 @@
 //! explains why) before execution; the profile reports afterwards how much each operator
 //! read, produced, held in memory and compared. EXPLAIN ANALYZE shows it today; the
 //! statistics and advisor milestones (2.2, 5.x) are meant to consume the same structure.
+//!
+//! Every operator carries a `node_id`: its position in a pre-order walk of the physical plan
+//! (root = 0, then the first input's subtree, then the second's). The executor builds exactly
+//! one operator per plan node, so the JVM planner numbers its physical plan the same way and
+//! joins its estimates to these actuals by id, without the plan wire carrying ids.
 use std::{collections::BTreeMap, time::Duration};
 
 use serde::Serialize;
@@ -11,6 +16,8 @@ use serde::Serialize;
 /// Measurements of one operator and, recursively, its inputs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OperatorProfile {
+    /// Pre-order position of the operator's plan node (root = 0).
+    pub node_id: u32,
     /// Operator name (`hash_join`, `entity_scan`, ...), matching the plan wire `op` tags.
     pub operator: &'static str,
     /// Rows the operator returned.
@@ -35,6 +42,7 @@ impl OperatorProfile {
         children: Vec<OperatorProfile>,
     ) -> Self {
         Self {
+            node_id: 0,
             operator,
             rows_out: 0,
             batches_out: 0,
@@ -42,6 +50,16 @@ impl OperatorProfile {
             counters: counters.into_iter().collect(),
             children,
         }
+    }
+
+    /// Numbers this tree in pre-order starting at `first`; returns the next free id.
+    pub fn assign_node_ids(&mut self, first: u32) -> u32 {
+        self.node_id = first;
+        let mut next = first.saturating_add(1);
+        for child in &mut self.children {
+            next = child.assign_node_ids(next);
+        }
+        next
     }
 
     /// Rows produced by the leaves (rows read from storage).

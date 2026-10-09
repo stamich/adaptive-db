@@ -1,9 +1,66 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.1.3. Hardened patch releases preserve the functional scope of
+Milestone 2.2.3. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
+
+## 2.2.3 — Statistics and cost-based optimization
+
+Implements the 2.2 plan (with the identical-workload benchmarks of 2.2.2 and the limits of
+2.2.1) on top of 2.1.3, as adapted in `docs/milestone-2.2.3.md`. Statistics are stored natively
+by the engine; foreign-key hints are included; order-preserving key encoding is deferred to 2.3.
+
+### Added (Rust)
+- New crate `adb-stats`: `TableStatistics` / `ColumnStatistics` (JSON document, format 1, 4 MiB
+  bound), `AnalyzeOptions` with limits, and the collector: exact row/NULL/min/max/width counts,
+  distinct values exact up to 10,000 then HyperLogLog (p = 12), a seeded reservoir sample
+  (30,000 rows) for equi-depth histograms (≤ 64 buckets) and most common values (≤ 32).
+- Engine: `Database::analyze`, `statistics`, `modifications_since_analyze`; documents in
+  `stats/entity-<id>.stats` (checksummed, atomic replace, unreadable = absent); per-entity
+  modification counters updated by the commit apply step, published with the projections
+  through the checkpoint journal (`stats/modifications.meta`), replayed after a crash and
+  recounted by `rebuild_projections`; `DbError::Statistics`.
+- Execution: `OperatorProfile.node_id` (plan pre-order), `PhysicalPlan::node_count`.
+- C ABI 5: `adb_analyze_entity_json`, `adb_statistics_json` (`NOT_FOUND` if never analyzed),
+  `adb_statistics_generation`, `adb_modifications_since_analyze`; invalid options → `INVALID_ARGUMENT`, ANALYZE limits →
+  `RESOURCE_LIMIT`.
+- `adb-benchmark-rust --bin workloads` (`rust_native` path of the 2.2.3 workloads).
+
+### Added (JVM)
+- Module `adb-statistics`: statistics model, strict `StatisticsCodec`, `EntityStatistics`
+  (freshness: stale above 20% changed rows; confidence), `StatisticsProvider`.
+- SQL: `ANALYZE [table]`, `SET optimizer = cost | rule`, `REFERENCES t(c) NOT ENFORCED`;
+  catalog `Field.references` (`ForeignKeyRef`), validated and persisted by `FileCatalog`.
+- Optimizer: `CardinalityEstimator` (PK, MCV, NDV, histogram, min/max, AND/OR/NOT, foreign-key
+  and NDV joins, LEFT JOIN, aggregates; confidence and source; EXPLAIN basis), `CostModel`
+  (`Cost`, `CostWeights`, saturating arithmetic, engine-limit checks), `OptimizerConfig` /
+  `EngineLimits`, `JoinGraph` and `JoinReorderRule` (DP ≤ 10, greedy ≤ 32, SQL order beyond).
+- Physical planning: `CostBasedPolicy` (strategy and build side by cost and feasibility,
+  INNER input swap, warnings), `JoinChoice`, `NodeEstimate` per pre-order node id,
+  statistics warnings in `PlannedQuery`.
+- Gateway: cost mode by default and rule mode; EXPLAIN with estimates, join order, statistics
+  section and warnings; EXPLAIN ANALYZE with estimate and q-error per operator;
+  `EngineStatisticsProvider` (documents cached by generation, undecodable = missing); `PlannerFeedbackLog`
+  (`planner-feedback.jsonl`, bounded, rotating, SQL fingerprinted).
+- Java binding: `NativeDatabase.analyzeJson` (runs outside the object monitor; `close()` waits
+  for it), `statisticsJson`, `statisticsGeneration`, `modificationsSinceAnalyze`.
+- JVM benchmark `--workloads`: `ffi_prepared_plan` and `scala_cbo_ffi_rust` paths, join-order
+  workload in cost and rule mode, cost calibration. Demo tour phase 2.2.3.
+- `scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, `build-milestone-2.2.3.sh`.
+
+### Changed
+- `PlanningPolicy.chooseJoin` returns a `JoinChoice`; `chooseTopK` also receives its input;
+  `JoinRequest` carries the logical join.
+- `JsonReader` moved from the gateway to `adb-model`; it bounds nesting, reads integers beyond
+  `Long` as `BigInt` and rejects invalid escapes.
+- Engine, crates and JVM build report version 2.2.3; C ABI 5 (`EXPECTED_ABI = 5` in Java).
+
+### Tests
+- Rust: 158 → 186 (collector accuracy and limits, persistence, counters across crash /
+  checkpoint / rebuild, ABI 5, profile node ids). JVM: 40 → 90, including DP equal to
+  exhaustive enumeration on random graphs and result equality of reordered plans (INNER, LEFT,
+  CROSS) under a reference interpreter.
 
 ## 2.1.3 — Relational execution
 

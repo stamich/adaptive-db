@@ -3,18 +3,8 @@ package io.adb.gateway
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Tests of the JSON reader and the EXPLAIN ANALYZE profile rendering. */
+/** Tests of the EXPLAIN ANALYZE profile rendering. */
 final class ProfileRendererTest:
-  /** The reader handles every JSON construct the engine emits. */
-  @Test def readsJson(): Unit =
-    val value = JsonReader.parse("""{"a":[1,-2.5,true,false,null],"b":{"c":"x\"yó"},"d":[]}""")
-    assertEquals(
-      Map("a" -> Vector(1L, -2.5, true, false, null), "b" -> Map("c" -> "x\"yó"), "d" -> Vector.empty),
-      value
-    )
-    assertThrows(classOf[IllegalArgumentException], () => JsonReader.parse("""{"a":1"""))
-    assertThrows(classOf[IllegalArgumentException], () => JsonReader.parse("[1] x"))
-
   /** The profile renders as an indented operator tree with sorted counters. */
   @Test def rendersOperatorTree(): Unit =
     val json =
@@ -27,3 +17,25 @@ final class ProfileRendererTest:
         "  entity_scan rows=4 batches=1 time=0.01ms pages=2",
       ProfileRenderer.render(json)
     )
+
+  /** With estimates, operators show `[id]`, `est` and the q-error, plus the worst q-error. */
+  @Test def comparesEstimatesWithActuals(): Unit =
+    val json =
+      """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"node_id":0,"operator":"hash_join","rows_out":40,
+        |"batches_out":1,"elapsed_us":0,"children":[{"node_id":1,"operator":"entity_scan","rows_out":4,"batches_out":1,"elapsed_us":0},
+        |{"node_id":2,"operator":"entity_scan","rows_out":0,"batches_out":0,"elapsed_us":0}]}}""".stripMargin
+    val estimates = Map(
+      0 -> io.adb.physical.NodeEstimate(10, 5, 0.8, "statistics"),
+      1 -> io.adb.physical.NodeEstimate(4, 1, 1.0, "statistics"),
+      2 -> io.adb.physical.NodeEstimate(0.4, 1, 1.0, "statistics")
+    )
+    assertEquals(
+      "peak memory 0 B of 1.0 KiB\n" +
+        "[0] hash_join rows=40 est=10 q=4.0 batches=1 time=0.00ms\n" +
+        "  [1] entity_scan rows=4 est=4 q=1.0 batches=1 time=0.00ms\n" +
+        "  [2] entity_scan rows=0 est=0 q=1.0 batches=0 time=0.00ms\n" +
+        "max q-error 4.0 at [0] hash_join",
+      ProfileRenderer.render(json, estimates)
+    )
+    assertEquals(Vector(4.0, 1.0, 1.0), ProfileRenderer.compare(json, estimates).map(_.qError))
+    assertEquals(2.5, ProfileRenderer.qError(10, 25))

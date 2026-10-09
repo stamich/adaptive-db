@@ -133,3 +133,10 @@ Operators add their own counters:
 returns it as JSON (`adb_query_profile_json`) and the JVM renders it for `EXPLAIN ANALYZE`. The
 profile is the *observation* half of Adaptive DB's adaptive loop; the planner's explained decisions
 (see [architecture.md](architecture.md#query-path-milestone-21)) are the *decision* half.
+
+Since 2.2.3 every operator also carries a **`node_id`**: the position of its plan node in a
+pre-order walk of the physical plan (root `0`, then the whole first input subtree, then the
+second). The executor builds exactly one operator per plan node, so ids are a pure function of
+the plan shape (`PhysicalPlan::node_count()` gives the range). The JVM planner numbers its
+physical plan the same way and joins its cardinality estimates to the measured `rows_out` by id
+in `EXPLAIN ANALYZE`; the plan wire format therefore needs no id field and stays at v2.

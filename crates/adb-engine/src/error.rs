@@ -2,6 +2,7 @@
 use adb_core::Lsn;
 use adb_execution::ExecutionError;
 use adb_journal::JournalError;
+use adb_stats::StatsError;
 use adb_storage::StorageError;
 use adb_tx::Conflict;
 use adb_wal::WalError;
@@ -46,6 +47,9 @@ pub enum DbError {
         /// Oldest retained position.
         earliest: Lsn,
     },
+    /// `ANALYZE` failed or a statistics document is invalid.
+    #[error("statistics error: {0}")]
+    Statistics(#[from] StatsError),
     /// Caller-supplied argument is invalid.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),

@@ -114,6 +114,40 @@ fn profile_reports_every_operator() {
     assert_eq!(cursor.metrics().source_rows, 24);
 }
 
+/// Operators are numbered in plan pre-order: TopK 0, Aggregate 1, HashJoin 2, Filter 3,
+/// probe scan 4, build scan 5.
+#[test]
+fn profile_numbers_nodes_in_plan_preorder() {
+    let plan = plan();
+    let nodes = plan.node_count();
+    let mut cursor =
+        Executor::execute(Arc::new(source()), plan, ExecutionContext::new(CommitTs(1))).unwrap();
+    while cursor.next_batch().unwrap().is_some() {}
+    let profile = cursor.profile();
+
+    /// Collects `(node_id, operator)` in pre-order.
+    fn walk(profile: &OperatorProfile, out: &mut Vec<(u32, &'static str)>) {
+        out.push((profile.node_id, profile.operator));
+        profile.children.iter().for_each(|child| walk(child, out));
+    }
+    let mut ids = Vec::new();
+    walk(&profile.root, &mut ids);
+    assert_eq!(
+        ids,
+        vec![
+            (0, "top_k"),
+            (1, "aggregate"),
+            (2, "hash_join"),
+            (3, "filter"),
+            (4, "entity_scan"),
+            (5, "entity_scan"),
+        ]
+    );
+    assert_eq!(nodes, ids.len());
+    let json = serde_json::to_value(&profile).unwrap();
+    assert_eq!(json["root"]["children"][0]["children"][0]["node_id"], 2);
+}
+
 /// The profile serializes to the JSON shape returned through the C ABI.
 #[test]
 fn profile_serializes_to_json() {

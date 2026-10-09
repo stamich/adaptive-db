@@ -5,7 +5,9 @@ import io.adb.sql.SqlBinaryOp.*
 
 /** Hand-written recursive-descent parser for the Adaptive DB SQL subset.
   *
-  * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE and EXPLAIN [ANALYZE]. Since 2.1 a
+  * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE], and since 2.2.3
+  * ANALYZE [table] and SET name = value. A column may declare a foreign-key hint
+  * `REFERENCES table(column) NOT ENFORCED` (the engine never checks it). Since 2.1 a
   * SELECT may join tables (INNER / LEFT / CROSS), alias them, qualify columns, aggregate with
   * COUNT / SUM / MIN / MAX / AVG, GROUP BY and ORDER BY:
   *
@@ -76,11 +78,31 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       else if acceptWord("SELECT") then parseSelect()
       else if acceptWord("UPDATE") then parseUpdate()
       else if acceptWord("DELETE") then parseDelete()
+      else if acceptWord("ANALYZE") then parseAnalyze()
+      else if acceptWord("SET") then parseSet()
       else throw error(s"expected statement, got $current")
 
     explainModes.result().reverse.foldLeft(base) { case (inner, analyze) => Explain(inner, analyze) }
 
-  /** Parses the rest of `CREATE TABLE name (column type [NOT NULL] [PRIMARY KEY], ...)`. */
+  /** Parses the rest of `ANALYZE [table]`. */
+  private def parseAnalyze(): Statement = current match
+    case Token.Word(_) => Analyze(Some(expectIdentifier()))
+    case _ => Analyze(None)
+
+  /** Parses the rest of `SET name = value` or `SET name TO value`; the value is a word or number. */
+  private def parseSet(): Statement =
+    val name = expectIdentifier()
+    if !acceptSymbol("=") then expectWord("TO")
+    val value = current match
+      case Token.Word(word) => advance(); word
+      case Token.Number(number) => advance(); number
+      case Token.StringToken(text) => advance(); text
+      case other => throw error(s"expected a value for $name, got $other")
+    SetOption(name, value)
+
+  /** Parses the rest of `CREATE TABLE name (column type [NOT NULL] [PRIMARY KEY]
+    * [REFERENCES table(column) NOT ENFORCED], ...)`.
+    */
   private def parseCreate(): Statement =
     expectWord("TABLE")
     val name = expectIdentifier()
@@ -92,14 +114,30 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       val dataType = expectIdentifier()
       var nullable = true
       var primaryKey = false
+      var references = Option.empty[ColumnReference]
       var modifiers = true
       while modifiers do
         if acceptWord("NOT") then { expectWord("NULL"); nullable = false }
         else if acceptWord("PRIMARY") then { expectWord("KEY"); primaryKey = true; nullable = false }
+        else if acceptWord("REFERENCES") then
+          if references.isDefined then throw error(s"$columnName has more than one REFERENCES clause")
+          references = Some(parseReference())
         else modifiers = false
-      columns += ColumnDef(columnName, dataType, nullable, primaryKey)
+      columns += ColumnDef(columnName, dataType, nullable, primaryKey, references)
       if acceptSymbol(",") then () else { expectSymbol(")"); done = true }
     CreateTable(name, columns.result())
+
+  /** Parses `table(column) NOT ENFORCED` after `REFERENCES`. Foreign keys are optimizer hints
+    * only, so the clause must say so explicitly.
+    */
+  private def parseReference(): ColumnReference =
+    val table = expectIdentifier()
+    expectSymbol("(")
+    val column = expectIdentifier()
+    expectSymbol(")")
+    if !(acceptWord("NOT") && acceptWord("ENFORCED")) then
+      throw error("foreign keys are optimizer hints that the engine does not check; write REFERENCES table(column) NOT ENFORCED")
+    ColumnReference(table, column)
 
   /** Parses the rest of `INSERT INTO table [(columns)] VALUES (values)`. */
   private def parseInsert(): Statement =

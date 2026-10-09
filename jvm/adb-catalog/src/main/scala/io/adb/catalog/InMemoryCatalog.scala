@@ -22,11 +22,15 @@ final class InMemoryCatalog extends Catalog:
   /** All entities sorted by id. */
   override def entities: Vector[Entity] = byId.values.toVector.sortBy(_.id.value)
 
-  /** Validates the definition (name lengths, unique columns, BIGINT non-null primary key), assigns field ids by position, and registers the entity. */
+  /** Validates the definition (name lengths, unique columns, BIGINT non-null primary key,
+    * foreign-key hints that name the primary key of an existing entity with the same type),
+    * assigns field ids by position, and registers the entity.
+    */
   override def createEntity(
       name: String,
       fields: Vector[(String, DataType, Boolean)],
-      primaryKey: String
+      primaryKey: String,
+      references: Map[String, ForeignKeyRef] = Map.empty
   ): Entity = synchronized {
     require(name.nonEmpty && name.length <= FileCatalog.MaxNameChars, s"entity name length must be 1..${FileCatalog.MaxNameChars}")
     require(!byName.contains(name.toLowerCase), s"entity already exists: $name")
@@ -37,8 +41,15 @@ final class InMemoryCatalog extends Catalog:
     val duplicates = fields.groupBy(_._1.toLowerCase).collect { case (n, xs) if xs.size > 1 => n }
     require(duplicates.isEmpty, s"duplicate fields: ${duplicates.mkString(",")}")
 
+    val referencesByName = references.map((column, target) => column.toLowerCase -> target)
+    require(referencesByName.size == references.size, "duplicate foreign-key columns")
+    referencesByName.keys.foreach { column =>
+      require(fields.exists(_._1.equalsIgnoreCase(column)), s"foreign key on unknown column $column")
+    }
     val materialized = fields.zipWithIndex.map { case ((fieldName, tpe, nullable), index) =>
-      Field(FieldId(index + 1), fieldName, tpe, nullable)
+      val reference = referencesByName.get(fieldName.toLowerCase)
+      reference.foreach(target => InMemoryCatalog.validateReference(byId, fieldName, tpe, target))
+      Field(FieldId(index + 1), fieldName, tpe, nullable, reference)
     }
     val pk = materialized.find(_.name.equalsIgnoreCase(primaryKey))
       .getOrElse(throw new IllegalArgumentException(s"unknown primary key: $primaryKey"))
@@ -73,3 +84,21 @@ final class InMemoryCatalog extends Catalog:
     byId = restored.map(e => e.id.value -> e).toMap
     byName = restored.map(e => e.name.toLowerCase -> e).toMap
   }
+
+/** Validation shared by [[InMemoryCatalog]] and [[FileCatalog]]. */
+private[catalog] object InMemoryCatalog:
+  /** Checks that a foreign-key hint on `column` names the primary key of an entity in
+    * `entities` and has the same type.
+    *
+    * @throws IllegalArgumentException otherwise
+    */
+  def validateReference(entities: Map[Long, Entity], column: String, dataType: DataType, target: ForeignKeyRef): Unit =
+    val parent = entities.getOrElse(
+      target.entity.value,
+      throw new IllegalArgumentException(s"$column references unknown entity ${target.entity.value}")
+    )
+    require(target.field == parent.primaryKey, s"$column must reference the primary key of ${parent.name}")
+    require(
+      parent.primaryKeyField.dataType == dataType,
+      s"$column is ${dataType.sqlName} but ${parent.name}.${parent.primaryKeyField.name} is ${parent.primaryKeyField.dataType.sqlName}"
+    )

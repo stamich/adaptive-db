@@ -1,10 +1,11 @@
 //! ABI and engine version introspection.
 
 /// Native ABI version. 3 = Milestone 2.0.3 (CDC, checkpoint, vacuum, new status codes);
-/// 4 = Milestone 2.1 (plan wire v2, batch format v2, query profiles, resource statuses).
-pub const ABI_VERSION: u32 = 4;
+/// 4 = Milestone 2.1 (plan wire v2, batch format v2, query profiles, resource statuses);
+/// 5 = Milestone 2.2.3 (ANALYZE, statistics documents, modification counters, profile node ids).
+pub const ABI_VERSION: u32 = 5;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"2.1.3";
+static ENGINE_VERSION: &[u8] = b"2.2.3";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

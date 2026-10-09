@@ -1,17 +1,30 @@
 package io.adb.model
 
+/** A declared, **not enforced** foreign key: the field holds primary keys of `entity`.
+  *
+  * The engine never checks it. It is an optimizer hint: a join `child.fk = parent.pk` matches
+  * at most one parent row per child row, which pins the join's cardinality far better than
+  * distinct-value counts can.
+  *
+  * @param entity referenced entity
+  * @param field  referenced field (always that entity's primary key)
+  */
+final case class ForeignKeyRef(entity: EntityId, field: FieldId) derives CanEqual
+
 /** One column of an entity.
   *
-  * @param id       stable engine field identifier (1-based position at creation)
-  * @param name     column name as declared
-  * @param dataType logical column type
-  * @param nullable whether the column accepts NULL
+  * @param id         stable engine field identifier (1-based position at creation)
+  * @param name       column name as declared
+  * @param dataType   logical column type
+  * @param nullable   whether the column accepts NULL
+  * @param references declared foreign-key hint (`REFERENCES t(c) NOT ENFORCED`), if any
   */
 final case class Field(
     id: FieldId,
     name: String,
     dataType: DataType,
-    nullable: Boolean
+    nullable: Boolean,
+    references: Option[ForeignKeyRef] = None
 ) derives CanEqual
 
 /** Schema of one entity (table).

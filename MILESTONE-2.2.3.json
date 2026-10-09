@@ -1,0 +1,48 @@
+{
+  "milestone": "2.2.3",
+  "base": "2.1.3",
+  "engineVersion": "2.2.3",
+  "nativeAbi": 5,
+  "scope": "statistics-and-cost-based-optimization",
+  "sourceOfTruth": "canonical-log",
+  "derivedData": ["projections", "optimizer-statistics", "modification-counters"],
+  "newEngineFeatures": [
+    "analyze-snapshot-scan",
+    "exact-row-null-min-max-counts",
+    "hyperloglog-distinct-values",
+    "seeded-reservoir-sample",
+    "equi-depth-histograms",
+    "most-common-values",
+    "persisted-statistics-documents",
+    "checkpointed-modification-counters",
+    "profile-node-ids"
+  ],
+  "newControlPlaneFeatures": [
+    "analyze-statement",
+    "not-enforced-foreign-key-hints",
+    "set-optimizer-cost-rule",
+    "statistics-provider-with-freshness",
+    "cardinality-estimation",
+    "cost-model-with-engine-limits",
+    "join-ordering-dp-greedy",
+    "cost-based-build-side",
+    "explain-estimates-and-warnings",
+    "explain-analyze-q-error",
+    "planner-feedback-log"
+  ],
+  "deferred": {
+    "orderPreservingKeyEncoding": "2.3 (with secondary indexes, one storage migration)",
+    "sortElision": "2.3",
+    "automaticAnalyze": "later (counters are in place)"
+  },
+  "formats": {
+    "page": "unchanged",
+    "btreeNode": "unchanged",
+    "wal": "unchanged",
+    "checkpoint": "3 (unchanged; the journal also publishes stats/modifications.meta)",
+    "statistics": "1 (JSON document in a checksummed envelope)",
+    "planWire": "2 (unchanged)",
+    "batch": "2 (unchanged)",
+    "profile": "operators gain node_id"
+  }
+}

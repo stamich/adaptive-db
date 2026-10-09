@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.1.3)
+# Engine invariants (Milestone 2.2.3)
 
 Each invariant names the test that guards it.
 
@@ -59,26 +59,49 @@ Each invariant names the test that guards it.
 
 ## Query execution (2.1)
 
-17. The native engine executes only plans that passed validation: bounded depth, lists, slots and
+19. The native engine executes only plans that passed validation: bounded depth, lists, slots and
     LIMIT/TopK; no slot produced twice; every slot read is produced by the operator's input.
     *(plan_validation::\*, joins::invalid_join_plans_are_rejected, wire::invalid_plans_are_rejected_both_ways)*
-18. A plan from a producer with another wire version or dialect is refused, never half-understood.
+20. A plan from a producer with another wire version or dialect is refused, never half-understood.
     *(wire::version_mismatch_is_reported_as_such, wire::unknown_fields_are_rejected, jvm_contract, PlanJsonEncoderTest.matchesTheNativeContractFixture)*
-19. Two instances of one entity in a query never share a slot.
+21. Two instances of one entity in a query never share a slot.
     *(joins::self_join_keeps_relation_instances_apart, SelectBinderTest.selfJoinGetsDistinctSlots)*
-20. NULL join keys never match; a LEFT JOIN emits every unmatched left row exactly once with NULL
+22. NULL join keys never match; a LEFT JOIN emits every unmatched left row exactly once with NULL
     right slots, and the join condition (not a later WHERE) decides what matched.
     *(joins::inner_hash_join_matches_equal_keys, joins::left_hash_join_null_fills_unmatched_rows, joins::residual_condition_decides_left_join_matches, PredicatePushdownRuleTest.leftJoinPreservesNullFilling)*
-21. Hash and nested-loop joins return the same rows for the same equality condition.
+23. Hash and nested-loop joins return the same rows for the same equality condition.
     *(joins::nested_loop_join_matches_hash_join_and_handles_inequalities)*
-22. `TopK(k)` returns exactly what `Limit(Sort, k)` returns, ties and NULL placement included.
+24. `TopK(k)` returns exactly what `Limit(Sort, k)` returns, ties and NULL placement included.
     *(aggregate_sort::top_k_equals_limit_over_sort)*
-23. An INT64 aggregate never returns a wrapped value: it is exact or fails with
+25. An INT64 aggregate never returns a wrapped value: it is exact or fails with
     `ARITHMETIC_OVERFLOW`. *(aggregate_sort::sum_is_checked, relational::sum_overflow_maps_to_its_own_status)*
-24. Unsortable values (mixed types, NaN) fail cleanly; sorting never panics.
+26. Unsortable values (mixed types, NaN) fail cleanly; sorting never panics.
     *(aggregate_sort::unsortable_values_are_errors)*
-25. Blocking operators never hold more than the query memory budget or the materialized-row cap,
+27. Blocking operators never hold more than the query memory budget or the materialized-row cap,
     and return all reserved memory when the query ends or fails.
     *(memory::tests, joins::build_side_respects_memory_and_row_limits, aggregate_sort::group_count_is_capped)*
-26. Join work is bounded: per-left-row fanout, total nested-loop comparisons and the size of an
+28. Join work is bounded: per-left-row fanout, total nested-loop comparisons and the size of an
     output batch. *(joins::join_fanout_is_capped, joins::nested_loop_comparisons_are_capped, joins::join_output_is_batched)*
+
+## Statistics and optimization (2.2.3)
+
+29. Statistics are derived data: a missing, damaged or half-published document only makes
+    the entity count as never analyzed; queries still run.
+    *(statistics::damaged_document_counts_as_missing, statistics::interrupted_publication_keeps_the_previous_document,
+    statistics::concurrent_analyze_publishes_a_consistent_document, CostBasedGatewayTest.engineStatisticsAreCachedByGeneration)*
+30. The modification counters equal the committed mutations of the log after a crash, a clean
+    shutdown and a projection rebuild. *(statistics::modification_counters_track_commits, statistics::rebuild_recounts_modifications)*
+31. `ANALYZE` never exceeds its row, working-set, time or column limits and persists nothing
+    when it fails. *(collector::limits_are_enforced, collector::sample_memory_is_charged_realistically,
+    statistics::analyze_failures_are_reported)*
+32. The JVM never plans on a misread statistics document.
+    *(StatisticsCodecTest.rejectsMalformedDocuments)*
+33. Join reordering never changes a query's result; LEFT JOINs are never reordered across.
+    *(JoinOrderPropertiesTest.reorderingPreservesResults, JoinReorderRuleTest.leftJoinIsABoundary,
+    JoinReorderRuleTest.singleRelationConditionsAreKept)*
+34. A LEFT JOIN is never executed with swapped inputs.
+    *(CostBasedPlanningTest.leftJoinNeverSwaps, CostModelTest.leftJoinBuildsRight)*
+35. Estimates and costs are finite and non-negative whatever the statistics.
+    *(CardinalityEstimatorTest.boundedEstimates, CostModelTest.boundedArithmetic)*
+36. Profile node ids are the pre-order positions of the plan nodes, so estimates and actuals
+    are matched exactly. *(profile::profile_numbers_nodes_in_plan_preorder, CostBasedPlanningTest.annotatesEveryNode)*

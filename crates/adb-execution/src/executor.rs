@@ -89,11 +89,15 @@ impl QueryCursor {
     }
 
     /// Per-operator runtime profile so far (complete once the cursor is exhausted).
+    ///
+    /// Operators are numbered in plan pre-order (see [`crate::profile`]).
     pub fn profile(&self) -> QueryProfile {
+        let mut root = self.root.profile();
+        root.assign_node_ids(0);
         QueryProfile {
             peak_memory_bytes: self.context.memory.peak() as u64,
             memory_limit_bytes: self.context.memory.limit() as u64,
-            root: self.root.profile(),
+            root,
         }
     }
 

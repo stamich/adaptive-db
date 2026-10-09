@@ -14,6 +14,7 @@ tasks.test {
 
 dependencies {
     api(project(":adb-model"))
+    api(project(":adb-statistics"))
     api(project(":adb-catalog"))
     api(project(":adb-sql"))
     api(project(":adb-logical-plan"))

@@ -27,7 +27,16 @@ final class Binder(catalog: Catalog):
         val tpe = DataType.parse(c.dataType).getOrElse(throw new IllegalArgumentException(s"unsupported type ${c.dataType}"))
         (c.name, tpe, c.nullable)
       }
-      BoundCreateTable(name, fields, primaryKeys.head.name)
+      val references = columns.zip(fields).collect { case (column, (_, tpe, _)) if column.references.isDefined =>
+        column.name -> bindReference(name, column.name, tpe, column.references.get)
+      }.toMap
+      BoundCreateTable(name, fields, primaryKeys.head.name, references)
+
+    case Analyze(table) => BoundAnalyze(table.fold(catalog.entities)(name => Vector(requireEntity(name))))
+
+    case SetOption(name, value) =>
+      require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer)")
+      BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
 
     case Insert(table, columns, values) =>
       val entity = requireEntity(table)
@@ -61,6 +70,17 @@ final class Binder(catalog: Catalog):
 
     case Explain(inner, analyze) => BoundExplain(bind(inner), analyze)
 
+  /** Resolves `REFERENCES table(column)` of `column` in the table being created: the target must
+    * be another existing table's primary key with the same type.
+    */
+  private def bindReference(table: String, column: String, dataType: DataType, target: ColumnReference): ForeignKeyRef =
+    require(!target.table.equalsIgnoreCase(table), s"$column: self-referencing foreign keys are not supported")
+    val parent = requireEntity(target.table)
+    val field = requireField(parent, target.column)
+    require(field.id == parent.primaryKey, s"$column must reference the primary key of ${parent.name}, not ${field.name}")
+    require(field.dataType == dataType, s"$column is ${dataType.sqlName} but ${parent.name}.${field.name} is ${field.dataType.sqlName}")
+    ForeignKeyRef(parent.id, field.id)
+
   /** Resolves a table name or fails with "unknown table". */
   private def requireEntity(name: String): Entity =
     catalog.entity(name).getOrElse(throw new IllegalArgumentException(s"unknown table $name"))
@@ -86,6 +106,7 @@ final class Binder(catalog: Catalog):
     * be qualified with the table name), the only filter UPDATE and DELETE support.
     */
   private def extractPkEquality(entity: Entity, expr: SqlExpr): Long =
+    /** Whether `column` names this entity's primary key. */
     def isPk(column: Column): Boolean =
       column.qualifier.forall(_.equalsIgnoreCase(entity.name)) && requireField(entity, column.name).id == entity.primaryKey
     expr match

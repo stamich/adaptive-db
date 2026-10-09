@@ -17,7 +17,14 @@ trait Catalog:
     * @param name       entity name (unique, case-insensitive)
     * @param fields     `(name, type, nullable)` per column, in declaration order
     * @param primaryKey name of the BIGINT, non-nullable primary-key column
+    * @param references foreign-key hints by column name; each must name the primary key of an
+    *                   existing entity, with the same type as the column
     * @return the created entity
     * @throws IllegalArgumentException if the definition is invalid or the name is taken
     */
-  def createEntity(name: String, fields: Vector[(String, DataType, Boolean)], primaryKey: String): Entity
+  def createEntity(
+      name: String,
+      fields: Vector[(String, DataType, Boolean)],
+      primaryKey: String,
+      references: Map[String, ForeignKeyRef] = Map.empty
+  ): Entity
