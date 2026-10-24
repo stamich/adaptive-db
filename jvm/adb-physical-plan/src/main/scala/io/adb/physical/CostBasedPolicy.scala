@@ -62,16 +62,41 @@ final class CostBasedPolicy(
     if limit > DefaultPlanningPolicy.MaxTopK then (false, s"LIMIT $limit exceeds the TopK bound ${DefaultPlanningPolicy.MaxTopK}; full sort")
     else (true, f"keeps ${math.min(limit.toDouble, rows)}%.0f of ~$rows%.0f rows in memory instead of sorting all of them")
 
-  /** The cheapest access path of the relation; listed by EXPLAIN when an index was considered. */
+  /** The cheapest access path of the relation; listed by EXPLAIN when an index was considered.
+    *
+    * With a required order, a path that produces it (an index in that order or its reverse, or
+    * the sequential scan for primary-key order) is compared, at the fraction of its rows a LIMIT
+    * needs, with every other path plus the sort (TopK under a LIMIT) it would then need.
+    */
   override def chooseAccess(request: AccessRequest): AccessChoice =
-    val candidates = AccessPathEnumerator.candidates(request.relation, request.conjuncts, indexes.indexes(request.relation.entity.id), snapshot)
-    val estimates = candidates.map(path => costModel.accessCost(path))
-    val best = estimates.minBy(e => costModel.total(e.cost))
-    val others = estimates.filterNot(_ eq best)
+    val wantsOrder = request.required.nonEmpty
+    val candidates = AccessPathEnumerator.candidates(
+      request.relation, request.conjuncts, indexes.indexes(request.relation.entity.id), snapshot, ordered = wantsOrder, backward = wantsOrder)
+    val options = candidates.map { path =>
+      val full = costModel.accessCost(path)
+      if wantsOrder && delivers(path, request) then
+        val fraction = request.limit.fold(1.0)(k => math.min(1.0, k.toDouble / math.max(1.0, full.rows)))
+        val partial = costModel.accessCost(path, fraction)
+        (partial, partial.cost, true)
+      else if wantsOrder then (full, full.cost + costModel.sortCost(full.rows, request.relation.columns, request.limit), false)
+      else (full, full.cost, false)
+    }
+    val (best, bestCost, ordered) = options.minBy((_, cost, _) => costModel.total(cost))
+    val others = options.filterNot(_._1 eq best)
+    val sorted = if wantsOrder && !ordered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
     val reason =
-      f"cost ${costModel.total(best.cost)}%.1f, est. rows=${best.rows}%.0f" +
-        others.minByOption(e => costModel.total(e.cost)).fold("")(o => f"; next best ${CostBasedPolicy.describe(o.path)} cost ${costModel.total(o.cost)}%.1f")
-    AccessChoice(best.path, reason, Some(best), explain = candidates.size > 1)
+      f"cost ${costModel.total(bestCost)}%.1f$sorted, est. rows=${best.rows}%.0f" +
+        (if ordered then "; produces the required order" else "") +
+        others.minByOption((_, cost, _) => costModel.total(cost)).fold("") { (o, cost, oOrdered) =>
+          val extra = if wantsOrder && !oOrdered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
+          f"; next best ${CostBasedPolicy.describe(o.path)}$extra cost ${costModel.total(cost)}%.1f"
+        }
+    AccessChoice(best.path, reason, Some(best), explain = candidates.size > 1 || ordered, ordered = ordered)
+
+  /** Whether `path` produces the order `request` requires. */
+  private def delivers(path: AccessPath, request: AccessRequest): Boolean = path match
+    case scan: AccessPath.IndexScan => scan.properties.satisfies(request.required, scan.constantSlots)
+    case seq: AccessPath.SeqScan => seq.properties.satisfies(request.required)
 
   /** `; next best: cost N` for the cheapest rejected alternative, if any. */
   private def alternative(others: Vector[JoinCost]): String =

@@ -4,7 +4,7 @@ import io.adb.logical.*
 import io.adb.logical.LogicalPlan as LPlan
 import io.adb.model.*
 import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
-import io.adb.optimizer.access.AccessPath
+import io.adb.optimizer.access.{AccessPath, SortOrder}
 import io.adb.optimizer.cost.{AccessEstimate, Cost, CostModel}
 import io.adb.physical.PhysicalPlan as PPlan
 
@@ -144,7 +144,10 @@ object PhysicalPlanner:
       * with the access path the policy chooses.
       */
     private def access(logical: LPlan, relation: BoundRelation, conjuncts: Vector[TypedExpr]): PPlan =
-      val choice = policy.chooseAccess(AccessRequest(relation, conjuncts))
+      accessWith(logical, relation, policy.chooseAccess(AccessRequest(relation, conjuncts)), None)
+
+    /** The physical plan of `choice` for `logical`; `limit` sizes the first index page. */
+    private def accessWith(logical: LPlan, relation: BoundRelation, choice: AccessChoice, limit: Option[Int]): PPlan =
       if choice.explain then decisions += PlanDecision(s"access ${relation.alias}", CostBasedPolicy.describe(choice.path), choice.reason)
       choice.path match
         case AccessPath.SeqScan(_, _) =>
@@ -154,7 +157,24 @@ object PhysicalPlanner:
             case _ => PPlan.EntityScan(relation.entity.id, columns(relation))
         case scan: AccessPath.IndexScan =>
           estimation.zip(choice.estimate).foreach((e, chosen) => e.costModel.overrideCost(logical, chosen.cost))
-          indexPlan(scan, choice.estimate, None)
+          indexPlan(scan, choice.estimate, limit)
+
+    /** The relation and filter conjuncts of a plan that is a scan or a filter over a scan. */
+    private def scanOf(plan: LPlan): Option[(BoundRelation, Vector[TypedExpr])] = plan match
+      case LPlan.TableScan(relation) => Some(relation -> Vector.empty)
+      case LPlan.Filter(LPlan.TableScan(relation), predicate) => Some(relation -> TypedExpr.conjuncts(predicate))
+      case _ => None
+
+    /** For `ORDER BY keys [LIMIT limit]` directly over a scan (in cost mode): the access choice
+      * when it produces the required order itself, so the sort can be dropped.
+      */
+    private def orderedAccess(input: LPlan, keys: Vector[BoundOrder], limit: Option[Int]): Option[(BoundRelation, AccessChoice)] =
+      for
+        _ <- estimation
+        (relation, conjuncts) <- scanOf(input)
+        required = keys.map(k => SortOrder(k.attribute.slot, k.descending))
+        choice = policy.chooseAccess(AccessRequest(relation, conjuncts, required, limit)) if choice.ordered
+      yield relation -> choice
 
     /** The physical plan of an index access: `IndexScan`, then (only if the residual uses
       * covered columns) a filter applied before the fetch, then `RowFetch` for the columns the
@@ -197,7 +217,12 @@ object PhysicalPlanner:
       case node @ LPlan.Limit(LPlan.Sort(input, keys), limit) => orderedLimit(node, input, keys, limit, None)
       case node @ LPlan.Limit(LPlan.Project(LPlan.Sort(input, keys), attributes), limit) =>
         orderedLimit(node, input, keys, limit, Some(attributes))
-      case LPlan.Sort(input, keys) => PPlan.Sort(translate(input), sortKeys(keys))
+      case LPlan.Sort(input, keys) =>
+        orderedAccess(input, keys, None) match
+          case Some((relation, choice)) =>
+            decisions += PlanDecision(s"ORDER BY ${keys.map(_.display).mkString(", ")}", "access order", s"${CostBasedPolicy.describe(choice.path)} produces the order; no sort")
+            accessWith(input, relation, choice, None)
+          case None => PPlan.Sort(translate(input), sortKeys(keys))
       case LPlan.Project(input, attributes) => PPlan.Project(translate(input), projectedSlots(attributes))
       case LPlan.Limit(input, limit) => PPlan.Limit(translate(input), limit)
 
@@ -206,6 +231,38 @@ object PhysicalPlanner:
       * (or Limit) below the projection carries its estimate.
       */
     private def orderedLimit(node: LPlan, input: LPlan, keys: Vector[BoundOrder], limit: Int, project: Option[Vector[Attribute]]): PPlan =
+      orderedAccess(input, keys, Some(limit)) match
+        case Some((relation, choice)) => orderedScanLimit(node, input, relation, choice, keys, limit, project)
+        case None => sortedLimit(node, input, keys, limit, project)
+
+    /** `LIMIT` over an access path that produces the `ORDER BY` order: the scan stops after
+      * `limit` rows and nothing is sorted.
+      */
+    private def orderedScanLimit(
+        node: LPlan,
+        input: LPlan,
+        relation: BoundRelation,
+        choice: AccessChoice,
+        keys: Vector[BoundOrder],
+        limit: Int,
+        project: Option[Vector[Attribute]]
+    ): PPlan =
+      decisions += PlanDecision(
+        s"ORDER BY ${keys.map(_.display).mkString(", ")} LIMIT $limit",
+        "access order + limit",
+        s"${CostBasedPolicy.describe(choice.path)} produces the order; reads about $limit rows instead of sorting"
+      )
+      val scanned = accessWith(input, relation, choice, Some(limit))
+      val cost = choice.estimate.map(_.cost)
+      val limited = annotate(PPlan.Limit(scanned, limit), node, cost)
+      project.fold(limited) { attributes =>
+        val projected = PPlan.Project(limited, projectedSlots(attributes))
+        Option(annotations.get(limited)).foreach(annotations.put(projected, _))
+        projected
+      }
+
+    /** `LIMIT` over `ORDER BY` with a sort: TopK or Sort + Limit as the policy decides. */
+    private def sortedLimit(node: LPlan, input: LPlan, keys: Vector[BoundOrder], limit: Int, project: Option[Vector[Attribute]]): PPlan =
       val translated = translate(input)
       val (topK, reason) = policy.chooseTopK(limit, keys, input)
       decisions += PlanDecision(

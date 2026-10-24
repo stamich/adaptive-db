@@ -165,6 +165,16 @@ final class CostModel(estimator: CardinalityEstimator, val config: OptimizerConf
         val total = (scanCost + fetchCost).scaled(fraction) + Cost.bounded(0, 0, 0, 0, height * (1 - math.min(1.0, fraction)))
         AccessEstimate(path, total, output, basis, matchedRows * math.min(1.0, fraction))
 
+  /** Cost of ordering `rows` rows of `attributes`: a top-k when `limit` is given, a full sort
+    * otherwise (the formulas of [[topKCost]] and of the sort row of [[ownCost]]).
+    */
+  def sortCost(rows: Double, attributes: Vector[Attribute], limit: Option[Int]): Cost =
+    limit match
+      case Some(k) =>
+        val kept = math.min(k.toDouble, rows)
+        Cost.bounded(rows * (1 + log2(kept)), 0, kept * rowBytes(attributes))
+      case None => Cost.bounded(rows * log2(rows), 0, rows * rowBytes(attributes))
+
   /** Cost of `LIMIT k` over `ORDER BY` executed as a top-k over `input`. */
   def topKCost(input: LogicalPlan, limit: Int): Cost =
     val rows = estimator.estimate(input).rows

@@ -60,8 +60,16 @@ final case class AccessRequest(
   * @param reason   why, for EXPLAIN
   * @param estimate cost and rows of the chosen path, when costed
   * @param explain  whether the decision is worth listing (an index was considered)
+  * @param ordered  whether the path produces the request's required order, so the planner
+  *                 needs no Sort or TopK above it
   */
-final case class AccessChoice(path: AccessPath, reason: String, estimate: Option[AccessEstimate] = None, explain: Boolean = false)
+final case class AccessChoice(
+    path: AccessPath,
+    reason: String,
+    estimate: Option[AccessEstimate] = None,
+    explain: Boolean = false,
+    ordered: Boolean = false
+)
 
 /** A join strategy decision.
   *

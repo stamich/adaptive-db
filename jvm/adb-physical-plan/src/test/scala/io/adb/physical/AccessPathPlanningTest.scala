@@ -95,3 +95,41 @@ final class AccessPathPlanningTest:
     val rule = planned("SELECT owner FROM account WHERE balance = 5000", rule = true)
     assertFalse(nodes(rule).exists(_.isInstanceOf[IndexScan]))
     assertTrue(rule.decisions.forall(!_.operator.startsWith("access")))
+
+  /** ORDER BY + LIMIT on an index key reads the index in order and stops: no TopK, no Sort;
+    * descending order reads the index backward.
+    */
+  @Test def indexOrderReplacesTopK(): Unit =
+    val q = planned("SELECT owner, balance FROM account WHERE balance >= 9000 ORDER BY balance LIMIT 10")
+    assertFalse(nodes(q).exists(n => n.isInstanceOf[TopK] || n.isInstanceOf[Sort]), Explain.physical(q.plan, q.slotNames))
+    assertTrue(nodes(q).exists(_.isInstanceOf[Limit]))
+    val scan = nodes(q).collectFirst { case s: IndexScan => s }.get
+    assertEquals(ScanDirection.Forward, scan.direction)
+    assertEquals(Some(10), scan.limit)
+    assertTrue(q.decisions.exists(_.choice == "access order + limit"), q.decisions.toString)
+    val desc = planned("SELECT owner, balance FROM account ORDER BY balance DESC LIMIT 5")
+    assertEquals(Some(ScanDirection.Backward), nodes(desc).collectFirst { case s: IndexScan => s.direction }, Explain.physical(desc.plan, desc.slotNames))
+    assertFalse(nodes(desc).exists(_.isInstanceOf[TopK]))
+
+  /** Primary-key order comes from the sequential scan; equality-bound key columns do not
+    * disturb an index order; orders no path produces keep their TopK.
+    */
+  @Test def primaryKeyAndConstantColumns(): Unit =
+    val byId = planned("SELECT id, note FROM account ORDER BY id LIMIT 3")
+    assertEquals(Vector("Project", "Limit", "EntityScan"), nodes(byId).map(_.getClass.getSimpleName), Explain.physical(byId.plan, byId.slotNames))
+    val constant = planned("SELECT id FROM account WHERE region = 2 ORDER BY region, balance LIMIT 5")
+    assertFalse(nodes(constant).exists(_.isInstanceOf[TopK]), Explain.physical(constant.plan, constant.slotNames))
+    assertEquals(Some(IndexId(2)), nodes(constant).collectFirst { case s: IndexScan => s.indexId })
+    val other = planned("SELECT owner FROM account WHERE balance >= 9000 ORDER BY owner LIMIT 5")
+    assertTrue(nodes(other).exists(_.isInstanceOf[TopK]), Explain.physical(other.plan, other.slotNames))
+    val mixed = planned("SELECT id FROM account WHERE region = 2 ORDER BY balance DESC, id LIMIT 5")
+    assertTrue(nodes(mixed).exists(_.isInstanceOf[TopK]), "mixed directions are not an index order")
+
+  /** A full ORDER BY over a selective index range needs no Sort either. */
+  @Test def indexOrderReplacesSort(): Unit =
+    val q = planned("SELECT owner, balance FROM account WHERE balance >= 9990 ORDER BY balance")
+    assertFalse(nodes(q).exists(_.isInstanceOf[Sort]), Explain.physical(q.plan, q.slotNames))
+    assertTrue(q.decisions.exists(_.choice == "access order"))
+    val rule = planned("SELECT owner, balance FROM account WHERE balance >= 9990 ORDER BY balance", rule = true)
+    assertTrue(nodes(rule).exists(_.isInstanceOf[Sort]))
+
