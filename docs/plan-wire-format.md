@@ -50,6 +50,10 @@ the leading key columns equal `prefix`, the next key column lies between `lower`
 (each optional; omitted = unbounded). Values use the literal form below and are never `"Null"`.
 The scan is exact for these columns (NULL keys never match a range), runs at the query snapshot,
 and fails if the index cannot serve that snapshot (see [indexes.md](indexes.md)).
+Validation rejects a NULL bound value and bounds that address more than 16 key columns (prefix
+values plus the ranged column) before execution starts. The engine checks the bounds against
+the scanned index's own key columns. Bounds that no entry can match, such as a value longer than
+any stored key or of another type than the column, return no rows rather than an error.
 
 ## Expressions (`"kind"`)
 

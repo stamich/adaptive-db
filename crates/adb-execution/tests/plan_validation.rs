@@ -73,3 +73,39 @@ fn limits_are_enforced() {
     }
     assert!(invalid(&deep).contains("depth"));
 }
+
+/// Index bounds that no index can accept are rejected before execution: more key columns than
+/// the 16 an index may have, or a NULL bound.
+#[test]
+fn impossible_index_bounds_are_rejected() {
+    use adb_core::Value;
+    use adb_index::{IndexBounds, ScanDirection, ValueBound};
+    let scan = |bounds: IndexBounds| PhysicalPlan::IndexScan {
+        index_id: 1,
+        bounds,
+        direction: ScanDirection::Forward,
+        columns: Vec::new(),
+        limit: None,
+    };
+    let sixteen = IndexBounds {
+        prefix: (0..16).map(Value::Int64).collect(),
+        ..IndexBounds::all()
+    };
+    assert!(scan(sixteen.clone()).validate().is_ok());
+    let ranged = IndexBounds {
+        lower: Some(ValueBound {
+            value: Value::Int64(1),
+            inclusive: true,
+        }),
+        ..sixteen
+    };
+    assert!(invalid(&scan(ranged)).contains("at most 16"));
+    let null = IndexBounds {
+        upper: Some(ValueBound {
+            value: Value::Null,
+            inclusive: false,
+        }),
+        ..IndexBounds::all()
+    };
+    assert!(invalid(&scan(null)).contains("NULL"));
+}

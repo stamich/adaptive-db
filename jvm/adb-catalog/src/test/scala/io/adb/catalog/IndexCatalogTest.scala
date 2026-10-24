@@ -43,3 +43,20 @@ final class IndexCatalogTest:
         listing.replace("\"name\":\"idx_other\"", "\"name\":\"\"")
       )
     do assertThrows(classOf[IllegalArgumentException], () => { IndexCatalog.decode(bad); () }, bad)
+
+  /** Truncated and byte-mutated listings fail with `IllegalArgumentException` only (never a
+    * `ClassCastException`, `NoSuchElementException` or similar), or decode to well-formed
+    * indexes.
+    */
+  @Test def mutatedListingsFailCleanly(): Unit =
+    val random = new scala.util.Random(2300)
+    val specials = "{}[]\":,-0123456789eE.\\ ad".toCharArray
+    val mutations = (0 until listing.length).map(listing.substring(0, _)) ++ (0 until 5000).map { _ =>
+      val chars = listing.toCharArray
+      (0 to random.nextInt(3)).foreach(_ => chars(random.nextInt(chars.length)) = specials(random.nextInt(specials.length)))
+      new String(chars)
+    }
+    mutations.foreach { text =>
+      try IndexCatalog.decode(text).foreach(info => assertTrue(info.columns.nonEmpty && info.name.nonEmpty))
+      catch case _: IllegalArgumentException => ()
+    }

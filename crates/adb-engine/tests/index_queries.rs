@@ -260,3 +260,56 @@ fn unusable_snapshots_and_dropped_indexes_fail() {
     .unwrap_err();
     assert!(error.contains("does not exist"), "{error}");
 }
+
+/// Bounds no entry can match return nothing rather than failing: a value longer than any
+/// stored key, or of another type than the column. Bounds the index cannot address and
+/// unknown indexes are errors, never panics.
+#[test]
+fn extreme_bounds_are_handled() {
+    let dir = tempdir().unwrap();
+    let db = database(dir.path());
+    let huge = equal_value(Value::String("x".repeat(10_000)));
+    assert!(
+        run(&db, scan(huge, ScanDirection::Forward, &[2]), None, &[0])
+            .unwrap()
+            .is_empty()
+    );
+    let other_type = equal_value(Value::Bytes(vec![0, 0xFF, 0]));
+    assert!(run(
+        &db,
+        scan(other_type, ScanDirection::Backward, &[2]),
+        None,
+        &[0]
+    )
+    .unwrap()
+    .is_empty());
+    let two_columns = IndexBounds {
+        prefix: vec![Value::Int64(1), Value::Int64(2)],
+        ..IndexBounds::all()
+    };
+    let error = run(
+        &db,
+        scan(two_columns, ScanDirection::Forward, &[2]),
+        None,
+        &[0],
+    )
+    .unwrap_err();
+    assert!(error.contains("key columns"), "{error}");
+    let unknown = PhysicalPlan::IndexScan {
+        index_id: 99,
+        bounds: IndexBounds::all(),
+        direction: ScanDirection::Forward,
+        columns: vec![],
+        limit: Some(1),
+    };
+    assert!(run(&db, unknown, None, &[]).is_err());
+    assert!(!db.is_poisoned());
+}
+
+/// Equality on any single value.
+fn equal_value(value: Value) -> IndexBounds {
+    IndexBounds {
+        prefix: vec![value],
+        ..IndexBounds::all()
+    }
+}
