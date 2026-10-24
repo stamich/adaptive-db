@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Milestone 2.2.3 workload benchmark, JVM paths: the Rust binary prepares the dataset (the only
-# definition of the data), then the JVM measures planning_only, ffi_prepared_plan and
-# scala_cbo_ffi_rust for workloads A and B, join order (chain and star) in cost and rule mode,
-# estimation quality (skew, correlation, stale statistics), planning time for 2-12 relations
-# and the cost calibration.
+# Milestone 2.3.0 workload benchmark, JVM paths: the Rust binary prepares the dataset (the only
+# definition of the data), then the JVM creates the indexes through SQL and measures
+# planning_only, ffi_prepared_plan and scala_cbo_ffi_rust for workloads A-E, the selectivity sweep
+# (index versus sequential plan and the cost-mode choice), join order (chain and star) in cost and
+# rule mode, estimation quality (skew, correlation, stale statistics), planning time for 2-12
+# relations and the cost calibration.
 #
 # Environment:
 #   ADB_BENCH_SCALE       scale factor (default 1)
 #   ADB_BENCH_ITERATIONS  timed iterations per path (default 100)
 #   ADB_BENCH_WARMUP_MS   minimum warm-up per timed path, for the JIT (default 2000)
-#   ADB_BENCH_OUT         report (default examples/results/2.2.3-ffi[-sfN].json)
+#   ADB_BENCH_OUT         report (default examples/results/2.3.0-ffi[-sfN].json)
 #   ADB_BENCH_DATA        working directory, must not exist (default: a fresh temporary directory)
 #   ADB_NATIVE_LIBRARY    native library (default: the release build of adb-ffi)
 set -euo pipefail
@@ -18,7 +19,7 @@ SCALE="${ADB_BENCH_SCALE:-1}"
 ITERATIONS="${ADB_BENCH_ITERATIONS:-100}"
 WARMUP_MS="${ADB_BENCH_WARMUP_MS:-2000}"
 SUFFIX=""; [[ "$SCALE" == "1" ]] || SUFFIX="-sf$SCALE"
-OUT="${ADB_BENCH_OUT:-$ROOT/examples/results/2.2.3-ffi$SUFFIX.json}"
+OUT="${ADB_BENCH_OUT:-$ROOT/examples/results/2.3.0-ffi$SUFFIX.json}"
 DATA="${ADB_BENCH_DATA:-$(mktemp -d)/adb-bench}"
 case "$(uname -s)" in
   Linux)  DEFAULT_LIB="$ROOT/target/release/libadb_ffi.so" ;;

@@ -9,6 +9,7 @@ dependencies = [
  "adb-core",
  "adb-engine",
  "adb-execution",
+ "adb-index",
  "adb-plan-wire",
  "serde_json",
  "tempfile",

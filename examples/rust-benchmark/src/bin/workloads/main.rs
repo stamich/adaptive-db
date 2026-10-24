@@ -1,12 +1,14 @@
-//! Milestone 2.2.3 workload benchmark.
+//! Milestone 2.3.0 workload benchmark.
 //!
 //! Two modes:
 //!
 //! * **Measure** (`rust_native` path): loads the dataset ([`dataset`]) at a scale factor into a
-//!   temporary database, times `ANALYZE` of every table, and executes the physical plans the
-//!   cost-based optimizer produces for workloads A and B directly in Rust, without SQL,
-//!   planning or FFI. Comparing its timings with the JVM's `ffi_prepared_plan` and
-//!   `scala_cbo_ffi_rust` paths isolates the cost of the boundary and of planning.
+//!   temporary database, times `ANALYZE` of every table and the build of every index, and
+//!   executes the physical plans the cost-based optimizer produces for workloads A–E directly
+//!   in Rust, without SQL, planning or FFI. Comparing its timings with the JVM's
+//!   `ffi_prepared_plan` and `scala_cbo_ffi_rust` paths isolates the cost of the boundary and
+//!   of planning. It also measures the write overhead of 0, 1 and 3 indexes and an index read
+//!   at an older (`AS OF`) snapshot.
 //! * **Prepare** (`--prepare DIR`): loads the dataset into `DIR` and prepares the stale-statistics
 //!   table, for the JVM benchmark to open. Loading through SQL would cost one commit per row.
 //!
@@ -23,11 +25,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use adb_engine::{AnalyzeOptions, Database};
+use adb_core::{CommitTs, Direction, Row, RowId, Value};
+use adb_engine::{AnalyzeOptions, Database, IndexColumn, IndexSpec};
 use adb_execution::{
-    AggregateFunction, AggregateSpec, ColumnVector, JoinKey, JoinType, PhysicalPlan, ScanColumn,
-    SlotId, SortKey,
+    AggregateFunction, AggregateSpec, BinaryOp, ColumnVector, Expr, JoinKey, JoinType,
+    PhysicalPlan, ScanColumn, SlotId, SortKey,
 };
+use adb_index::{IndexBounds, ScanDirection, ValueBound};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -101,6 +105,84 @@ fn workload_b() -> PhysicalPlan {
     }
 }
 
+/// Entity id of `ix_account`.
+fn ix_account() -> u64 {
+    dataset::by_name("ix_account").entity
+}
+
+/// Workload C: `SELECT owner, balance FROM ix_account WHERE owner = 'owner-42'`, a covering
+/// equality scan of `idx_ix_owner` (slots 0 = owner, 1 = balance).
+fn workload_c(owner_index: u64) -> PhysicalPlan {
+    PhysicalPlan::IndexScan {
+        index_id: owner_index,
+        bounds: IndexBounds {
+            prefix: vec![Value::String("owner-42".into())],
+            ..IndexBounds::all()
+        },
+        direction: ScanDirection::Forward,
+        columns: vec![col(4, 0), col(3, 1)],
+        limit: None,
+    }
+}
+
+/// Lower balance bound of workload D: the first 1% of the balance range.
+const D_FROM: i64 = (dataset::BALANCE_MODULUS / 100) as i64;
+
+/// Workload D: `SELECT id, balance FROM ix_account WHERE balance >= 10000000 ORDER BY balance
+/// LIMIT 100`, an ordered range scan of `idx_ix_balance` with a row fetch and no sort
+/// (slots 0 = balance, 1 = id).
+fn workload_d(balance_index: u64) -> PhysicalPlan {
+    PhysicalPlan::Project {
+        input: Box::new(PhysicalPlan::Limit {
+            input: Box::new(PhysicalPlan::RowFetch {
+                input: Box::new(PhysicalPlan::IndexScan {
+                    index_id: balance_index,
+                    bounds: IndexBounds {
+                        prefix: vec![],
+                        lower: Some(ValueBound {
+                            value: Value::Int64(D_FROM),
+                            inclusive: true,
+                        }),
+                        upper: None,
+                    },
+                    direction: ScanDirection::Forward,
+                    columns: vec![col(3, 0)],
+                    limit: Some(100),
+                }),
+                columns: vec![col(1, 1)],
+            }),
+            limit: 100,
+        }),
+        slots: vec![SlotId(1), SlotId(0)],
+    }
+}
+
+/// Workload E (control, no index on `region`): `SELECT COUNT(*) FROM ix_account WHERE
+/// region = 7`, a sequential scan with a filter (slots 0 = region, 1 = count).
+fn workload_e() -> PhysicalPlan {
+    PhysicalPlan::Aggregate {
+        input: Box::new(PhysicalPlan::Filter {
+            input: Box::new(PhysicalPlan::EntityScan {
+                entity_id: ix_account(),
+                columns: vec![col(2, 0)],
+            }),
+            predicate: Expr::Binary {
+                left: Box::new(Expr::Slot { slot: SlotId(0) }),
+                op: BinaryOp::Eq,
+                right: Box::new(Expr::Literal {
+                    value: Value::Int64(7),
+                }),
+            },
+        }),
+        group_by: vec![],
+        aggregates: vec![AggregateSpec {
+            function: AggregateFunction::Count,
+            input: None,
+            output: SlotId(1),
+        }],
+    }
+}
+
 /// Outcome of one execution.
 struct Run {
     /// Rows returned.
@@ -111,9 +193,12 @@ struct Run {
     peak_memory_bytes: u64,
 }
 
-/// Executes `plan` once.
-fn run(db: &Database, plan: &PhysicalPlan) -> Result<Run> {
-    let mut cursor = db.execute(plan.clone())?;
+/// Executes `plan` once (at `snapshot`, or the latest snapshot).
+fn run_at(db: &Database, plan: &PhysicalPlan, snapshot: Option<CommitTs>) -> Result<Run> {
+    let mut cursor = match snapshot {
+        Some(ts) => db.execute_at(plan.clone(), ts)?,
+        None => db.execute(plan.clone())?,
+    };
     let (mut rows, mut checksum) = (0, 0i64);
     while let Some(batch) = cursor.next_batch()? {
         rows += batch.len();
@@ -130,8 +215,92 @@ fn run(db: &Database, plan: &PhysicalPlan) -> Result<Run> {
     })
 }
 
-/// Warms up for at least `warmup` (and 10 runs), then times `iters` executions: p50, p95, p99,
-/// mean, input rows per second at the median, rows, checksum and peak memory.
+/// Executes `plan` once at the latest snapshot.
+fn run(db: &Database, plan: &PhysicalPlan) -> Result<Run> {
+    run_at(db, plan, None)
+}
+
+/// Rounds the samples of one measurement are split into for `round_medians` (their spread
+/// shows run-to-run stability, which one median hides).
+const ROUNDS: usize = 7;
+
+/// Summary statistics of millisecond samples: percentiles, mean, min, max, standard deviation
+/// and the medians of [`ROUNDS`] consecutive rounds.
+fn summary(samples: &[f64]) -> serde_json::Map<String, serde_json::Value> {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let percentile = |p: f64| sorted[((sorted.len() - 1) as f64 * p).round() as usize];
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    let variance =
+        samples.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / samples.len().max(2) as f64;
+    let rounds: Vec<f64> = samples
+        .chunks(samples.len().div_ceil(ROUNDS))
+        .map(|round| {
+            let mut round = round.to_vec();
+            round.sort_by(f64::total_cmp);
+            round[round.len() / 2]
+        })
+        .collect();
+    let mut map = serde_json::Map::new();
+    for (key, value) in [
+        ("p50_ms", json!(percentile(0.5))),
+        ("p95_ms", json!(percentile(0.95))),
+        ("p99_ms", json!(percentile(0.99))),
+        ("mean_ms", json!(mean)),
+        ("min_ms", json!(sorted[0])),
+        ("max_ms", json!(sorted[sorted.len() - 1])),
+        ("stddev_ms", json!(variance.sqrt())),
+        ("round_medians_ms", json!(rounds)),
+    ] {
+        map.insert(key.into(), value);
+    }
+    map
+}
+
+/// Warms up for at least `warmup` (and 10 runs), then times `iters` executions at `snapshot`:
+/// the [`summary`] statistics, input rows per second at the median, rows, checksum and peak
+/// memory.
+fn measure_at(
+    db: &Database,
+    plan: &PhysicalPlan,
+    snapshot: Option<CommitTs>,
+    settings: (usize, Duration),
+    input_rows: u64,
+) -> Result<serde_json::Value> {
+    let (iters, warmup) = settings;
+    let start = Instant::now();
+    let mut warm = 0;
+    while warm < 10 || start.elapsed() < warmup {
+        run_at(db, plan, snapshot)?;
+        warm += 1;
+    }
+    let mut samples = Vec::with_capacity(iters);
+    let mut last = run_at(db, plan, snapshot)?;
+    for _ in 0..iters {
+        let start = Instant::now();
+        last = run_at(db, plan, snapshot)?;
+        samples.push(start.elapsed().as_secs_f64() * 1e3);
+    }
+    let mut report = summary(&samples);
+    let median = report["p50_ms"].as_f64().unwrap_or(f64::NAN);
+    for (key, value) in [
+        ("iterations", json!(iters)),
+        ("warmup_runs", json!(warm)),
+        ("input_rows", json!(input_rows)),
+        (
+            "input_rows_per_s",
+            json!(input_rows as f64 / (median / 1e3)),
+        ),
+        ("rows_out", json!(last.rows)),
+        ("checksum", json!(last.checksum)),
+        ("peak_memory_bytes", json!(last.peak_memory_bytes)),
+    ] {
+        report.insert(key.into(), value);
+    }
+    Ok(serde_json::Value::Object(report))
+}
+
+/// [`measure_at`] at the latest snapshot.
 fn measure(
     db: &Database,
     plan: &PhysicalPlan,
@@ -139,33 +308,131 @@ fn measure(
     warmup: Duration,
     input_rows: u64,
 ) -> Result<serde_json::Value> {
-    let start = Instant::now();
-    let mut warm = 0;
-    while warm < 10 || start.elapsed() < warmup {
-        run(db, plan)?;
-        warm += 1;
-    }
-    let mut samples = Vec::with_capacity(iters);
-    let mut last = run(db, plan)?;
-    for _ in 0..iters {
+    measure_at(db, plan, None, (iters, warmup), input_rows)
+}
+
+/// Builds every index of [`dataset::INDEXES`] over the loaded rows: build time, entries
+/// (counted by a full index scan, which must equal the table's rows) and the id of each.
+fn build_indexes(
+    db: &Database,
+    scale: u64,
+) -> Result<(serde_json::Value, Vec<(&'static str, u64)>)> {
+    let mut report = serde_json::Map::new();
+    let mut ids = Vec::new();
+    for index in &dataset::INDEXES {
         let start = Instant::now();
-        last = run(db, plan)?;
-        samples.push(start.elapsed().as_secs_f64() * 1e3);
+        let definition = db.create_index(index.spec())?;
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        let full = PhysicalPlan::IndexScan {
+            index_id: definition.id.0,
+            bounds: IndexBounds::all(),
+            direction: ScanDirection::Forward,
+            columns: vec![],
+            limit: None,
+        };
+        let entries = run(db, &full)?.rows;
+        let rows = dataset::rows(index.table, scale);
+        report.insert(
+            index.name.into(),
+            json!({"sql": index.sql, "ms": ms, "entries": entries, "table_rows": rows,
+                   "rows_per_s": rows as f64 / (ms / 1e3)}),
+        );
+        ids.push((index.name, definition.id.0));
     }
-    samples.sort_by(f64::total_cmp);
-    let percentile = |p: f64| samples[((samples.len() - 1) as f64 * p).round() as usize];
+    Ok((serde_json::Value::Object(report), ids))
+}
+
+/// Rows inserted per write-overhead measurement.
+const WRITE_ROWS: u64 = 20_000;
+/// Rows per commit in the write-overhead measurement.
+const WRITE_BATCH: u64 = 100;
+
+/// Inserts [`WRITE_ROWS`] `ix_account`-shaped rows (100 per commit) into fresh databases with
+/// 0, 1 and 3 indexes; reports rows per second and the overhead relative to no index.
+fn write_overhead() -> Result<serde_json::Value> {
+    let entity = ix_account();
+    let index = |name: &str, fields: &[u32], include: &[u32]| IndexSpec {
+        name: name.into(),
+        entity_id: entity,
+        columns: fields
+            .iter()
+            .map(|field| IndexColumn {
+                field_id: *field,
+                direction: Direction::Asc,
+            })
+            .collect(),
+        include: include.to_vec(),
+    };
+    let sets: [(&str, Vec<IndexSpec>); 3] = [
+        ("0_indexes", vec![]),
+        ("1_index", vec![index("w_balance", &[3], &[])]),
+        (
+            "3_indexes",
+            vec![
+                index("w_balance", &[3], &[]),
+                index("w_owner", &[4], &[3]),
+                index("w_region_balance", &[2, 3], &[]),
+            ],
+        ),
+    ];
+    let mut report = serde_json::Map::new();
+    let mut baseline = None;
+    for (name, specs) in sets {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path())?;
+        for spec in specs {
+            db.create_index(spec)?;
+        }
+        let table = dataset::by_name("ix_account");
+        let start = Instant::now();
+        let mut first = 1;
+        while first <= WRITE_ROWS {
+            let mut tx = db.begin();
+            for id in first..first + WRITE_BATCH {
+                tx.put(
+                    RowId::from_primary_key(entity, id as i64),
+                    dataset::row(table, id, 1),
+                );
+            }
+            db.commit(tx)?;
+            first += WRITE_BATCH;
+        }
+        let seconds = start.elapsed().as_secs_f64();
+        let rate = WRITE_ROWS as f64 / seconds;
+        let base = *baseline.get_or_insert(rate);
+        report.insert(
+            name.into(),
+            json!({"rows": WRITE_ROWS, "rows_per_commit": WRITE_BATCH, "seconds": seconds,
+                   "rows_per_s": rate, "slowdown_vs_no_index": base / rate}),
+        );
+        db.close()?;
+    }
+    Ok(serde_json::Value::Object(report))
+}
+
+/// Workload D at the latest snapshot and at the snapshot before 1% of the balances changed
+/// (`AS OF`): the index serves both, older entries are kept until `VACUUM`.
+fn as_of_read(
+    db: &Database,
+    balance_index: u64,
+    scale: u64,
+    settings: (usize, Duration),
+) -> Result<serde_json::Value> {
+    let before = db.latest_committed_ts();
+    let table = dataset::by_name("ix_account");
+    let rows = table.rows(scale);
+    let mut tx = db.begin();
+    for id in (1..=rows).step_by(100) {
+        let moved: Row =
+            dataset::row(table, id, scale).with_field(3, Value::Int64((D_FROM as u64 + id) as i64));
+        tx.put(RowId::from_primary_key(table.entity, id as i64), moved);
+    }
+    db.commit(tx)?;
+    let plan = workload_d(balance_index);
     Ok(json!({
-        "iterations": iters,
-        "warmup_runs": warm,
-        "p50_ms": percentile(0.5),
-        "p95_ms": percentile(0.95),
-        "p99_ms": percentile(0.99),
-        "mean_ms": samples.iter().sum::<f64>() / samples.len() as f64,
-        "input_rows": input_rows,
-        "input_rows_per_s": input_rows as f64 / (percentile(0.5) / 1e3),
-        "rows_out": last.rows,
-        "checksum": last.checksum,
-        "peak_memory_bytes": last.peak_memory_bytes,
+        "changed_rows": rows.div_ceil(100),
+        "latest": measure_at(db, &plan, None, settings, 100)?,
+        "as_of_before_change": measure_at(db, &plan, Some(before), settings, 100)?,
     }))
 }
 
@@ -275,10 +542,30 @@ fn main() -> Result<()> {
         json!({"estimated": ids, "actual": events.rows(args.scale)}),
     );
 
+    let (index_build, index_ids) = build_indexes(&db, args.scale)?;
+    let index_id = |name: &str| {
+        index_ids
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, id)| *id)
+            .expect("index built")
+    };
+    let (owner_index, balance_index) = (index_id("idx_ix_owner"), index_id("idx_ix_balance"));
+    let accounts = dataset::rows("ix_account", args.scale);
     let join_rows =
         dataset::rows("bench_customer", args.scale) + dataset::rows("bench_orders", args.scale);
+    let settings = (args.iters, args.warmup);
+    let workloads = json!({
+        "A_hash_join_topk": measure(&db, &workload_a(), args.iters, args.warmup, join_rows)?,
+        "B_hash_join_aggregate_topk": measure(&db, &workload_b(), args.iters, args.warmup, join_rows)?,
+        "C_covering_index_eq": measure(&db, &workload_c(owner_index), args.iters, args.warmup, accounts / dataset::OWNERS)?,
+        "D_index_range_order_limit": measure(&db, &workload_d(balance_index), args.iters, args.warmup, 100)?,
+        "E_seq_scan_region_eq": measure(&db, &workload_e(), args.iters, args.warmup, accounts)?,
+    });
+    // Changes balances: runs after every other measurement of ix_account.
+    let as_of = as_of_read(&db, balance_index, args.scale, settings)?;
     let report = json!({
-        "milestone": "2.2.3",
+        "milestone": "2.3.0",
         "path": "rust_native",
         "host": {
             "os": env::consts::OS,
@@ -291,15 +578,16 @@ fn main() -> Result<()> {
             "scale": args.scale,
             "bench_customer": dataset::rows("bench_customer", args.scale),
             "bench_orders": dataset::rows("bench_orders", args.scale),
+            "ix_account": accounts,
             "iterations": args.iters,
             "warmup_ms": args.warmup.as_millis() as u64,
         },
         "load": {"rows": loaded, "seconds": load_seconds, "rows_per_s": loaded as f64 / load_seconds},
         "analyze": analyze,
-        "workloads": {
-            "A_hash_join_topk": measure(&db, &workload_a(), args.iters, args.warmup, join_rows)?,
-            "B_hash_join_aggregate_topk": measure(&db, &workload_b(), args.iters, args.warmup, join_rows)?,
-        },
+        "index_build": index_build,
+        "workloads": workloads,
+        "as_of_index_read": as_of,
+        "write_overhead": write_overhead()?,
     });
     let text = serde_json::to_string_pretty(&report)?;
     println!("{text}");

@@ -5,8 +5,8 @@
 
 use std::time::Instant;
 
-use adb_core::{Row, RowId, Value};
-use adb_engine::{AnalyzeOptions, Database};
+use adb_core::{Direction, Row, RowId, Value};
+use adb_engine::{AnalyzeOptions, Database, IndexColumn, IndexSpec};
 
 use crate::Result;
 
@@ -33,8 +33,8 @@ impl Table {
     }
 }
 
-/// Every table, in catalog order (entity ids 1..=10).
-pub const TABLES: [Table; 10] = [
+/// Every table, in catalog order (entity ids 1..=11).
+pub const TABLES: [Table; 11] = [
     table("bench_customer", 1, 100, true),
     table("bench_orders", 2, 1_000, true),
     table("jo_c", 3, 20, false),
@@ -45,6 +45,66 @@ pub const TABLES: [Table; 10] = [
     table("st_fact", 8, 100_000, true),
     table("sk_events", 9, 100_000, true),
     table("sk_stale", 10, 100_000, true),
+    table("ix_account", 11, 100_000, true),
+];
+
+/// Multiplier of the `ix_account.balance` permutation.
+const BALANCE_MULTIPLIER: u64 = 48_271;
+/// Modulus of the `ix_account.balance` permutation (prime, so balances are unique for ids
+/// below it, and spread over `0..BALANCE_MODULUS` like random values).
+pub const BALANCE_MODULUS: u64 = 1_000_000_007;
+/// Distinct owners of `ix_account` (`owner = 'owner-42'` selects 1 / 10,000 of the rows).
+pub const OWNERS: u64 = 10_000;
+
+/// One secondary index of the 2.3.0 workloads, as `CREATE INDEX` declares it.
+pub struct Index {
+    /// Index name (the JVM creates the same index through SQL).
+    pub name: &'static str,
+    /// Indexed table.
+    pub table: &'static str,
+    /// Key column field ids, ascending.
+    pub columns: &'static [u32],
+    /// Covered (`INCLUDE`) field ids.
+    pub include: &'static [u32],
+    /// The equivalent SQL statement.
+    pub sql: &'static str,
+}
+
+impl Index {
+    /// The engine's specification of the index.
+    pub fn spec(&self) -> IndexSpec {
+        IndexSpec {
+            name: self.name.into(),
+            entity_id: by_name(self.table).entity,
+            columns: self
+                .columns
+                .iter()
+                .map(|field| IndexColumn {
+                    field_id: *field,
+                    direction: Direction::Asc,
+                })
+                .collect(),
+            include: self.include.to_vec(),
+        }
+    }
+}
+
+/// The indexes of `ix_account` (fields: 1 id, 2 region, 3 balance, 4 owner, 5 note).
+pub const INDEXES: [Index; 2] = [
+    Index {
+        name: "idx_ix_owner",
+        table: "ix_account",
+        columns: &[4],
+        include: &[3],
+        sql: "CREATE INDEX idx_ix_owner ON ix_account (owner) INCLUDE (balance)",
+    },
+    Index {
+        name: "idx_ix_balance",
+        table: "ix_account",
+        columns: &[3],
+        include: &[],
+        sql: "CREATE INDEX idx_ix_balance ON ix_account (balance)",
+    },
 ];
 
 /// `const` constructor of [`Table`].
@@ -120,6 +180,15 @@ pub fn row(table: &Table, id: u64, scale: u64) -> Row {
         }
         // id, kind (uniform when analyzed; see `make_stale`), v
         "sk_stale" => vec![int(id), int(id % KINDS), int(id % 10)],
+        // id, region (100 values), balance (unique, spread like random values), owner
+        // (10,000 values), note (a payload column no index covers)
+        "ix_account" => vec![
+            int(id),
+            int(id % 100),
+            int(balance(id)),
+            Value::String(format!("owner-{}", id % OWNERS)),
+            Value::String(format!("note-{id:08}")),
+        ],
         other => unreachable!("unknown table {other}"),
     };
     fields
@@ -128,6 +197,11 @@ pub fn row(table: &Table, id: u64, scale: u64) -> Row {
         .fold(Row::new(), |row, (value, field)| {
             row.with_field(field, value)
         })
+}
+
+/// `ix_account.balance` of row `id`: `id * 48,271 mod 1,000,000,007`.
+pub fn balance(id: u64) -> u64 {
+    (id * BALANCE_MULTIPLIER) % BALANCE_MODULUS
 }
 
 /// A Zipf-distributed kind (exponent 1.1) chosen by a hash of `id`: kind 0 holds about 26% of
@@ -208,7 +282,7 @@ pub fn make_stale(db: &Database, scale: u64) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Entity ids are 1..=10 in table order; scale multiplies only scaled tables.
+    /// Entity ids are 1..=11 in table order; scale multiplies only scaled tables.
     #[test]
     fn tables_are_ordered_and_scaled() {
         for (index, table) in TABLES.iter().enumerate() {
@@ -225,5 +299,20 @@ mod tests {
         let zero = (1..=n).filter(|id| zipf_kind(*id) == 0).count() as f64 / n as f64;
         assert!((0.24..0.28).contains(&zero), "{zero}");
         assert!((1..=n).all(|id| zipf_kind(id) < KINDS));
+    }
+
+    /// Balances are unique (ORDER BY balance has no ties) and spread over the whole range.
+    #[test]
+    fn balances_are_unique_and_spread() {
+        let n = 100_000;
+        let mut balances: Vec<u64> = (1..=n).map(balance).collect();
+        let below_tenth = balances
+            .iter()
+            .filter(|b| **b < BALANCE_MODULUS / 10)
+            .count();
+        assert!((9_000..11_000).contains(&below_tenth), "{below_tenth}");
+        balances.sort_unstable();
+        balances.dedup();
+        assert_eq!(balances.len() as u64, n);
     }
 }

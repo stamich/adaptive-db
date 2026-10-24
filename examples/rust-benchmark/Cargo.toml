@@ -3,13 +3,14 @@ name = "adb-benchmark-rust"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# `cargo run -p adb-benchmark-rust` runs the data-plane benchmark; `--bin workloads` the 2.2.3 workloads.
+# `cargo run -p adb-benchmark-rust` runs the data-plane benchmark; `--bin workloads` the 2.2.3 and 2.3.0 workloads.
 default-run = "adb-benchmark-rust"
 
 [dependencies]
 adb-core = { path = "../../crates/adb-core" }
 adb-engine = { path = "../../crates/adb-engine" }
 adb-execution = { path = "../../crates/adb-execution" }
+adb-index = { path = "../../crates/adb-index" }
 adb-plan-wire = { path = "../../crates/adb-plan-wire" }
 tempfile.workspace = true
 serde_json.workspace = true
