@@ -6,7 +6,8 @@ import io.adb.gateway.{AdaptiveDatabase, QueryResult}
 import io.adb.logical.{Binder, BoundSelect, LogicalPlan, OptimizerMode}
 import io.adb.model.*
 import io.adb.optimizer.OptimizerConfig
-import io.adb.physical.PlanJsonEncoder
+import io.adb.optimizer.cost.CostWeights
+import io.adb.physical.{NodeEstimate, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 import io.adb.statistics.*
 import java.nio.charset.StandardCharsets
@@ -29,7 +30,10 @@ import scala.jdk.CollectionConverters.*
   *  - '''estimation''': skewed (Zipf) values, a perfectly correlated predicate pair, a range,
   *    and stale statistics before and after `ANALYZE`, each with its estimated and actual rows;
   *  - '''planner''': planning time of chain and star queries of 2–12 relations;
-  *  - '''calibration''': measured engine time per estimated cost unit for every workload.
+  *  - '''calibration''': for every measured plan, the unweighted cost components of its root,
+  *    the weighted cost and the engine time (prepared-plan path), from which
+  *    `scripts/fit-cost-weights.py` fits the [[io.adb.optimizer.cost.CostWeights]]; plus the
+  *    engine time per cost unit and its spread across plans under the current weights.
   *
   * Every timed path warms up for a minimum time first (JIT), and reports p50, p95 and p99.
   */
@@ -101,18 +105,27 @@ object WorkloadBenchmark:
       val counts = verifyRowCounts(db, settings.scale)
       BaseRows.map(_._1).filterNot(_ == "sk_stale").foreach(table => db.execute(s"ANALYZE $table"))
       val timer = Timer(settings.iterations, settings.warmupMs)
+      val points = Vector.newBuilder[CalibrationPoint]
 
       val workloads = Vector("A_hash_join_topk" -> WorkloadA, "B_hash_join_aggregate_topk" -> WorkloadB).map { (name, sql) =>
         val prepared = preparedPlan(db, catalog, sql)
+        val engine = timer.measure(drain(native, prepared))
+        points += CalibrationPoint(name, rootEstimate(db, catalog, sql), engine.percentile(0.5))
         name -> obj(
           "planning_only" -> timer.measure(planOnly(db, catalog, sql)).json,
-          "ffi_prepared_plan" -> timer.measure(drain(native, prepared)).json,
+          "ffi_prepared_plan" -> engine.json,
           "scala_cbo_ffi_rust" -> timer.measure(checksum(db.execute(sql))).json,
           "estimated_root_cost" -> num(rootCost(db, catalog, sql)),
           "max_q_error" -> num(maxQError(db, sql))
         )
       }
-      val joinOrder = Vector("chain" -> ChainQuery, "star" -> StarQuery).map((name, sql) => name -> modes(db, catalog, native, sql, timer))
+      val joinOrder = Vector("chain" -> ChainQuery, "star" -> StarQuery).map((name, sql) => name -> modes(db, catalog, native, sql, timer, name, points))
+      // Scan-only plans (filter + aggregate, nothing hashed) separate the row-operation weight
+      // from the hash-row weight in the calibration fit.
+      EstimationQueries.foreach { (name, sql) =>
+        val engine = timer.measure(drain(native, preparedPlan(db, catalog, sql)))
+        points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
+      }
       val report = obj(
         "milestone" -> str("2.2.3"),
         "host" -> obj(
@@ -126,7 +139,7 @@ object WorkloadBenchmark:
         "join_order" -> obj(joinOrder*),
         "estimation" -> estimationSection(db),
         "planner" -> plannerSection(timer),
-        "calibration" -> calibration(workloads.map((n, s) => n -> s) ++ joinOrder.map((n, s) => s"join_order_$n" -> s))
+        "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights)
       )
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
@@ -142,17 +155,28 @@ object WorkloadBenchmark:
     }
 
   /** One query in cost and in rule mode: timing (or the error that stopped it), plan cost,
-    * worst q-error and join tree per mode.
+    * worst q-error and join tree per mode; every plan that ran becomes a calibration point
+    * labelled `join_order_<name>_<mode>`.
     */
-  private def modes(db: AdaptiveDatabase, catalog: FileCatalog, native: NativeDatabase, sql: String, timer: Timer): String =
+  private def modes(
+      db: AdaptiveDatabase,
+      catalog: FileCatalog,
+      native: NativeDatabase,
+      sql: String,
+      timer: Timer,
+      name: String,
+      points: scala.collection.mutable.Builder[CalibrationPoint, Vector[CalibrationPoint]]
+  ): String =
     val results = Vector("cost", "rule").map { mode =>
       db.execute(s"SET optimizer = $mode")
       val tree = joinTree(db.plan(bind(catalog, sql)).optimized)
       val section =
         try
           val prepared = preparedPlan(db, catalog, sql)
+          val engine = timer.measure(drain(native, prepared))
+          points += CalibrationPoint(s"join_order_${name}_$mode", rootEstimate(db, catalog, sql), engine.percentile(0.5))
           obj(
-            "ffi_prepared_plan" -> timer.measure(drain(native, prepared)).json,
+            "ffi_prepared_plan" -> engine.json,
             "estimated_root_cost" -> num(rootCost(db, catalog, sql)),
             "max_q_error" -> num(maxQError(db, sql)),
             "join_tree" -> str(tree)
@@ -209,26 +233,31 @@ object WorkloadBenchmark:
       s"${shape}_$n" -> obj("relations" -> num(n), "p50_us" -> num(timing.percentile(0.5) * 1000), "p99_us" -> num(timing.percentile(0.99) * 1000), "method" -> str(method))
     obj(rows*)
 
-  /** Engine milliseconds per 1,000 estimated cost units (prepared-plan path, so planning is
-    * excluded) for every measured plan, and the spread between them.
+  /** One measured plan for the cost calibration.
+    *
+    * @param label    workload and mode
+    * @param estimate the planner's estimate of the plan's root (cost and its components)
+    * @param engineMs median engine time of the prepared plan
     */
-  private def calibration(sections: Vector[(String, String)]): String =
-    val cost = raw""""estimated_root_cost":([0-9.Ee+-]+)""".r
-    val p50 = raw""""ffi_prepared_plan":\{[^}]*"p50_ms":([0-9.Ee+-]+)""".r
-    val points = sections.flatMap { (name, section) =>
-      // A section may hold one plan (workloads) or a "cost" and a "rule" plan (join order).
-      val parts = if section.contains("\"cost\":{") then
-        Vector(s"${name}_cost" -> section.substring(0, section.indexOf("\"rule\":{")), s"${name}_rule" -> section.substring(section.indexOf("\"rule\":{")))
-      else Vector(name -> section)
-      parts.flatMap { (label, text) =>
-        for c <- cost.findFirstMatchIn(text).map(_.group(1).toDouble); m <- p50.findFirstMatchIn(text).map(_.group(1).toDouble) if c > 0
-        yield label -> m * 1000 / c
-      }
-    }
-    val ratios = points.map(_._2)
+  private final case class CalibrationPoint(label: String, estimate: Option[NodeEstimate], engineMs: Double)
+
+  /** The calibration section: every point with its cost components, and the engine time per
+    * 1,000 weighted cost units with its spread (max / min) under `weights`.
+    */
+  private def calibration(points: Vector[CalibrationPoint], weights: CostWeights): String =
+    val usable = points.flatMap(p => p.estimate.filter(_.cost > 0).map(p -> _))
+    val ratios = usable.map((p, e) => p.label -> p.engineMs * 1000 / e.cost)
     obj(
-      "ms_per_1k_cost" -> obj(points.map((label, r) => label -> num(r))*),
-      "spread" -> num(if ratios.isEmpty then Double.NaN else ratios.max / ratios.min)
+      "weights" -> obj("cpu" -> num(weights.cpu), "io" -> num(weights.io), "memory" -> num(weights.memory), "hash_row" -> num(weights.hashRow)),
+      "points" -> usable.map { (p, e) =>
+        obj(
+          "plan" -> str(p.label), "engine_ms" -> num(p.engineMs), "cost" -> num(e.cost),
+          "cpu" -> num(e.components.cpu), "io" -> num(e.components.io),
+          "memory_bytes" -> num(e.components.memoryBytes), "hash_rows" -> num(e.components.hashRows)
+        )
+      }.mkString("[", ",", "]"),
+      "ms_per_1k_cost" -> obj(ratios.map((label, r) => label -> num(r))*),
+      "spread" -> num(if ratios.isEmpty then Double.NaN else ratios.map(_._2).max / ratios.map(_._2).min)
     )
 
   /** `((a JOIN b) JOIN c)` shape of the joins of a logical plan. */
@@ -248,7 +277,11 @@ object WorkloadBenchmark:
 
   /** Estimated weighted cost of the plan's root. */
   private def rootCost(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Double =
-    db.plan(bind(catalog, sql)).physical.estimates.get(0).fold(Double.NaN)(_.cost)
+    rootEstimate(db, catalog, sql).fold(Double.NaN)(_.cost)
+
+  /** The planner's estimate of the plan's root in the session's current mode. */
+  private def rootEstimate(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Option[NodeEstimate] =
+    db.plan(bind(catalog, sql)).physical.estimates.get(0)
 
   /** Worst q-error reported by EXPLAIN ANALYZE. */
   private def maxQError(db: AdaptiveDatabase, sql: String): Double =

@@ -57,20 +57,20 @@ mandatory, so the syntax never suggests that integrity is checked.
 
 ## Cost model (`adb-optimizer/cost`)
 
-`Cost(cpu, io, memoryBytes)` with saturating arithmetic (every component is clamped to
-`[0, 10^18]`, and NaN counts as the maximum), combined by `CostWeights` (cpu 1, io 8 per 8 KiB
-page, memory 0.0001 per byte):
+`Cost(cpu, io, memoryBytes, hashRows)` with saturating arithmetic (every component is clamped to
+`[0, 10^18]`, and NaN counts as the maximum), combined by `CostWeights` (cpu 1, io 4,500 per
+8 KiB page of row data, memory 0.0001 per byte, hash row 1; fitted, see [Calibration](#calibration)):
 
-| Operator | cpu | io | memory |
-|---|---|---|---|
-| scan | rows | rows · width / 8 KiB | – |
-| point lookup | 1 | 1 | – |
-| filter | 0.25 · input · conjuncts | – | – |
-| hash join | 2 · build + probe + 0.5 · output | – | build · width |
-| nested-loop join | 0.5 · outer · inner + 0.5 · output | – | inner · width |
-| aggregate | 1.5 · input + groups | – | groups · width |
-| sort | rows · log2(rows) | – | rows · width |
-| TopK | rows · (1 + log2(k)) | – | k · width |
+| Operator | cpu | hash rows | io | memory |
+|---|---|---|---|---|
+| scan | rows | – | rows · width / 8 KiB | – |
+| point lookup | 1 | – | 1 | – |
+| filter | 0.25 · input · conjuncts | – | – | – |
+| hash join | 0.5 · output | build + probe | – | build · width |
+| nested-loop join | 0.5 · outer · inner + 0.5 · output | – | – | inner · width |
+| aggregate | 1.5 · input + groups | – | – | groups · width |
+| sort | rows · log2(rows) | – | – | rows · width |
+| TopK | rows · (1 + log2(k)) | – | – | k · width |
 
 Widths come from the column statistics, or from type defaults when there are none, plus 16
 bytes per slot.
@@ -149,14 +149,31 @@ It is also where declared intents (latency first, memory first, ...) will plug i
 
 ## Calibration
 
-`scripts/benchmark-ffi.sh` reports, for every measured plan, the engine time per 1,000 estimated
-cost units (`calibration.ms_per_1k_cost`, prepared-plan path, so planning is excluded) and the
-spread between the plans. On the reference VM, the TopK workloads land at about 0.12–0.18 ms
-and the join-order plans at about 0.28–0.42 ms per 1,000 units: a spread of about 3×. Join-heavy
-plans are therefore under-costed relative to scans and TopK. That does not change the choices the
-benchmarks exercise, because the alternatives compared there differ by more than 3×, but it
-should be fixed by fitting `CostWeights` (and a per-probe-row hash join cost) to the
-calibration points. This is follow-up work.
+`scripts/benchmark-ffi.sh` records a calibration point for every measured plan: the unweighted
+cost components of the plan's root (`cpu`, `io`, `memory_bytes`, `hash_rows`) and the plan's
+median engine time on the prepared-plan path (planning excluded). The points cover join plans
+(workloads A and B, the chain and star join orders in both modes) and scan-only plans (the
+estimation queries: filter and aggregate, nothing hashed), so row reads, row operations and
+hashed rows can be told apart. `scripts/fit-cost-weights.py REPORT.json ...` fits
+
+```text
+engine_ms ≈ c + a · (cpu + memory · w_memory) + d · io + b · hash_rows
+```
+
+by non-negative least squares on the relative error (`c` is the fixed cost of a query: plan
+decoding, the FFI round trips) and prints the weights relative to one row operation:
+`io = d / a`, `hash_row = b / a`. Several reports can be pooled.
+
+Fitted on the reference VM over three runs (scale factors 1 and 2), a page of row data takes
+about 140 µs (walking the primary index and decoding about 200 rows) and a row operation about
+30 ns: `io = 4,545`, rounded to **4,500** (it was 8). Hashing adds no measurable time beyond the
+row operations already counted, so a hashed row is kept at **1** row operation (the 2.2.3
+formula counted `2 · build + probe`). Under the 2.2.3 weights, scan-heavy plans ran 4–5× slower
+per cost unit than join and TopK plans; with the fitted weights the spread is about 2× (the
+remaining variation is mostly run-to-run noise of the shared VM; the row-operation time is the
+least well determined term, because in these workloads the rows a plan reads and its row
+operations grow together). The decisions the benchmarks exercise are unchanged by the refit.
+Re-fit after changing the storage engine or the cost formulas.
 
 ## Known limitations
 

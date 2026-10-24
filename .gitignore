@@ -4,3 +4,4 @@
 **/build/
 .demo-data/
 .bench-data/
+__pycache__/

@@ -26,17 +26,21 @@ final case class JoinCost(cost: Cost, build: BuildSide, violations: Vector[Strin
   *
   * Per-operator formulas (rows are estimates; `w` is the width of a materialized row):
   *
-  * | Operator | cpu | io | memory |
-  * |---|---|---|---|
-  * | scan | rows | `rows · w / 8 KiB` | – |
-  * | point lookup | 1 | 1 | – |
-  * | filter | `0.25 · rows_in · conjuncts` | – | – |
-  * | hash join | `2 · build + probe + 0.5 · out` | – | `build · w` |
-  * | nested-loop join | `0.5 · outer · inner + 0.5 · out` | – | `inner · w` |
-  * | aggregate | `1.5 · rows_in + groups` | – | `groups · w` |
-  * | sort | `rows · log2(rows)` | – | `rows · w` |
-  * | top-k | `rows · (1 + log2(k))` | – | `k · w` |
-  * | project, limit | `0.05 · rows` | – | – |
+  * | Operator | cpu | hash rows | io | memory |
+  * |---|---|---|---|---|
+  * | scan | rows | – | `rows · w / 8 KiB` | – |
+  * | point lookup | 1 | – | 1 | – |
+  * | filter | `0.25 · rows_in · conjuncts` | – | – | – |
+  * | hash join | `0.5 · out` | `build + probe` | – | `build · w` |
+  * | nested-loop join | `0.5 · outer · inner + 0.5 · out` | – | – | `inner · w` |
+  * | aggregate | `1.5 · rows_in + groups` | – | – | `groups · w` |
+  * | sort | `rows · log2(rows)` | – | – | `rows · w` |
+  * | top-k | `rows · (1 + log2(k))` | – | – | `k · w` |
+  * | project, limit | `0.05 · rows` | – | – | – |
+  *
+  * Hashed rows have their own component (weighted by [[CostWeights.hashRow]]) because their
+  * measured cost differs from a plain row operation by a constant factor that the calibration
+  * fits; see docs/optimizer.md#calibration.
   *
   * @param estimator row counts and statistics
   * @param config    weights and engine limits
@@ -127,10 +131,10 @@ final class CostModel(estimator: CardinalityEstimator, val config: OptimizerConf
       Option.when(outRows / math.max(1.0, streamRows) > limits.maxJoinFanout)(
         f"produces ~${outRows / math.max(1.0, streamRows)}%.0f matches per row (limit ${limits.maxJoinFanout})")
     ).flatten
-    val cpu =
-      if hash then 2 * buildRows + streamRows + 0.5 * outRows
-      else 0.5 * buildRows * streamRows + 0.5 * outRows
-    JoinCost(Cost.bounded(cpu, 0, memory), build, violations)
+    val cost =
+      if hash then Cost.bounded(0.5 * outRows, 0, memory, buildRows + streamRows)
+      else Cost.bounded(0.5 * buildRows * streamRows + 0.5 * outRows, 0, memory)
+    JoinCost(cost, build, violations)
 
   /** Whether `part` is `left.column = right.column` across the two inputs. */
   private def isEquiKey(part: TypedExpr, leftSlots: Set[SlotId], rightSlots: Set[SlotId]): Boolean = part match

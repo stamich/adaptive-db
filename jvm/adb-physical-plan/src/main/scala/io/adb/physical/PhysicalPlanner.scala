@@ -4,7 +4,7 @@ import io.adb.logical.*
 import io.adb.logical.LogicalPlan as LPlan
 import io.adb.model.*
 import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
-import io.adb.optimizer.cost.CostModel
+import io.adb.optimizer.cost.{Cost, CostModel}
 import io.adb.physical.PhysicalPlan as PPlan
 
 /** Estimated output and cost of one physical node.
@@ -15,8 +15,17 @@ import io.adb.physical.PhysicalPlan as PPlan
   * @param source     what the estimate rests on
   * @param basis      for filters and joins, the rules behind the selectivity (`mcv`,
   *                   `histogram`, `ndv`, `foreign key`, `default`, ...)
+  * @param components the unweighted cumulative cost behind `cost` (the cost calibration fits
+  *                   the weights to these components and measured times)
   */
-final case class NodeEstimate(rows: Double, cost: Double, confidence: Double, source: String, basis: Vector[String] = Vector.empty) derives CanEqual
+final case class NodeEstimate(
+    rows: Double,
+    cost: Double,
+    confidence: Double,
+    source: String,
+    basis: Vector[String] = Vector.empty,
+    components: Cost = Cost.Zero
+) derives CanEqual
 
 /** Estimator and cost model used to annotate a plan. */
 final case class PlanEstimation(estimator: CardinalityEstimator, costModel: CostModel)
@@ -103,16 +112,19 @@ object PhysicalPlanner:
     /** Records the estimate of `logical` for `physical` unless it already has one (when
       * estimating); returns `physical`.
       */
-    private def annotate(physical: PPlan, logical: LPlan, cost: Option[Double] = None): PPlan =
+    private def annotate(physical: PPlan, logical: LPlan, cost: Option[Cost] = None): PPlan =
       estimation.foreach { e =>
         if !annotations.containsKey(physical) then
           val estimate = e.estimator.estimate(logical)
-          val total = cost.getOrElse(e.costModel.total(e.costModel.cost(logical)))
+          val components = cost.getOrElse(e.costModel.cost(logical))
           val basis = logical match
             case LPlan.Filter(_, predicate) => e.estimator.basis(predicate)
             case join: LPlan.Join => Vector(e.estimator.joinBasis(join))
             case _ => Vector.empty
-          annotations.put(physical, NodeEstimate(estimate.rows, total, estimate.confidence, estimate.source.label, basis))
+          annotations.put(
+            physical,
+            NodeEstimate(estimate.rows, e.costModel.total(components), estimate.confidence, estimate.source.label, basis, components)
+          )
       }
       physical
 
@@ -149,7 +161,7 @@ object PhysicalPlanner:
       )
       val ordered =
         if topK then
-          val topKCost = estimation.map(e => e.costModel.total(e.costModel.cost(input) + e.costModel.topKCost(input, limit)))
+          val topKCost = estimation.map(e => e.costModel.cost(input) + e.costModel.topKCost(input, limit))
           annotate(PPlan.TopK(translated, sortKeys(keys), limit), node, topKCost)
         else
           val sort = LPlan.Sort(input, keys)

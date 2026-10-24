@@ -99,3 +99,14 @@ final class CostModelTest:
       tinyModel.total(tinyModel.strategyCost(hash = false, BuildSide.Right, tiny.left, tiny.right, 2).cost) <
         tinyModel.total(tinyModel.strategyCost(hash = true, BuildSide.Right, tiny.left, tiny.right, 2).cost))
 
+  /** A hash join's work is its hashed rows (build plus probe), weighted by the fitted hash-row weight. */
+  @Test def hashJoinCountsHashedRows(): Unit =
+    val m = model()
+    val j = join(plan("SELECT s.v FROM big s JOIN big b ON b.small_id = s.id"))
+    val hash = m.strategyCost(hash = true, BuildSide.Right, j.left, j.right, 50_000)
+    assertEquals(200_000.0, hash.cost.hashRows, 1e-9)
+    assertEquals(25_000.0, hash.cost.cpu, 1e-9)
+    val weights = CostWeights()
+    assertEquals(25_000.0 + 200_000.0 * weights.hashRow + hash.cost.memoryBytes * weights.memory, m.total(hash.cost), 1e-6)
+    val doubled = new CostModel(new CardinalityEstimator(provider, catalog), OptimizerConfig(weights = weights.copy(hashRow = 2 * weights.hashRow)))
+    assertTrue(doubled.total(hash.cost) > m.total(hash.cost))
