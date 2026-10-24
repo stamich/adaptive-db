@@ -4,6 +4,7 @@
 //! layers use to talk to each other.
 pub mod error;
 pub mod ids;
+pub mod key_encoding;
 pub mod key_range;
 pub mod location;
 pub mod row;
@@ -12,6 +13,7 @@ pub mod version_key;
 
 pub use error::CoreError;
 pub use ids::{CommitTs, FieldId, Lsn, PageId, RowId, TupleSlot, TxId};
+pub use key_encoding::{decode_key, encode_key, encode_value, prefix_successor, Direction};
 pub use key_range::KeyRange;
 pub use location::RowLocation;
 pub use row::Row;
