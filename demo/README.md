@@ -1,6 +1,6 @@
-# Adaptive DB 2.2.3 Demo
+# Adaptive DB 2.3.0 Demo
 
-This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.2.3**.
+This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.3.0**.
 It runs one current binary and labels each phase with the milestone where the demonstrated capability first became part of the project.
 
 ## Run
@@ -31,10 +31,11 @@ The script builds `adb-ffi`, resets only the repository-local `.demo-data` direc
 | 2.0.1 | SQL parser, persistent catalog, binder, optimizer, physical planner, DDL/DML gateway |
 | 2.1.3 | JOIN / LEFT JOIN / self-join, GROUP BY with aggregates, ORDER BY, TopK, NestedLoopJoin fallback, EXPLAIN ANALYZE with planner decisions and the native runtime profile |
 | 2.2.3 | `REFERENCES ... NOT ENFORCED` hints, EXPLAIN without and with statistics, `ANALYZE`, join reordering, estimates per node, EXPLAIN ANALYZE q-error, cost vs rule mode, stale-statistics warning |
+| 2.3.0 | `CREATE INDEX` / `SHOW INDEXES` / `DROP INDEX`, covering index scans, row fetches, ORDER BY ... LIMIT read from a (backward) index without TopK, `AS OF VERSION` through an index, cost-based choice between index and sequential scans with rejected alternatives in EXPLAIN |
 
 The demo intentionally performs a real close/reopen between the 1.0.1 and 1.5.1 phases to make persistence visible rather than merely describing it.
 
-See `FEATURE-MAP.md` for the architecture mapping and `sql/2.0.1-tour.sql`, `sql/2.1.3-relational.sql` and `sql/2.2.3-statistics.sql` for the human-readable SQL sequence.
+See `FEATURE-MAP.md` for the architecture mapping and `sql/2.0.1-tour.sql`, `sql/2.1.3-relational.sql`, `sql/2.2.3-statistics.sql` and `sql/2.3.0-indexes.sql` for the human-readable SQL sequence.
 
 A Rust-only relational demo (plan wire round trip, HashJoin, Aggregate, TopK, runtime profile) runs with
 `cargo run --release -p adb-rust-demo`.
