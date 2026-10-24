@@ -58,10 +58,27 @@ final class StatisticsCodecTest:
       )
     do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
 
-  /** Format 2 documents (2.3.0, with index statistics) are read as well. */
+  /** Format 2 documents (2.3.0) carry index statistics; format 1 documents have none. */
   @Test def readsFormatTwo(): Unit =
-    val v2 = document.replace("\"format_version\":1", "\"format_version\":2")
-    assertEquals(StatisticsCodec.decode(document).rowCount, StatisticsCodec.decode(v2).rowCount)
+    val index = ""","indexes":[{"index_id":4,"entries":100,"stored_entries":120,"height":2,""" +
+      """"leaf_pages":3,"avg_key_bytes":9.0,"distinct_prefixes":[10,100],"pk_locality":0.25}]}"""
+    val v2 = document.replace("\"format_version\":1", "\"format_version\":2").stripSuffix("}") + index
+    val decoded = StatisticsCodec.decode(v2)
+    assertEquals(StatisticsCodec.decode(document).rowCount, decoded.rowCount)
+    val stats = decoded.index(IndexId(4)).get
+    assertEquals(Some(10L), stats.distinctPrefix(1))
+    assertEquals(Some(100L), stats.distinctPrefix(2))
+    assertEquals(None, stats.distinctPrefix(3))
+    assertEquals(0.25, stats.pkLocality)
+    assertEquals(3L, stats.leafPages)
+    assertTrue(StatisticsCodec.decode(document).indexes.isEmpty)
+    for bad <- Vector(
+        v2.replace("\"stored_entries\":120", "\"stored_entries\":90"),
+        v2.replace("[10,100]", "[10,101]"),
+        v2.replace("\"pk_locality\":0.25", "\"pk_locality\":1.5"),
+        document.replace("\"format_version\":1", "\"format_version\":2")
+      )
+    do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
 
   /** Statistics turn stale above 20% changed rows and lose half their confidence. */
   @Test def freshnessAndConfidence(): Unit =

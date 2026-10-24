@@ -26,6 +26,10 @@ object StatisticsCodec:
     val rowCount = long(root, "row_count")
     val columns = array(root, "columns").map(column => decodeColumn(obj(column, "column"), rowCount))
     require(columns.map(_.fieldId).distinct.size == columns.size, "duplicate column statistics")
+    val indexes =
+      if version < 2 then Vector.empty
+      else array(root, "indexes").map(index => decodeIndex(obj(index, "index")))
+    require(indexes.map(_.indexId).distinct.size == indexes.size, "duplicate index statistics")
     TableStatistics(
       entityId = EntityId(long(root, "entity_id")),
       rowCount = rowCount,
@@ -34,8 +38,29 @@ object StatisticsCodec:
       modificationsAtAnalyze = long(root, "modifications_at_analyze"),
       sampledRows = long(root, "sampled_rows"),
       exact = bool(root, "exact"),
-      columns = columns.map(c => c.fieldId -> c).toMap
+      columns = columns.map(c => c.fieldId -> c).toMap,
+      indexes = indexes.map(i => i.indexId -> i).toMap
     )
+
+  /** Decodes one index and checks its counts. */
+  private def decodeIndex(index: Map[String, Any]): IndexStatistics =
+    val decoded = IndexStatistics(
+      indexId = IndexId(long(index, "index_id")),
+      entries = long(index, "entries"),
+      storedEntries = long(index, "stored_entries"),
+      height = long(index, "height").min(Int.MaxValue).toInt,
+      leafPages = long(index, "leaf_pages"),
+      avgKeyBytes = double(index, "avg_key_bytes"),
+      distinctPrefixes = array(index, "distinct_prefixes").map {
+        case v: Long if v >= 0 => v
+        case other => throw new IllegalArgumentException(s"invalid distinct prefix count $other")
+      },
+      pkLocality = double(index, "pk_locality")
+    )
+    require(decoded.entries <= decoded.storedEntries, s"index ${decoded.indexId.value} has more visible than stored entries")
+    require(decoded.distinctPrefixes.forall(_ <= decoded.entries), s"index ${decoded.indexId.value} has more distinct prefixes than entries")
+    require(decoded.pkLocality <= 1.0, s"index ${decoded.indexId.value} has a locality above 1")
+    decoded
 
   /** Decodes one column and checks its counts against the table's row count. */
   private def decodeColumn(column: Map[String, Any], rowCount: Long): ColumnStatistics =
