@@ -239,6 +239,21 @@ impl Projections {
         self.visible(row_id, record, ts)
     }
 
+    /// Many rows as seen by a snapshot at `ts`; `row_ids` must ascend (one descent per leaf of
+    /// the primary index).
+    pub fn get_many_at(
+        &self,
+        row_ids: &[RowId],
+        ts: CommitTs,
+    ) -> Result<Vec<Option<Row>>, StorageError> {
+        let records = self.current.get_many(row_ids)?;
+        row_ids
+            .iter()
+            .zip(records)
+            .map(|(row_id, record)| self.visible(*row_id, record, ts))
+            .collect()
+    }
+
     /// Full history of a row, oldest first; the current state appears as an open interval.
     pub fn history(&self, row_id: RowId) -> Result<Vec<HistoricalVersion>, StorageError> {
         let mut history = self.versions.history(row_id)?;

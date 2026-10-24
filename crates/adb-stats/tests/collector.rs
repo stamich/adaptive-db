@@ -1,6 +1,6 @@
 //! `ANALYZE` collector: exact figures, sketches, sampling, limits and determinism.
 use adb_core::{CommitTs, KeyRange, Row, RowId, Value};
-use adb_execution::{DataSource, ExecutionError};
+use adb_execution::{DataSource, ExecutionError, IndexAccess};
 use adb_stats::{analyze, AnalyzeOptions, StatsError, TableStatistics};
 
 /// Entity analyzed by every test.
@@ -13,6 +13,9 @@ struct Synthetic<F: Fn(u64) -> Row + Send + Sync> {
     /// Row generator.
     generate: F,
 }
+
+/// The synthetic entity has no indexes.
+impl<F: Fn(u64) -> Row + Send + Sync> IndexAccess for Synthetic<F> {}
 
 impl<F: Fn(u64) -> Row + Send + Sync> DataSource for Synthetic<F> {
     /// Always the first commit.

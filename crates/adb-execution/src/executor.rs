@@ -1,14 +1,15 @@
 //! Turns a physical plan into a pull-based operator tree and exposes it as a cursor.
 use std::sync::Arc;
 
-use adb_core::KeyRange;
+use adb_core::{IndexId, KeyRange};
 use parking_lot::Mutex;
 
 use crate::{
     operator::{
         aggregate::AggregateOperator, filter::FilterOperator, hash_join::HashJoinOperator,
-        limit::LimitOperator, nested_loop_join::NestedLoopJoinOperator,
-        point_lookup::PointLookupOperator, profiled::Profiled, project::ProjectOperator,
+        index_scan::IndexScanOperator, limit::LimitOperator,
+        nested_loop_join::NestedLoopJoinOperator, point_lookup::PointLookupOperator,
+        profiled::Profiled, project::ProjectOperator, row_fetch::RowFetchOperator,
         scan::ScanOperator, sort::SortOperator, top_k::TopKOperator, Operator,
     },
     profile::QueryProfile,
@@ -135,6 +136,26 @@ fn build_operator(
             ("entity_scan", KeyRange::entity(entity_id)),
             columns,
             width,
+        )),
+
+        PhysicalPlan::IndexScan {
+            index_id,
+            bounds,
+            direction,
+            columns,
+            limit,
+        } => Box::new(IndexScanOperator::new(
+            source.clone(),
+            (IndexId(index_id), bounds, direction),
+            columns,
+            limit,
+            width,
+        )),
+
+        PhysicalPlan::RowFetch { input, columns } => Box::new(RowFetchOperator::new(
+            child(input)?,
+            source.clone(),
+            columns,
         )),
 
         PhysicalPlan::Filter { input, predicate } => {

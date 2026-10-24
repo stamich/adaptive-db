@@ -74,6 +74,7 @@ name = "adb-execution"
 version = "2.2.3"
 dependencies = [
  "adb-core",
+ "adb-index",
  "parking_lot",
  "serde",
  "serde_json",

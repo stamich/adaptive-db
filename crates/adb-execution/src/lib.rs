@@ -24,7 +24,7 @@ pub mod wire;
 pub use batch::{ColumnVector, PhysicalType, RecordBatch};
 pub use cancellation::CancellationToken;
 pub use context::{ExecutionContext, DEFAULT_BATCH_SIZE};
-pub use datasource::DataSource;
+pub use datasource::{DataSource, IndexAccess, IndexPage};
 pub use error::ExecutionError;
 pub use exec_row::{ExecRow, RowBatch};
 pub use executor::{Executor, QueryCursor};

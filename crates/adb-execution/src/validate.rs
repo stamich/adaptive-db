@@ -49,6 +49,34 @@ impl Validator {
             | PhysicalPlan::Scan { columns }
             | PhysicalPlan::EntityScan { columns, .. } => self.scan_columns(columns),
 
+            PhysicalPlan::IndexScan {
+                bounds,
+                columns,
+                limit,
+                ..
+            } => {
+                if let Some(limit) = limit {
+                    check_limit("index scan limit", *limit)?;
+                }
+                self.list("index bound values", bounds.prefix.len())?;
+                self.scan_columns(columns)
+            }
+
+            PhysicalPlan::RowFetch { input, columns } => {
+                let input_out = self.node(input, depth + 1)?;
+                self.list("fetched columns", columns.len())?;
+                let fetched: Vec<SlotId> = columns.iter().map(|column| column.slot).collect();
+                for slot in &fetched {
+                    if input_out.contains(slot) {
+                        return Err(format!(
+                            "row fetch slot {slot} is already produced by its input"
+                        ));
+                    }
+                }
+                self.new_slots(&fetched, "fetched columns")?;
+                Ok([input_out, fetched].concat())
+            }
+
             PhysicalPlan::Filter { input, predicate } => {
                 let output = self.node(input, depth + 1)?;
                 self.expr(predicate, &output, "filter predicate")?;

@@ -31,9 +31,10 @@ use std::{
 };
 
 use adb_core::encode_key;
-use adb_core::{CommitTs, KeyRange, Row, RowId};
+use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId};
 use adb_execution::{
-    DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
+    DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
+    QueryCursor,
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
@@ -751,4 +752,116 @@ impl DataSource for Database {
             .scan_page(range, after, limit, snapshot_ts, include_history)
             .map_err(|error| to_execution(error.into()))
     }
+}
+
+impl IndexAccess for Database {
+    /// One page of an index scan; checks that the index exists, serves the snapshot and holds
+    /// every requested field.
+    fn index_scan_page(
+        &self,
+        index: IndexId,
+        bounds: &IndexBounds,
+        direction: ScanDirection,
+        fields: &[FieldId],
+        resume: Option<&[u8]>,
+        limit: usize,
+        snapshot_ts: CommitTs,
+    ) -> Result<IndexPage, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        let projections = self.inner.projections.read();
+        let handle = projections.index(index).ok_or_else(|| {
+            ExecutionError::DataSource(format!("index {} does not exist", index.0))
+        })?;
+        if !handle.serves(snapshot_ts) {
+            return Err(ExecutionError::DataSource(format!(
+                "{} cannot serve snapshot {} (it serves {} to {}); plan the query again",
+                handle.name(),
+                snapshot_ts.0,
+                handle.usable_from().0,
+                handle.watermark().0
+            )));
+        }
+        let definition = handle.definition();
+        if let Some(field) = fields.iter().find(|field| !definition.covers(**field)) {
+            return Err(ExecutionError::InvalidPlan(format!(
+                "index {} holds neither key nor covered field {field}",
+                definition.name
+            )));
+        }
+        // Visible entries are usually dense; the examined cap keeps a page bounded when a long
+        // stretch of ended versions has to be skipped.
+        let page = handle
+            .projection
+            .scan(
+                bounds,
+                snapshot_ts,
+                direction,
+                resume,
+                limit,
+                limit.saturating_mul(4).max(256),
+            )
+            .map_err(|error| to_execution(error.into()))?;
+        let positions: Vec<(FieldId, Position)> = fields
+            .iter()
+            .map(|field| {
+                let position = match definition.columns.iter().position(|c| c.field_id == *field) {
+                    Some(at) => Position::Key(at),
+                    None => Position::Included(
+                        definition
+                            .include
+                            .iter()
+                            .position(|f| f == field)
+                            .expect("covered"),
+                    ),
+                };
+                (*field, position)
+            })
+            .collect();
+        let rows = page
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let mut row = Row::new();
+                for (field, position) in &positions {
+                    let value = match position {
+                        Position::Key(at) => &entry.key[*at],
+                        Position::Included(at) => &entry.included[*at],
+                    };
+                    if !matches!(value, adb_core::Value::Null) {
+                        row.fields.insert(*field, value.clone());
+                    }
+                }
+                (entry.row_id, row)
+            })
+            .collect();
+        Ok(IndexPage {
+            rows,
+            resume: page.resume,
+            examined: page.examined,
+        })
+    }
+
+    /// Rows at a snapshot, one descent per leaf of the primary index.
+    fn fetch_rows(
+        &self,
+        row_ids: &[RowId],
+        snapshot_ts: CommitTs,
+    ) -> Result<Vec<Option<Row>>, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        self.inner
+            .projections
+            .read()
+            .get_many_at(row_ids, snapshot_ts)
+            .map_err(|error| to_execution(error.into()))
+    }
+}
+
+/// Where a requested field sits in an index entry.
+enum Position {
+    /// Key column at this position.
+    Key(usize),
+    /// Covered column at this position.
+    Included(usize),
 }
