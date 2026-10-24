@@ -22,6 +22,8 @@ use crate::DbError;
 pub const INDEXES_DIR: &str = "indexes";
 /// Catalog file inside [`INDEXES_DIR`].
 pub const CATALOG_FILE: &str = "catalog.meta";
+/// Longest index name, in bytes (re-exported for the C ABI).
+pub const MAX_INDEX_NAME_BYTES: usize = adb_index::MAX_INDEX_NAME_BYTES;
 /// Most indexes of one database.
 pub const MAX_INDEXES: usize = 256;
 /// Most indexes of one entity.

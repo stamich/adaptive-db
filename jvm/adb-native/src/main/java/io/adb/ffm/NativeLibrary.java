@@ -5,7 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v5
+/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v6
  * function as a downcall handle, and translates native status codes into exceptions. */
 final class NativeLibrary implements AutoCloseable {
     /** Upper bound on the length of a native error message. */
@@ -13,7 +13,7 @@ final class NativeLibrary implements AutoCloseable {
     /** Whether {@link #close()} already released the arena. */
     private boolean closed;
     /** C ABI version this binding was written against; any other version is rejected. */
-    static final int EXPECTED_ABI = 5;
+    static final int EXPECTED_ABI = 6;
 
     /** Shared arena that keeps the library mapped until {@link #close()}. */
     final Arena arena = Arena.ofShared();
@@ -78,6 +78,12 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle modificationsSinceAnalyze;
     /** {@code adb_statistics_generation}: generation of an entity's statistics document (ABI 5). */
     final MethodHandle statisticsGeneration;
+    /** {@code adb_create_index_json}: creates and builds a secondary index (ABI 6). */
+    final MethodHandle createIndex;
+    /** {@code adb_drop_index}: drops a secondary index by name (ABI 6). */
+    final MethodHandle dropIndex;
+    /** {@code adb_list_indexes_json}: every index with the snapshots it serves (ABI 6). */
+    final MethodHandle listIndexes;
 
     /**
      * Loads the library, binds every downcall, and verifies the ABI version.
@@ -116,6 +122,9 @@ final class NativeLibrary implements AutoCloseable {
         statistics = downcall("adb_statistics_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         modificationsSinceAnalyze = downcall("adb_modifications_since_analyze", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         statisticsGeneration = downcall("adb_statistics_generation", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        createIndex = downcall("adb_create_index_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        dropIndex = downcall("adb_drop_index", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+        listIndexes = downcall("adb_list_indexes_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);

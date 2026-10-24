@@ -2,8 +2,10 @@
 
 /// Native ABI version. 3 = Milestone 2.0.3 (CDC, checkpoint, vacuum, new status codes);
 /// 4 = Milestone 2.1 (plan wire v2, batch format v2, query profiles, resource statuses);
-/// 5 = Milestone 2.2.3 (ANALYZE, statistics documents, modification counters, profile node ids).
-pub const ABI_VERSION: u32 = 5;
+/// 5 = Milestone 2.2.3 (ANALYZE, statistics documents, modification counters, profile node ids);
+/// 6 = Milestone 2.3.0 (secondary indexes, plan wire v3, statistics format 2, order-preserving
+/// primary keys, `ADB_INCOMPATIBLE_FORMAT`).
+pub const ABI_VERSION: u32 = 6;
 /// Engine version reported through the C ABI.
 static ENGINE_VERSION: &[u8] = b"2.2.3";
 

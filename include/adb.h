@@ -1,5 +1,13 @@
 /*
- * Adaptive DB native C ABI, version 5 (Milestone 2.2.3).
+ * Adaptive DB native C ABI, version 6 (Milestone 2.3.0).
+ *
+ * ABI 6 changes (vs. 5): secondary indexes — adb_create_index_json, adb_drop_index,
+ * adb_list_indexes_json (see docs/indexes.md); plans are plan wire v3 documents
+ * ({"wire_version":3,...}, adding index_scan and row_fetch); statistics documents are format 2
+ * (index statistics; format 1 still read); primary keys passed to the row functions are stored
+ * order-preserving (data format 2) and the change feed reports them as signed decimal strings;
+ * a directory in an older data format is refused with ADB_INCOMPATIBLE_FORMAT (migrate it with
+ * adb-migrate).
  *
  * ABI 5 changes (vs. 4): optimizer statistics — adb_analyze_entity_json, adb_statistics_json,
  * adb_statistics_generation, adb_modifications_since_analyze (see docs/statistics.md); every
@@ -43,10 +51,11 @@ typedef enum AdbStatus {
     ADB_LOG_TRUNCATED = 9,  /* change-log position no longer retained */
     ADB_RESOURCE_LIMIT = 10,      /* query exceeded memory, row, fanout or comparison limits */
     ADB_ARITHMETIC_OVERFLOW = 11, /* exact computation (e.g. INT64 SUM) overflowed */
+    ADB_INCOMPATIBLE_FORMAT = 12, /* data directory in another data format: run adb-migrate (ABI 6) */
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 5
+#define ADB_ABI_VERSION 6
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -189,6 +198,33 @@ AdbStatus adb_modifications_since_analyze(
     AdbDatabaseHandle* db,
     uint64_t entity_id,
     uint64_t* out_count);
+
+/* ---- secondary indexes (ABI 6) ---- */
+
+/*
+ * Creates and builds an index. spec is a UTF-8 JSON object (at most 64 KiB):
+ *   {"name":"idx_balance","entity_id":3,"columns":[{"field_id":2,"direction":"asc"}],"include":[3]}
+ * (name [A-Za-z_][A-Za-z0-9_]* up to 128 bytes, unique case-insensitively; 1..16 key columns,
+ * direction "asc" (default) or "desc"; up to 32 covered "include" fields; no field twice).
+ * The build blocks commits, then a checkpoint publishes the index. Returns the index status as a
+ * JSON buffer (an AdbBatchHandle):
+ *   {"id":N,"name":"...","entity_id":N,"columns":[...],"include":[...],"state":"active",
+ *    "created_at_ts":N,"usable_from_ts":N,"watermark_ts":N}
+ * The index serves snapshots usable_from_ts..=watermark_ts.
+ * Errors: ADB_INVALID_ARGUMENT for a malformed or invalid spec, a taken name, too many indexes,
+ * or a row whose encoded key (512 bytes) or covered values (1 KiB) exceed the index limits.
+ */
+AdbStatus adb_create_index_json(
+    AdbDatabaseHandle* db,
+    const uint8_t* spec_ptr,
+    size_t spec_len,
+    AdbBatchHandle** out_json);
+
+/* Drops the index named by a UTF-8 string (at most 128 bytes); ADB_NOT_FOUND if there is none. */
+AdbStatus adb_drop_index(AdbDatabaseHandle* db, const uint8_t* name_ptr, size_t name_len);
+
+/* Every index as a JSON buffer {"indexes":[status, ...]} in id order (status as above). */
+AdbStatus adb_list_indexes_json(AdbDatabaseHandle* db, AdbBatchHandle** out_json);
 
 #ifdef __cplusplus
 }
