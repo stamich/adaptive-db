@@ -8,14 +8,22 @@
 //! * [`definition`] — what an index covers ([`IndexSpec`], [`IndexDefinition`]), its lifecycle
 //!   ([`IndexState`]), validation and limits;
 //! * [`entry`] — MVCC-versioned entries `(key, row id, begin) -> (end, covered values)` over an
-//!   order-preserving key encoding, so snapshot reads at older timestamps stay correct.
+//!   order-preserving key encoding, so snapshot reads at older timestamps stay correct;
+//! * [`bounds`] — scan bounds in SQL terms (equality prefix plus one range) and their exact
+//!   translation into tree key ranges;
+//! * [`store`] — [`IndexProjection`]: maintenance from row changes, bounded keyset scans at a
+//!   snapshot, vacuum, builds, structural checks and journaled persistence.
+pub mod bounds;
 pub mod definition;
 pub mod entry;
 pub mod error;
+pub mod store;
 
+pub use bounds::{ByteRange, IndexBounds, ValueBound};
 pub use definition::{
     IndexColumn, IndexDefinition, IndexSpec, IndexState, MAX_INCLUDE_BYTES, MAX_INCLUDE_COLUMNS,
     MAX_INDEX_KEY_BYTES, MAX_INDEX_NAME_BYTES, MAX_KEY_COLUMNS,
 };
 pub use entry::{IndexEntry, OPEN};
 pub use error::IndexError;
+pub use store::{IndexProjection, ScanDirection, ScanPage};

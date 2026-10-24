@@ -101,6 +101,7 @@ version = "2.2.3"
 dependencies = [
  "adb-btree",
  "adb-core",
+ "adb-journal",
  "serde",
  "tempfile",
  "thiserror",
