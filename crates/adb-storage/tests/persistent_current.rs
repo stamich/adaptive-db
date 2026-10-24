@@ -116,3 +116,20 @@ fn entity_scan_is_paged_and_confined_to_the_entity() {
     assert!(seen.iter().all(|row_id| row_id.entity_id() == 2));
     assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
 }
+
+/// Batched reads return the same records as single reads, `None` for absent rows.
+#[test]
+fn get_many_matches_single_reads() {
+    let dir = tempdir().unwrap();
+    let store = PersistentCurrentStore::open(dir.path(), 64).unwrap();
+    for pk in (0..600u128).step_by(2) {
+        store
+            .put_at_lsn(RowId(pk), &record(1, pk as i64), Lsn(1))
+            .unwrap();
+    }
+    let wanted: Vec<RowId> = (0..600u128).step_by(5).map(RowId).collect();
+    let batched = store.get_many(&wanted).unwrap();
+    for (row_id, record) in wanted.iter().zip(batched) {
+        assert_eq!(record, store.get(*row_id).unwrap());
+    }
+}

@@ -110,6 +110,41 @@ impl<K: TreeKey> BPlusTree<K> {
             .map(|index| leaf.values[index]))
     }
 
+    /// Exact-match lookups of many keys in one pass; `keys` must be in ascending order.
+    ///
+    /// Consecutive keys that fall into the same leaf share one descent: a key not greater than
+    /// the last key of the previously visited leaf is looked up in that leaf (it routes there,
+    /// because the previous key did and the keys ascend). Row fetches of an index scan sort
+    /// their row ids and use this to visit each leaf once.
+    pub fn get_many(&self, keys: &[K]) -> Result<Vec<Option<RowLocation>>, BTreeError> {
+        if keys.windows(2).any(|pair| pair[0] > pair[1]) {
+            return Err(BTreeError::Limit(
+                "get_many keys must be in ascending order".into(),
+            ));
+        }
+        let root = self.root.lock();
+        let mut out = Vec::with_capacity(keys.len());
+        let mut leaf: Option<LeafNode<K>> = None;
+        for key in keys {
+            let reusable = leaf
+                .as_ref()
+                .and_then(|leaf| leaf.keys.last())
+                .is_some_and(|last| key <= last);
+            if !reusable {
+                leaf = Some(self.leaf_for(*root, Some(key))?.1);
+            }
+            let current = leaf.as_ref().expect("a leaf was read");
+            out.push(
+                current
+                    .keys
+                    .binary_search(key)
+                    .ok()
+                    .map(|index| current.values[index]),
+            );
+        }
+        Ok(out)
+    }
+
     /// Greatest entry whose key is `<= key`.
     pub fn get_floor(&self, key: K) -> Result<Option<(K, RowLocation)>, BTreeError> {
         let root = self.root.lock();
