@@ -1,8 +1,10 @@
 package io.adb.physical
 
+import io.adb.catalog.IndexCatalog
 import io.adb.logical.*
+import io.adb.optimizer.access.{AccessPath, AccessPathEnumerator}
 import io.adb.optimizer.cardinality.CardinalityEstimator
-import io.adb.optimizer.cost.{BuildSide, CostModel, JoinCost}
+import io.adb.optimizer.cost.{AccessEstimate, BuildSide, CostModel, JoinCost}
 
 /** Statistics-driven strategy choices (the default since 2.2.3).
   *
@@ -14,11 +16,22 @@ import io.adb.optimizer.cost.{BuildSide, CostModel, JoinCost}
   *    which limit the estimates exceed (the engine still enforces the limit at run time).
   *  - '''ORDER BY + LIMIT''': a TopK whenever the engine accepts the limit (its memory is
   *    bounded by the limit, a full sort's by the input), explained with the estimated input size.
+  *  - '''access paths''' (since 2.3.0): the sequential scan and every index scan the
+  *    [[AccessPathEnumerator]] finds for the relation's filter are costed by
+  *    [[CostModel.accessCost]]; the cheapest wins.
   *
   * @param estimator cardinality estimates (shared with the cost model)
   * @param costModel operator costs
+  * @param indexes   indexes of the engine
+  * @param snapshot  the query's `AS OF` snapshot (`None` = latest); indexes that cannot serve it
+  *                  are not considered
   */
-final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostModel) extends PlanningPolicy:
+final class CostBasedPolicy(
+    estimator: CardinalityEstimator,
+    costModel: CostModel,
+    indexes: IndexCatalog = IndexCatalog.Empty,
+    snapshot: Option[Long] = None
+) extends PlanningPolicy:
   /** Cheapest feasible strategy and build side. */
   def chooseJoin(request: JoinRequest): JoinChoice =
     val out = estimator.estimate(request.join)
@@ -49,6 +62,17 @@ final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostMode
     if limit > DefaultPlanningPolicy.MaxTopK then (false, s"LIMIT $limit exceeds the TopK bound ${DefaultPlanningPolicy.MaxTopK}; full sort")
     else (true, f"keeps ${math.min(limit.toDouble, rows)}%.0f of ~$rows%.0f rows in memory instead of sorting all of them")
 
+  /** The cheapest access path of the relation; listed by EXPLAIN when an index was considered. */
+  override def chooseAccess(request: AccessRequest): AccessChoice =
+    val candidates = AccessPathEnumerator.candidates(request.relation, request.conjuncts, indexes.indexes(request.relation.entity.id), snapshot)
+    val estimates = candidates.map(path => costModel.accessCost(path))
+    val best = estimates.minBy(e => costModel.total(e.cost))
+    val others = estimates.filterNot(_ eq best)
+    val reason =
+      f"cost ${costModel.total(best.cost)}%.1f, est. rows=${best.rows}%.0f" +
+        others.minByOption(e => costModel.total(e.cost)).fold("")(o => f"; next best ${CostBasedPolicy.describe(o.path)} cost ${costModel.total(o.cost)}%.1f")
+    AccessChoice(best.path, reason, Some(best), explain = candidates.size > 1)
+
   /** `; next best: cost N` for the cheapest rejected alternative, if any. */
   private def alternative(others: Vector[JoinCost]): String =
     others.minByOption(c => (c.violations.size, costModel.total(c.cost))).fold("") { c =>
@@ -60,3 +84,12 @@ final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostMode
     case LogicalPlan.TableScan(relation) => relation.alias
     case LogicalPlan.PointLookup(relation, _) => relation.alias
     case other => other.children.map(aliases).mkString(",")
+
+/** Descriptions of access paths for EXPLAIN. */
+object CostBasedPolicy:
+  /** `entity_scan` or `index_scan <name> [backward] [covering]`. */
+  def describe(path: AccessPath): String = path match
+    case AccessPath.SeqScan(_, _) => "entity_scan"
+    case scan: AccessPath.IndexScan =>
+      s"index_scan ${scan.index.name}" + (if scan.backward then " backward" else "") + (if scan.covering then " (covering)" else " + row_fetch")
+

@@ -110,3 +110,31 @@ final class CostModelTest:
     assertEquals(25_000.0 + 200_000.0 * weights.hashRow + hash.cost.memoryBytes * weights.memory, m.total(hash.cost), 1e-6)
     val doubled = new CostModel(new CardinalityEstimator(provider, catalog), OptimizerConfig(weights = weights.copy(hashRow = 2 * weights.hashRow)))
     assertTrue(doubled.total(hash.cost) > m.total(hash.cost))
+
+  /** Index access costs: covering scans skip the fetch, locality makes fetches sequential, and an
+    * ordered scan that stops early costs its fraction plus the full descent.
+    */
+  @Test def indexAccessCosts(): Unit =
+    import io.adb.catalog.{IndexInfo, IndexKeyColumn}
+    import io.adb.optimizer.access.{AccessPath, IndexPredicateMatcher}
+    val bound = new Binder(catalog).bind(new SqlParser().parse("SELECT b.v FROM big b WHERE b.small_id = 3")).asInstanceOf[BoundSelect]
+    val relation = bound.base
+    val conjuncts = TypedExpr.conjuncts(bound.predicate.get)
+    val big = catalog.entity("big").get.id
+    val index = IndexInfo(IndexId(1), "i", big, Vector(IndexKeyColumn(FieldId(2), false)), Vector(FieldId(3)), 0, 0, 1)
+    val matched = IndexPredicateMatcher.matchIndex(relation, index, conjuncts)
+    val m = model()
+    val covering = m.accessCost(AccessPath.IndexScan(relation, matched, backward = false, covering = true))
+    val fetching = m.accessCost(AccessPath.IndexScan(relation, matched, backward = false, covering = false))
+    val seq = m.accessCost(AccessPath.SeqScan(relation, conjuncts))
+    assertTrue(m.total(covering.cost) < m.total(fetching.cost))
+    assertTrue(m.total(fetching.cost) < m.total(seq.cost), "1 of 10 values: the index wins")
+    assertEquals(fetching.read, fetching.cost.randomIo - 2.0, 1e-9, "one random fetch per matched row plus a descent of 2")
+    val local = new CostModel(new CardinalityEstimator(StatisticsProvider.of(
+      EntityStatistics(TableStatistics(big, 100_000, 30, 1, 0, 30_000, false, Map.empty,
+        Map(IndexId(1) -> IndexStatistics(IndexId(1), 100_000, 100_000, 3, 500, 9, Vector(10), 1.0))), 0)), catalog), OptimizerConfig.Default)
+    val sequentialFetch = local.accessCost(AccessPath.IndexScan(relation, matched, backward = false, covering = false))
+    assertEquals(3.0, sequentialFetch.cost.randomIo, 1e-9, "fetches in storage order are not random")
+    val half = m.accessCost(AccessPath.IndexScan(relation, matched, backward = false, covering = true), fraction = 0.5)
+    assertTrue(m.total(half.cost) < m.total(covering.cost))
+    assertEquals(covering.cost.randomIo, half.cost.randomIo, 1e-9, "the descent is paid in full")

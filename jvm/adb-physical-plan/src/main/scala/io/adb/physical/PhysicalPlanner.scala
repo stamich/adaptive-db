@@ -4,7 +4,8 @@ import io.adb.logical.*
 import io.adb.logical.LogicalPlan as LPlan
 import io.adb.model.*
 import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
-import io.adb.optimizer.cost.{Cost, CostModel}
+import io.adb.optimizer.access.AccessPath
+import io.adb.optimizer.cost.{AccessEstimate, Cost, CostModel}
 import io.adb.physical.PhysicalPlan as PPlan
 
 /** Estimated output and cost of one physical node.
@@ -132,9 +133,58 @@ object PhysicalPlanner:
       }
       physical
 
+    /** Records `estimate` for `physical` (a node no logical operator stands for, such as the
+      * index scan below a residual filter) unless it already has one; returns `physical`.
+      */
+    private def annotateWith(physical: PPlan, estimate: NodeEstimate): PPlan =
+      if estimation.isDefined && !annotations.containsKey(physical) then annotations.put(physical, estimate)
+      physical
+
+    /** Reads `relation` (a bare scan, or the scan under the filter `logical` with `conjuncts`)
+      * with the access path the policy chooses.
+      */
+    private def access(logical: LPlan, relation: BoundRelation, conjuncts: Vector[TypedExpr]): PPlan =
+      val choice = policy.chooseAccess(AccessRequest(relation, conjuncts))
+      if choice.explain then decisions += PlanDecision(s"access ${relation.alias}", CostBasedPolicy.describe(choice.path), choice.reason)
+      choice.path match
+        case AccessPath.SeqScan(_, _) =>
+          logical match
+            case LPlan.Filter(scan @ LPlan.TableScan(_), predicate) =>
+              PPlan.Filter(annotate(PPlan.EntityScan(relation.entity.id, columns(relation)), scan), expr(predicate))
+            case _ => PPlan.EntityScan(relation.entity.id, columns(relation))
+        case scan: AccessPath.IndexScan =>
+          estimation.zip(choice.estimate).foreach((e, chosen) => e.costModel.overrideCost(logical, chosen.cost))
+          indexPlan(scan, choice.estimate, None)
+
+    /** The physical plan of an index access: `IndexScan`, then (only if the residual uses
+      * covered columns) a filter applied before the fetch, then `RowFetch` for the columns the
+      * index does not hold, then the rest of the residual.
+      */
+    private def indexPlan(scan: AccessPath.IndexScan, estimate: Option[AccessEstimate], limit: Option[Int]): PPlan =
+      val relation = scan.relation
+      val (covered, fetched) = columns(relation).partition(column => scan.index.covers(column.fieldId))
+      val matched = scan.matched
+      val bounds = IndexBounds(
+        matched.equalities.map(_._3),
+        matched.lower.map((end, _) => ValueBound(end.value, end.inclusive)),
+        matched.upper.map((end, _) => ValueBound(end.value, end.inclusive))
+      )
+      val direction = if scan.backward then ScanDirection.Backward else ScanDirection.Forward
+      val indexScan = PPlan.IndexScan(scan.index.id, bounds, direction, covered, limit)
+      estimation.zip(estimate).foreach { (e, chosen) =>
+        val base = e.estimator.estimate(LPlan.TableScan(relation))
+        annotateWith(indexScan, NodeEstimate(chosen.read, e.costModel.total(chosen.cost), base.confidence * 0.9, base.source.label, chosen.basis, chosen.cost))
+      }
+      val coveredSlots = covered.map(_.slot).toSet
+      val (early, late) = scan.residual.partition(_.slots.subsetOf(coveredSlots))
+      val filtered = TypedExpr.conjunction(early).fold(indexScan: PPlan)(r => PPlan.Filter(indexScan, expr(r)))
+      val withRows = if fetched.isEmpty then filtered else PPlan.RowFetch(filtered, fetched)
+      TypedExpr.conjunction(late).fold(withRows)(r => PPlan.Filter(withRows, expr(r)))
+
     /** Translates one logical operator without annotating it. */
     private def translateNode(logical: LPlan): PPlan = logical match
-      case LPlan.TableScan(relation) => PPlan.EntityScan(relation.entity.id, columns(relation))
+      case LPlan.TableScan(relation) => access(logical, relation, Vector.empty)
+      case LPlan.Filter(LPlan.TableScan(relation), predicate) => access(logical, relation, TypedExpr.conjuncts(predicate))
       case LPlan.PointLookup(relation, key) => PPlan.PointLookup(composeRowId(relation.entity.id, key), columns(relation))
       case LPlan.Filter(input, predicate) => PPlan.Filter(translate(input), expr(predicate))
       case join: LPlan.Join => translateJoin(join)

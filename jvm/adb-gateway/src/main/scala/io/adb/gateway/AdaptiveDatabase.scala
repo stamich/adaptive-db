@@ -67,7 +67,7 @@ final class AdaptiveDatabase(
     executeBound(bound, sql)
 
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
-  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode)
+  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement, sql: String): QueryResult = statement match
@@ -206,10 +206,18 @@ object AdaptiveDatabase:
       statistics: Vector[(Entity, StatisticsStatus)]
   )
 
-  /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies,
-    * or (rule mode) the 2.1.3 rules; both annotate the plan with estimates.
+  /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies
+    * including access paths over `indexes`, or (rule mode) the 2.1.3 rules without indexes;
+    * both annotate the plan with estimates.
     */
-  def plan(select: BoundSelect, catalog: Catalog, statistics: StatisticsProvider, config: OptimizerConfig, mode: OptimizerMode): Plans =
+  def plan(
+      select: BoundSelect,
+      catalog: Catalog,
+      statistics: StatisticsProvider,
+      config: OptimizerConfig,
+      mode: OptimizerMode,
+      indexes: IndexCatalog = IndexCatalog.Empty
+  ): Plans =
     val estimator = new CardinalityEstimator(statistics, catalog, config.estimation)
     val costModel = new CostModel(estimator, config)
     val logical = LogicalPlanner.plan(select)
@@ -217,7 +225,9 @@ object AdaptiveDatabase:
     val (optimized, notes) =
       if mode == OptimizerMode.Cost then new JoinReorderRule(estimator, costModel).reorder(rewritten)
       else (rewritten, Vector.empty)
-    val policy = if mode == OptimizerMode.Cost then new CostBasedPolicy(estimator, costModel) else DefaultPlanningPolicy
+    val policy =
+      if mode == OptimizerMode.Cost then new CostBasedPolicy(estimator, costModel, IndexCatalog.of(indexes.indexes*), select.asOfVersion)
+      else DefaultPlanningPolicy
     val physical = PhysicalPlanner.plan(optimized, policy, Some(PlanEstimation(estimator, costModel)))
     val orderDecisions = notes.map(note => PlanDecision("join order", note.order, f"${note.method}; est. rows=${note.rows}%.0f cost=${note.cost}%.1f"))
     val relations = PhysicalPlanner.relations(optimized).distinctBy(_.entity.id)
