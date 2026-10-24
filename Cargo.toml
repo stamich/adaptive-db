@@ -13,6 +13,7 @@ members = [
     "crates/adb-stats",
     "crates/adb-plan-wire",
     "crates/adb-ffi",
+    "crates/adb-migrate",
     "examples/rust-benchmark",
     "examples/rust-demo",
 ]

@@ -9,8 +9,9 @@
 //!
 //! A new directory is stamped with [`DATA_FORMAT_VERSION`] when it is first opened. A directory
 //! without a marker whose log holds records was written by an older engine (format 1) and is
-//! refused with [`DbError::IncompatibleFormat`]; `adb-migrate` rewrites it. A directory
-//! without a marker and without log records holds no data and is stamped.
+//! refused with [`DbError::IncompatibleFormat`]; `adb-migrate` ([`mod@crate::migrate`])
+//! rewrites it. A directory without a marker and without log records holds no data and is
+//! stamped.
 
 use std::path::Path;
 

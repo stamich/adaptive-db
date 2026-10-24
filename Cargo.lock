@@ -105,6 +105,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-migrate"
+version = "2.2.3"
+dependencies = [
+ "adb-core",
+ "adb-engine",
+ "tempfile",
+]
+
+[[package]]
 name = "adb-page"
 version = "2.2.3"
 dependencies = [
