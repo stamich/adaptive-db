@@ -124,7 +124,7 @@ AdbStatus adb_vacuum(AdbDatabaseHandle* db, uint64_t* out_removed);
  * the log). entities_len == 0 means all entities. The result is a UTF-8 JSON document returned
  * as an AdbBatchHandle (read with adb_batch_data/len, free with adb_batch_release):
  *   {"next_cursor":"<u64>","events":[{"tx_id":N,"commit_ts":N,"commit_lsn":"<u64>",
- *     "cursor_after":"<u64>","changes":[{"entity_id":N,"primary_key":"<u64>",
+ *     "cursor_after":"<u64>","changes":[{"entity_id":N,"primary_key":"<i64>",
  *     "kind":"insert|update|delete","before":Row|null,"after":Row|null}]}]}
  * Only the durable prefix of the log is visible.
  */

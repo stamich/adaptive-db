@@ -46,6 +46,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     cdc::{self, ChangeBatch, ChangeCursor, ChangeFilter},
     committed::CommittedTx,
+    format,
     health::EngineHealth,
     log::LogWriter,
     offsets::ConsumerOffsets,
@@ -119,6 +120,8 @@ impl Database {
         let dir = path.as_ref();
         fs::create_dir_all(dir)?;
         let wal_dir = dir.join(WAL_DIR);
+        // Refuse a directory written in another data format before touching anything in it.
+        format::check_or_stamp(dir, &wal_dir)?;
         fs::create_dir_all(&wal_dir)?;
         let journal = Journal::new(dir);
         let checkpoints = CheckpointStore::new(dir.join(CHECKPOINT_FILE));

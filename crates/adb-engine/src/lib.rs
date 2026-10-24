@@ -10,6 +10,7 @@ pub mod cdc;
 pub mod committed;
 pub mod database;
 pub mod error;
+pub mod format;
 pub mod health;
 pub mod log;
 pub mod offsets;

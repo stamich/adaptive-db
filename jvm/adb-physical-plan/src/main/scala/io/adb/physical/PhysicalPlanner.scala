@@ -93,9 +93,13 @@ object PhysicalPlanner:
     case LPlan.PointLookup(relation, _) => Vector(relation)
     case other => other.children.flatMap(relations)
 
-  /** Composes the 128-bit storage RowId from a 64-bit entity id and an unsigned 64-bit primary key. */
+  /** Composes the 128-bit storage RowId `(entity << 64) | (primaryKey XOR 2^63)` of a BIGINT
+    * primary key: the sign bit is flipped so that key order is value order (data format 2,
+    * Rust `RowId::from_primary_key`).
+    */
   def composeRowId(entityId: EntityId, primaryKey: Long): BigInt =
-    (BigInt(entityId.value) << 64) | BigInt(java.lang.Long.toUnsignedString(primaryKey))
+    (BigInt(java.lang.Long.toUnsignedString(entityId.value)) << 64) |
+      BigInt(java.lang.Long.toUnsignedString(primaryKey ^ java.lang.Long.MIN_VALUE))
 
   /** One planning run, collecting decisions, warnings and annotations. */
   private final class Run(policy: PlanningPolicy, estimation: Option[PlanEstimation]):

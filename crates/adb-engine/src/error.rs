@@ -53,6 +53,20 @@ pub enum DbError {
     /// Caller-supplied argument is invalid.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    /// The directory was written in another data format (see [`crate::format`]).
+    #[error(
+        "database uses data format {found}, this engine reads format {expected}; \
+         migrate it with `adb-migrate <source> <target>`"
+    )]
+    IncompatibleFormat {
+        /// Format of the directory.
+        found: u32,
+        /// Format this engine reads.
+        expected: u32,
+    },
+    /// The data format marker (`format.meta`) failed validation.
+    #[error("corrupt data format marker: {0}")]
+    CorruptFormatMarker(String),
 }
 
 impl DbError {
@@ -63,6 +77,7 @@ impl DbError {
             DbError::Wal(WalError::Corrupt(_) | WalError::Serialization(_)) => true,
             DbError::Journal(JournalError::Corrupt(_)) => true,
             DbError::Storage(error) => error.is_corruption(),
+            DbError::CorruptFormatMarker(_) => true,
             _ => false,
         }
     }

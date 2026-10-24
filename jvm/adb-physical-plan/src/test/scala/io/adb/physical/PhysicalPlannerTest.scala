@@ -79,3 +79,13 @@ final class PhysicalPlannerTest:
     assertTrue(find(q.plan) { case j: NestedLoopJoin => j }.isDefined)
     assertTrue(find(q.plan) { case Limit(Sort(_, _), 2) => true }.isDefined)
     assertTrue(q.decisions.forall(_.reason == "test policy"))
+
+  /** Storage keys flip the primary key's sign bit, so they sort in value order (data format 2). */
+  @Test def rowIdsSortPrimaryKeysInValueOrder(): Unit =
+    val entity = io.adb.model.EntityId(7)
+    val keys = Vector(Long.MinValue, -1L, 0L, 1L, Long.MaxValue)
+    val ids = keys.map(PhysicalPlanner.composeRowId(entity, _))
+    assertEquals(ids.sorted, ids)
+    assertEquals((BigInt(7) << 64) | (BigInt(1) << 63), PhysicalPlanner.composeRowId(entity, 0L))
+    assertEquals(BigInt(7) << 64, PhysicalPlanner.composeRowId(entity, Long.MinValue))
+    assertTrue(PhysicalPlanner.composeRowId(entity, Long.MaxValue) < PhysicalPlanner.composeRowId(io.adb.model.EntityId(8), Long.MinValue))

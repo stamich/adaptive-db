@@ -8,7 +8,8 @@ consumer receives.
 
 * **Event** = one committed transaction: `tx_id`, `commit_ts`, `commit_lsn` (unique, increasing),
   `cursor_after`, and its row changes in row order.
-* **Row change** = `row_id` (`entity_id`, `primary_key`), `kind` (`insert` / `update` / `delete`),
+* **Row change** = `row_id` (`entity_id`, `primary_key`: the SQL `BIGINT` value, decoded from the
+  sign-flipped storage key of data format 2), `kind` (`insert` / `update` / `delete`),
   `before` and `after` images. Images come from the log itself (`Version` before-images and
   `Put` after-images), so no extra reads are needed. Deleting a row that did not exist produces no
   change.

@@ -168,7 +168,10 @@ pub fn load(db: &Database, scale: u64) -> Result<(u64, f64)> {
             let last = (first + LOAD_BATCH - 1).min(rows);
             let mut tx = db.begin();
             for id in first..=last {
-                tx.put(RowId::compose(table.entity, id), row(table, id, scale));
+                tx.put(
+                    RowId::from_primary_key(table.entity, id as i64),
+                    row(table, id, scale),
+                );
             }
             db.commit(tx)?;
             first = last + 1;
@@ -191,7 +194,7 @@ pub fn make_stale(db: &Database, scale: u64) -> Result<()> {
         let mut id = first;
         while id <= rows && id < first + 2 * LOAD_BATCH {
             let changed = row(table, id, scale).with_field(2, Value::Int64(0));
-            tx.put(RowId::compose(table.entity, id), changed);
+            tx.put(RowId::from_primary_key(table.entity, id as i64), changed);
             id += 2;
         }
         db.commit(tx)?;

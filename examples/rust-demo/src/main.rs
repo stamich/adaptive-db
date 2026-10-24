@@ -43,7 +43,7 @@ fn load(db: &Database) -> Result<()> {
         (3, "Cy", "Krakow"),
     ] {
         tx.put(
-            RowId::compose(CUSTOMER, id),
+            RowId::from_primary_key(CUSTOMER, id as i64),
             Row::new()
                 .with_field(1, Value::Int64(id as i64))
                 .with_field(2, Value::String(name.into()))
@@ -52,7 +52,7 @@ fn load(db: &Database) -> Result<()> {
     }
     for (id, customer, amount) in [(10u64, 1, 120), (11, 1, 80), (12, 2, 300), (13, 3, 500)] {
         tx.put(
-            RowId::compose(ORDERS, id),
+            RowId::from_primary_key(ORDERS, id as i64),
             Row::new()
                 .with_field(1, Value::Int64(id as i64))
                 .with_field(2, Value::Int64(customer))
