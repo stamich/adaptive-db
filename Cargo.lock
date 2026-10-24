@@ -96,6 +96,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-index"
+version = "2.2.3"
+dependencies = [
+ "adb-btree",
+ "adb-core",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-journal"
 version = "2.2.3"
 dependencies = [

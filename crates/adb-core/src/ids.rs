@@ -57,6 +57,10 @@ pub struct CommitTs(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Lsn(pub u64);
 
+/// Identifier of a secondary index; unique for the lifetime of a database (never reused).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct IndexId(pub u64);
+
 /// Index of a fixed-size page inside one page file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageId(pub u64);
