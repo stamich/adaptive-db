@@ -17,6 +17,7 @@ pub mod log;
 pub mod migrate;
 pub mod offsets;
 pub mod options;
+pub mod projection;
 pub mod projections;
 mod recovery;
 pub mod statistics;

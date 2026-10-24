@@ -67,7 +67,9 @@ const CHECKPOINT_FILE: &str = "checkpoint.meta";
 pub struct VacuumReport {
     /// Tombstones removed from the current store.
     pub tombstones_removed: u64,
-    /// Tombstones committed at or before this timestamp were eligible.
+    /// Index entries removed (they ended at or before the horizon).
+    pub index_entries_removed: u64,
+    /// Tombstones committed and index entries ended at or before this timestamp were eligible.
     pub horizon: CommitTs,
 }
 
@@ -465,16 +467,17 @@ impl Database {
         self.inner
             .vacuumed_through
             .fetch_max(horizon.0, Ordering::AcqRel);
-        let removed = self
+        let (tombstones, entries) = self
             .inner
             .health
             .guard(|| {
                 let lsn = self.inner.log.end()?;
-                Ok(self.inner.projections.write().vacuum(horizon, lsn)?)
+                self.inner.projections.write().vacuum(horizon, lsn)
             })
             .map_err(DbError::Poisoned)?;
         Ok(VacuumReport {
-            tombstones_removed: removed,
+            tombstones_removed: tombstones,
+            index_entries_removed: entries,
             horizon,
         })
     }
@@ -495,9 +498,10 @@ impl Database {
         Ok(self.inner.projections.read().stats()?)
     }
 
-    /// Temporal integrity check of both projections.
+    /// Integrity check of every projection: temporal invariants of the stores, entry invariants
+    /// of every index and the equality of each index with its table.
     pub fn verify(&self) -> Result<IntegrityReport, DbError> {
-        Ok(self.inner.projections.read().verify()?)
+        self.inner.projections.read().verify()
     }
 
     /// Directory of the canonical log.
@@ -510,6 +514,8 @@ impl Database {
     /// Validates `tx` and builds what its commit will write. Caller holds the commit lock.
     fn prepare(&self, tx: &Transaction) -> Result<CommittedTx, DbError> {
         let projections = self.inner.projections.read();
+        // Rows that cannot be indexed are refused here, before anything is logged.
+        projections.check(tx.writes().iter())?;
         let mut before = Vec::with_capacity(tx.writes().len());
         for row_id in tx.writes().keys() {
             before.push((*row_id, projections.current(*row_id)?));

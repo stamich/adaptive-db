@@ -69,6 +69,7 @@ pub(crate) fn recover(
     journal.recover()?;
     let checkpoint = store.load()?;
     let projections = Projections::open(dir, options.buffer_pages)?;
+    projections.restore_horizons(checkpoint.last_commit_ts, checkpoint.vacuumed_through);
 
     // Databases migrated from format 2 re-read the whole retained log and skip what is applied.
     let start = match checkpoint.applied_through {

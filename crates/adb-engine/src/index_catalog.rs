@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use adb_core::{CommitTs, IndexId};
 use adb_index::{IndexDefinition, IndexSpec, IndexState};
-use adb_journal::{envelope, FileWrite};
+use adb_journal::{envelope, replace_file, sync_dir, FileWrite};
 use serde::{Deserialize, Serialize};
 
 use crate::DbError;
@@ -60,12 +60,24 @@ impl IndexCatalog {
 
     /// The journal write that persists the catalog of the database in `dir`.
     pub fn journal_write(&self, dir: &Path) -> Result<FileWrite, DbError> {
+        Ok(FileWrite::replace(catalog_path(dir), self.encode()?))
+    }
+
+    /// Writes the catalog directly (temp file, fsync, rename): for tools and tests on a closed
+    /// database; the engine publishes it through the checkpoint journal.
+    pub fn save(&self, dir: &Path) -> Result<(), DbError> {
+        let root = dir.join(INDEXES_DIR);
+        std::fs::create_dir_all(&root)?;
+        replace_file(&catalog_path(dir), &self.encode()?)?;
+        sync_dir(&root)?;
+        Ok(())
+    }
+
+    /// The envelope-framed encoding of the catalog.
+    fn encode(&self) -> Result<Vec<u8>, DbError> {
         let payload = bincode::serialize(self)
             .map_err(|error| DbError::CorruptIndexCatalog(error.to_string()))?;
-        Ok(FileWrite::replace(
-            catalog_path(dir),
-            envelope::seal(MAGIC, VERSION, &payload),
-        ))
+        Ok(envelope::seal(MAGIC, VERSION, &payload))
     }
 
     /// Every definition, in id order.
