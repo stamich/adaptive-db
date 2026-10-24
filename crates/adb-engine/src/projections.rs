@@ -25,6 +25,7 @@ use crate::{
     projection::{IndexHandle, Projection},
     DbError,
 };
+use adb_core::IndexId;
 use adb_index::{IndexDefinition, IndexError, IndexProjection, IndexSpec, IndexState};
 
 /// Current state plus history (and, since 2.3.0, the index catalog).
@@ -165,6 +166,13 @@ impl Projections {
         let definition = self.catalog.remove(id).expect("found above");
         self.indexes.retain(|handle| handle.definition().id != id);
         Ok((definition, index_dir(&self.dir, id)))
+    }
+
+    /// The active index with id `id`.
+    pub fn index(&self, id: IndexId) -> Option<&IndexHandle> {
+        self.indexes
+            .iter()
+            .find(|handle| handle.definition().id == id)
     }
 
     /// The active index projections, in catalog order.

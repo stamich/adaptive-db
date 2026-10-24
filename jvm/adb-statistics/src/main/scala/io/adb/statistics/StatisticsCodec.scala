@@ -2,15 +2,18 @@ package io.adb.statistics
 
 import io.adb.model.*
 
-/** Decodes the engine's statistics document (`adb_statistics_json`, format version 1).
+/** Decodes the engine's statistics document (`adb_statistics_json`, format versions 1 and 2;
+  * version 2 adds index statistics).
   *
   * The decoder is strict: a missing or mistyped field, an unknown format version or an
   * inconsistent count fails with `IllegalArgumentException`, so a planner never runs on a
   * misread document. Values use the engine's JSON form (`"Null"`, `{"Int64": 5}`, ...).
   */
 object StatisticsCodec:
-  /** The only document format this decoder understands. */
-  val FormatVersion: Long = 1
+  /** Newest document format this decoder understands. */
+  val FormatVersion: Long = 2
+  /** Oldest document format this decoder understands. */
+  val MinFormatVersion: Long = 1
 
   /** Decodes one document.
     *
@@ -19,7 +22,7 @@ object StatisticsCodec:
   def decode(json: String): TableStatistics =
     val root = obj(JsonReader.parse(json), "statistics")
     val version = long(root, "format_version")
-    require(version == FormatVersion, s"unsupported statistics format version $version")
+    require(version >= MinFormatVersion && version <= FormatVersion, s"unsupported statistics format version $version")
     val rowCount = long(root, "row_count")
     val columns = array(root, "columns").map(column => decodeColumn(obj(column, "column"), rowCount))
     require(columns.map(_.fieldId).distinct.size == columns.size, "duplicate column statistics")

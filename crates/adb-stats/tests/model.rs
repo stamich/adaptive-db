@@ -16,6 +16,7 @@ fn sample() -> TableStatistics {
         modifications_at_analyze: 3,
         sampled_rows: 100,
         exact: true,
+        indexes: Vec::new(),
         columns: vec![
             ColumnStatistics {
                 field_id: 1,
@@ -109,4 +110,38 @@ fn options_decode_and_validate() {
             "{bad}"
         );
     }
+}
+
+/// Format 1 documents (2.2.3) are still read; they cannot carry index statistics.
+#[test]
+fn format_one_documents_are_read() {
+    let mut old = sample();
+    old.format_version = 1;
+    let json = serde_json::to_string(&old)
+        .unwrap()
+        .replace(",\"indexes\":[]", "");
+    assert!(!json.contains("indexes"));
+    let decoded = TableStatistics::from_json(json.as_bytes()).unwrap();
+    assert_eq!(decoded.format_version, 1);
+    assert!(decoded.indexes.is_empty());
+    let mut invalid = sample();
+    invalid.format_version = 1;
+    invalid.indexes.push(adb_stats::IndexStatistics {
+        index_id: 1,
+        entries: 1,
+        stored_entries: 1,
+        height: 1,
+        leaf_pages: 1,
+        avg_key_bytes: 9.0,
+        distinct_prefixes: vec![1],
+        pk_locality: 1.0,
+    });
+    assert!(invalid.validate().is_err());
+    invalid.format_version = 2;
+    assert!(invalid.validate().is_ok());
+    invalid.indexes[0].distinct_prefixes = vec![2];
+    assert!(
+        invalid.validate().is_err(),
+        "more distinct prefixes than entries"
+    );
 }

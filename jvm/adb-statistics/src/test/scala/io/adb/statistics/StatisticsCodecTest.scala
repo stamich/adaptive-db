@@ -48,7 +48,7 @@ final class StatisticsCodecTest:
   /** Unknown versions, missing fields and impossible counts are rejected. */
   @Test def rejectsMalformedDocuments(): Unit =
     for bad <- Vector(
-        document.replace("\"format_version\":1", "\"format_version\":2"),
+        document.replace("\"format_version\":1", "\"format_version\":3"),
         document.replace("\"row_count\":100,", ""),
         document.replace("\"exact\":true", "\"exact\":1"),
         document.replace("\"null_count\":10", "\"null_count\":101"),
@@ -57,6 +57,11 @@ final class StatisticsCodecTest:
         "[]"
       )
     do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
+
+  /** Format 2 documents (2.3.0, with index statistics) are read as well. */
+  @Test def readsFormatTwo(): Unit =
+    val v2 = document.replace("\"format_version\":1", "\"format_version\":2")
+    assertEquals(StatisticsCodec.decode(document).rowCount, StatisticsCodec.decode(v2).rowCount)
 
   /** Statistics turn stale above 20% changed rows and lose half their confidence. */
   @Test def freshnessAndConfidence(): Unit =

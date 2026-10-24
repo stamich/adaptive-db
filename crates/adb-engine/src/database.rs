@@ -30,13 +30,15 @@ use std::{
     },
 };
 
+use adb_core::encode_key;
 use adb_core::{CommitTs, KeyRange, Row, RowId};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
 };
-use adb_index::{IndexDefinition, IndexSpec};
+use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
 use adb_stats::{AnalyzeOptions, TableStatistics};
+use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
     Checkpoint, CheckpointStore, Checkpointable, HistoricalVersion, IntegrityReport, StorageStats,
 };
@@ -403,8 +405,70 @@ impl Database {
         // Like a query, the scan reads the version index once vacuum passes its snapshot.
         let mut statistics = adb_stats::analyze(self, entity_id, snapshot, options)?;
         statistics.modifications_at_analyze = modifications;
+        statistics.indexes = self.index_statistics(entity_id, snapshot)?;
         self.inner.statistics.save(statistics.clone())?;
         Ok(statistics)
+    }
+
+    /// Statistics of every index of `entity_id` at `snapshot`, in id order: the entries
+    /// visible at the snapshot are read in index order, one page per acquisition of the
+    /// projection lock (commits proceed between pages), and the tree shape is read. An index
+    /// dropped meanwhile is skipped.
+    fn index_statistics(
+        &self,
+        entity_id: u64,
+        snapshot: CommitTs,
+    ) -> Result<Vec<IndexStatistics>, DbError> {
+        const PAGE: usize = 1024;
+        let indexes: Vec<IndexDefinition> = self
+            .indexes()
+            .into_iter()
+            .map(|status| status.definition)
+            .filter(|definition| definition.entity_id == entity_id)
+            .collect();
+        let mut out = Vec::new();
+        'indexes: for definition in indexes {
+            let directions = definition.directions();
+            let mut collector = IndexCollector::default();
+            let mut resume: Option<Vec<u8>> = None;
+            loop {
+                let projections = self.inner.projections.read();
+                let Some(handle) = projections.index(definition.id) else {
+                    continue 'indexes;
+                };
+                let page = handle.projection.scan(
+                    &IndexBounds::all(),
+                    snapshot,
+                    ScanDirection::Forward,
+                    resume.as_deref(),
+                    PAGE,
+                    PAGE,
+                )?;
+                for entry in &page.entries {
+                    let prefixes: Vec<Vec<u8>> = (1..=entry.key.len())
+                        .map(|length| {
+                            encode_key(entry.key[..length].iter().zip(directions.iter().copied()))
+                        })
+                        .collect();
+                    let borrowed: Vec<&[u8]> = prefixes.iter().map(Vec::as_slice).collect();
+                    collector.add(&borrowed, entry.row_id.0);
+                }
+                match page.resume {
+                    Some(key) => resume = Some(key),
+                    None => {
+                        let shape = handle.projection.shape()?;
+                        out.push(collector.finish(
+                            definition.id.0,
+                            shape.entries,
+                            shape.height,
+                            shape.leaf_pages,
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The statistics document of `entity_id`, if it was analyzed.
