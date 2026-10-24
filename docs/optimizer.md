@@ -137,6 +137,28 @@ The q-error is `max(est, actual) / min(est, actual)`, with both counted as at le
 also lists the join-order decisions and every table's statistics status, and warns about stale
 or missing statistics and infeasible plans.
 
+**Index access (2.3.0).** In cost mode EXPLAIN names indexes and prints their bounds by column
+instead of by id and position. A scan with no `RowFetch` above it is marked `covering`, which
+means it answers from index entries alone. The access decision lists the next best path and up
+to three more rejected ones, each with its cost. An `Indexes:` section shows every index of the
+tables read, the range of snapshots it serves (or that it cannot serve an `AS OF` snapshot) and
+its statistics from the last `ANALYZE`, or a hint to run it:
+
+```text
+[2] IndexScan idx_balance [balance >= 30000] backward limit=3 covering [f2->account.balance#0, ...]
+- access account: index_scan idx_balance backward (covering) (cost 227.9, est. rows=1; produces the
+  required order; next best index_scan idx_balance (covering) + top_k cost 229.9; also rejected
+  entity_scan + top_k cost 28323.4, ...)
+Indexes:
+- idx_balance ON account (balance) INCLUDE (owner): serves ts 1000..1000; 1000 entries (1000 stored),
+  height 2, 4 leaf pages, prefix ndv [1000], pk locality 0.00
+```
+
+EXPLAIN ANALYZE adds a line with the index operators' totals:
+`index access: 2 pages, 40 entries examined, 25 returned (63% visible); row fetch: 1 batches, 25 rows`.
+Entries that are examined but not returned are versions invisible at the snapshot, or entries
+beyond a limit. A low visible share points at history that the next `VACUUM` can remove.
+
 **Feedback log.** With a `PlannerFeedbackLog`, which the CLI writes to
 `<data>/planner-feedback.jsonl`, every executed SELECT appends one JSON line: a SHA-256 prefix
 of the SQL (literals never reach the log), the mode, and estimated rows, actual rows and q-error

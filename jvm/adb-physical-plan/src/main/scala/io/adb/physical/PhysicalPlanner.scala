@@ -191,15 +191,23 @@ object PhysicalPlanner:
       )
       val direction = if scan.backward then ScanDirection.Backward else ScanDirection.Forward
       val indexScan = PPlan.IndexScan(scan.index.id, bounds, direction, covered, limit)
-      estimation.zip(estimate).foreach { (e, chosen) =>
-        val base = e.estimator.estimate(LPlan.TableScan(relation))
-        annotateWith(indexScan, NodeEstimate(chosen.read, e.costModel.total(chosen.cost), base.confidence * 0.9, base.source.label, chosen.basis, chosen.cost))
-      }
       val coveredSlots = covered.map(_.slot).toSet
       val (early, late) = scan.residual.partition(_.slots.subsetOf(coveredSlots))
       val filtered = TypedExpr.conjunction(early).fold(indexScan: PPlan)(r => PPlan.Filter(indexScan, expr(r)))
       val withRows = if fetched.isEmpty then filtered else PPlan.RowFetch(filtered, fetched)
-      TypedExpr.conjunction(late).fold(withRows)(r => PPlan.Filter(withRows, expr(r)))
+      val result = TypedExpr.conjunction(late).fold(withRows)(r => PPlan.Filter(withRows, expr(r)))
+      // The scan reads `read` entries; every node above it (early filter, row fetch, late
+      // filter) is annotated with the access path's output rows and cost, so EXPLAIN and the
+      // q-error cover each node also when no logical operator stands for it (ordered LIMIT).
+      estimation.zip(estimate).foreach { (e, chosen) =>
+        val base = e.estimator.estimate(LPlan.TableScan(relation))
+        val confidence = base.confidence * 0.9
+        annotateWith(indexScan, NodeEstimate(chosen.read, e.costModel.total(chosen.cost), confidence, base.source.label, chosen.basis, chosen.cost))
+        PPlan.preorder(result).filterNot(_ eq indexScan).foreach { node =>
+          annotateWith(node, NodeEstimate(chosen.rows, e.costModel.total(chosen.cost), confidence, base.source.label, chosen.basis, chosen.cost))
+        }
+      }
+      result
 
     /** Translates one logical operator without annotating it. */
     private def translateNode(logical: LPlan): PPlan = logical match

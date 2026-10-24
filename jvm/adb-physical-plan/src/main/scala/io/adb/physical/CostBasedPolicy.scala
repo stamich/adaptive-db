@@ -4,7 +4,7 @@ import io.adb.catalog.IndexCatalog
 import io.adb.logical.*
 import io.adb.optimizer.access.{AccessPath, AccessPathEnumerator}
 import io.adb.optimizer.cardinality.CardinalityEstimator
-import io.adb.optimizer.cost.{AccessEstimate, BuildSide, CostModel, JoinCost}
+import io.adb.optimizer.cost.{AccessEstimate, BuildSide, Cost, CostModel, JoinCost}
 
 /** Statistics-driven strategy choices (the default since 2.2.3).
   *
@@ -83,14 +83,22 @@ final class CostBasedPolicy(
     }
     val (best, bestCost, ordered) = options.minBy((_, cost, _) => costModel.total(cost))
     val others = options.filterNot(_._1 eq best)
-    val sorted = if wantsOrder && !ordered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
+    /** ` + top_k` / ` + sort` for a path that does not produce the required order. */
+    def sortSuffix(pathOrdered: Boolean): String =
+      if wantsOrder && !pathOrdered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
+    /** `<path>[ + sort] cost N`. */
+    def option(estimate: AccessEstimate, cost: Cost, pathOrdered: Boolean): String =
+      f"${CostBasedPolicy.describe(estimate.path)}${sortSuffix(pathOrdered)} cost ${costModel.total(cost)}%.1f"
+    val rejected = others.sortBy((_, cost, _) => costModel.total(cost))
     val reason =
-      f"cost ${costModel.total(bestCost)}%.1f$sorted, est. rows=${best.rows}%.0f" +
+      f"cost ${costModel.total(bestCost)}%.1f${sortSuffix(ordered)}, est. rows=${best.rows}%.0f" +
         (if ordered then "; produces the required order" else "") +
-        others.minByOption((_, cost, _) => costModel.total(cost)).fold("") { (o, cost, oOrdered) =>
-          val extra = if wantsOrder && !oOrdered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
-          f"; next best ${CostBasedPolicy.describe(o.path)}$extra cost ${costModel.total(cost)}%.1f"
-        }
+        rejected.headOption.fold("")(option.tupled.andThen("; next best " + _)) +
+        (if rejected.size > 1 then
+           val shown = rejected.slice(1, 1 + CostBasedPolicy.MaxRejectedShown).map(option.tupled)
+           val hidden = rejected.size - 1 - shown.size
+           shown.mkString("; also rejected ", ", ", if hidden > 0 then s" and $hidden more" else "")
+         else "")
     AccessChoice(best.path, reason, Some(best), explain = candidates.size > 1 || ordered, ordered = ordered)
 
   /** Whether `path` produces the order `request` requires. */
@@ -112,6 +120,9 @@ final class CostBasedPolicy(
 
 /** Descriptions of access paths for EXPLAIN. */
 object CostBasedPolicy:
+  /** Rejected access paths listed by name after the next best one (the rest are counted). */
+  val MaxRejectedShown: Int = 3
+
   /** `entity_scan` or `index_scan <name> [backward] [covering]`. */
   def describe(path: AccessPath): String = path match
     case AccessPath.SeqScan(_, _) => "entity_scan"

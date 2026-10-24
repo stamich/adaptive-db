@@ -133,3 +133,36 @@ final class AccessPathPlanningTest:
     val rule = planned("SELECT owner, balance FROM account WHERE balance >= 9990 ORDER BY balance", rule = true)
     assertTrue(nodes(rule).exists(_.isInstanceOf[Sort]))
 
+  /** EXPLAIN names indexes and bounds by column and marks covering scans; access decisions list
+    * the rejected alternatives after the next best one.
+    */
+  @Test def explainNamesIndexesAndAlternatives(): Unit =
+    val labels = Map(IndexId(1) -> IndexLabel("idx_balance", Vector("balance")), IndexId(2) -> IndexLabel("idx_region_balance", Vector("region", "balance")))
+    val covered = planned("SELECT owner FROM account WHERE balance >= 9990")
+    val text = Explain.physical(covered.plan, covered.slotNames, indexes = labels)
+    assertTrue(text.contains("IndexScan idx_balance [balance >= 9990] covering"), text)
+    val fetched = planned("SELECT note FROM account WHERE region = 3 AND balance > 9990 AND balance <= 9995")
+    val fetchedText = Explain.physical(fetched.plan, fetched.slotNames, indexes = labels)
+    assertTrue(fetchedText.contains("IndexScan idx_region_balance [region = 3, balance in (9990, 9995]] ["), fetchedText)
+    assertFalse(fetchedText.contains("covering"), fetchedText)
+    val ordered = planned("SELECT owner FROM account WHERE region = 2 ORDER BY balance LIMIT 5")
+    val decision = ordered.decisions.find(_.choice.startsWith("index_scan")).getOrElse(fail(ordered.decisions.toString))
+    assertTrue(decision.reason.contains("; next best ") && decision.reason.contains("; also rejected "), decision.reason)
+    assertEquals("[region = 2, balance < 'x']", Explain.renderNamedBounds(
+      IndexBounds(Vector(DbValue.Int64Value(2)), None, Some(ValueBound(DbValue.StringValue("x"), false))), Vector("region", "balance")))
+    assertEquals("full", Explain.renderNamedBounds(IndexBounds(Vector.empty, None, None), Vector("balance")))
+    assertEquals("[key0 = 'it''s']", Explain.renderNamedBounds(IndexBounds(Vector(DbValue.StringValue("it's")), None, None), Vector.empty))
+
+
+  /** Every node of an index plan carries an estimate, including the row fetch and filters no
+    * logical operator stands for (ordered LIMIT over a non-covering scan).
+    */
+  @Test def everyIndexPlanNodeHasAnEstimate(): Unit =
+    for sql <- Vector(
+        "SELECT note FROM account WHERE balance >= 9000 ORDER BY balance LIMIT 10",
+        "SELECT note FROM account WHERE region = 3 AND balance > 9990 AND note = 'x'"
+      )
+    do
+      val q = planned(sql)
+      assertTrue(nodes(q).exists(_.isInstanceOf[RowFetch]), Explain.physical(q.plan, q.slotNames))
+      assertEquals(nodes(q).indices.toSet, q.estimates.keySet, Explain.physical(q.plan, q.slotNames, q.estimates))
