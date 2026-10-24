@@ -34,6 +34,7 @@ use adb_core::{CommitTs, KeyRange, Row, RowId};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
 };
+use adb_index::{IndexDefinition, IndexSpec};
 use adb_journal::{Journal, JOURNAL_FILE};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_storage::{
@@ -51,6 +52,7 @@ use crate::{
     index_catalog::INDEXES_DIR,
     log::LogWriter,
     offsets::ConsumerOffsets,
+    projection::Projection,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
     statistics::{modifications_path, ModificationCounters, StatisticsStore},
@@ -61,6 +63,17 @@ use crate::{
 const WAL_DIR: &str = "wal";
 /// Checkpoint record file inside the database directory.
 const CHECKPOINT_FILE: &str = "checkpoint.meta";
+
+/// An index and the snapshots it can serve (see [`crate::projection::Projection::serves`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStatus {
+    /// The definition.
+    pub definition: IndexDefinition,
+    /// Oldest snapshot the index serves: `max(created_at_ts, vacuum horizon)`.
+    pub usable_from: CommitTs,
+    /// Latest commit the index reflects.
+    pub watermark: CommitTs,
+}
 
 /// Result of [`Database::vacuum`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,12 +431,87 @@ impl Database {
         total.saturating_sub(at_analyze)
     }
 
+    // ----- secondary indexes ------------------------------------------------------------------
+
+    /// Creates and builds a secondary index (`CREATE INDEX`); returns its definition.
+    ///
+    /// The build holds the commit lock (commits wait; queries wait while the entries are
+    /// inserted): the index is filled from the current state, which then reflects exactly the
+    /// commits up to `created_at_ts`, and a forced checkpoint publishes the catalog entry and
+    /// the index pages in one journal commit before the index becomes visible. A crash before
+    /// that commit leaves no trace (the half-built files are removed on the next open); after
+    /// it, the index is complete and recovery maintains it from the log. The index serves
+    /// snapshots from `created_at_ts` on.
+    pub fn create_index(&self, spec: IndexSpec) -> Result<IndexDefinition, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.inner.health.check()?;
+        let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
+        let lsn = self.inner.log.end()?;
+        let definition = self.inner.projections.write().build_index(
+            spec,
+            created_at,
+            lsn,
+            self.inner.options.buffer_pages,
+        )?;
+        // If the build cannot be published, the failed checkpoint poisons the instance and the
+        // next open starts without the index.
+        self.checkpoint_locked()?;
+        // Every commit up to `created_at` is applied and, after the checkpoint's log sync,
+        // durable: it may be published, so a query planned right now can use the index.
+        self.inner.tx_manager.lock().publish_commit(created_at);
+        Ok(definition)
+    }
+
+    /// Drops the index `name` (`DROP INDEX`); returns its definition.
+    ///
+    /// The definition leaves the catalog and the index stops being maintained; a checkpoint
+    /// publishes the catalog without it, then its files are removed (a crash in between leaves
+    /// files that the next open removes). Queries still scanning it fail on their next page.
+    pub fn drop_index(&self, name: &str) -> Result<IndexDefinition, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.inner.health.check()?;
+        let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        self.checkpoint_locked()?;
+        if files.exists() {
+            fs::remove_dir_all(files)?;
+        }
+        Ok(definition)
+    }
+
+    /// Every index with the range of snapshots it serves, in id order.
+    pub fn indexes(&self) -> Vec<IndexStatus> {
+        let projections = self.inner.projections.read();
+        projections
+            .catalog()
+            .definitions()
+            .iter()
+            .map(|definition| {
+                let handle = projections
+                    .indexes()
+                    .iter()
+                    .find(|handle| handle.definition().id == definition.id);
+                IndexStatus {
+                    definition: definition.clone(),
+                    usable_from: handle.map_or(CommitTs(u64::MAX), |h| h.usable_from()),
+                    watermark: handle.map_or(CommitTs(0), |h| h.watermark()),
+                }
+            })
+            .collect()
+    }
+
     // ----- maintenance ----------------------------------------------------------------------
 
     /// Persists all in-memory projection changes and moves the recovery start point forward.
     pub fn checkpoint(&self) -> Result<(), DbError> {
         self.inner.health.check()?;
         let _commit = self.inner.commit_lock.lock();
+        self.checkpoint_locked()
+    }
+
+    /// Body of [`Database::checkpoint`]; the caller holds the commit lock.
+    fn checkpoint_locked(&self) -> Result<(), DbError> {
         self.inner.health.check()?;
         self.inner
             .health

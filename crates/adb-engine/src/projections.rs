@@ -25,7 +25,7 @@ use crate::{
     projection::{IndexHandle, Projection},
     DbError,
 };
-use adb_index::{IndexError, IndexProjection, IndexState};
+use adb_index::{IndexDefinition, IndexError, IndexProjection, IndexSpec, IndexState};
 
 /// Current state plus history (and, since 2.3.0, the index catalog).
 pub struct Projections {
@@ -82,6 +82,89 @@ impl Projections {
             index.projection.set_watermark(checkpointed_ts);
             index.restore_vacuum_horizon(vacuumed_through);
         }
+    }
+
+    /// Builds a new index from the current state (the caller holds the commit lock, so the
+    /// current state is exactly the effect of every commit up to `created_at_ts`).
+    ///
+    /// The definition enters the catalog as `Building`, the entries of every live row of its
+    /// entity are inserted (each beginning at the commit that wrote the row), and the index
+    /// becomes `Active` and is maintained from the next commit on. Nothing is persisted here:
+    /// the caller's checkpoint publishes catalog and index together. On failure (a row that
+    /// cannot be indexed) the catalog and the files are left as before.
+    pub fn build_index(
+        &mut self,
+        spec: IndexSpec,
+        created_at_ts: CommitTs,
+        lsn: Lsn,
+        buffer_pages: usize,
+    ) -> Result<IndexDefinition, DbError> {
+        let definition = self
+            .catalog
+            .add(spec, IndexState::Building, created_at_ts)?;
+        let path = index_dir(&self.dir, definition.id);
+        let built = self.build_entries(&definition, &path, created_at_ts, lsn, buffer_pages);
+        match built {
+            Ok(handle) => {
+                self.catalog.set_state(definition.id, IndexState::Active);
+                self.indexes.push(handle);
+                Ok(self
+                    .catalog
+                    .by_id(definition.id)
+                    .expect("just added")
+                    .clone())
+            }
+            Err(error) => {
+                self.catalog.remove(definition.id);
+                let _ = std::fs::remove_dir_all(&path);
+                Err(error)
+            }
+        }
+    }
+
+    /// Opens an empty projection for `definition` in `path` and fills it from the live rows.
+    fn build_entries(
+        &self,
+        definition: &IndexDefinition,
+        path: &Path,
+        created_at_ts: CommitTs,
+        lsn: Lsn,
+        buffer_pages: usize,
+    ) -> Result<IndexHandle, DbError> {
+        const PAGE: usize = 1024;
+        let mut active = definition.clone();
+        active.state = IndexState::Active;
+        let projection = IndexProjection::open(path, active, buffer_pages, created_at_ts)?;
+        let range = KeyRange::entity(definition.entity_id);
+        let mut after = None;
+        loop {
+            let page = self.current.scan(&range, after, PAGE)?;
+            let Some((last, _)) = page.last() else {
+                break;
+            };
+            after = Some(*last);
+            for (row_id, record) in page {
+                if let Some(row) = record.value {
+                    projection.insert_current(row_id, &row, record.commit_ts, lsn)?;
+                }
+            }
+        }
+        projection.set_watermark(created_at_ts);
+        Ok(IndexHandle::new(projection, CommitTs(0)))
+    }
+
+    /// Removes index `name` from the catalog and the maintained set; returns its definition and
+    /// the directory of its files (removed by the caller after the checkpoint that publishes
+    /// the catalog without it).
+    pub fn drop_index(&mut self, name: &str) -> Result<(IndexDefinition, PathBuf), DbError> {
+        let id = self
+            .catalog
+            .by_name(name)
+            .map(|definition| definition.id)
+            .ok_or_else(|| DbError::IndexNotFound(name.to_string()))?;
+        let definition = self.catalog.remove(id).expect("found above");
+        self.indexes.retain(|handle| handle.definition().id != id);
+        Ok((definition, index_dir(&self.dir, id)))
     }
 
     /// The active index projections, in catalog order.

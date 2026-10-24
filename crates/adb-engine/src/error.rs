@@ -71,6 +71,9 @@ pub enum DbError {
     /// An index definition, maintenance step or scan failed.
     #[error("index error: {0}")]
     Index(#[from] IndexError),
+    /// No index has the given name.
+    #[error("index {0} does not exist")]
+    IndexNotFound(String),
     /// The index catalog (`indexes/catalog.meta`) failed validation.
     #[error("corrupt index catalog: {0}")]
     CorruptIndexCatalog(String),

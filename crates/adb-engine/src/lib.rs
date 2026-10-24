@@ -22,10 +22,11 @@ pub mod projections;
 mod recovery;
 pub mod statistics;
 
+pub use adb_index::{IndexColumn, IndexDefinition, IndexSpec, IndexState};
 pub use adb_stats::{AnalyzeOptions, StatsError, TableStatistics};
 pub use adb_tx::{Conflict, IsolationLevel, Transaction};
 pub use cdc::{ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind, RowChange};
-pub use database::{Database, VacuumReport};
+pub use database::{Database, IndexStatus, VacuumReport};
 pub use error::DbError;
 pub use migrate::{migrate, migrate_in_place, MigrationReport};
 pub use options::DatabaseOptions;
