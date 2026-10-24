@@ -48,6 +48,7 @@ use crate::{
     committed::CommittedTx,
     format,
     health::EngineHealth,
+    index_catalog::INDEXES_DIR,
     log::LogWriter,
     offsets::ConsumerOffsets,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
@@ -157,7 +158,8 @@ impl Database {
     /// (it is never pruned by Milestone 2.0.3+). The database must not be open elsewhere.
     ///
     /// The modification counters are recounted from the log too; statistics documents are
-    /// kept (they describe a snapshot, not the store).
+    /// kept (they describe a snapshot, not the store). Index projections are derived data and
+    /// are rebuilt as well; the index catalog (their definitions) is kept.
     pub fn rebuild_projections(
         path: impl AsRef<Path>,
         options: DatabaseOptions,
@@ -175,6 +177,15 @@ impl Database {
             let path = dir.join(name);
             if path.exists() {
                 fs::remove_dir_all(path)?;
+            }
+        }
+        let indexes = dir.join(INDEXES_DIR);
+        if indexes.exists() {
+            for entry in fs::read_dir(&indexes)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    fs::remove_dir_all(path)?;
+                }
             }
         }
         for path in [

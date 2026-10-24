@@ -1,10 +1,13 @@
-//! The two persistent projections of the log, treated as one unit.
+//! The persistent projections of the log, treated as one unit.
 //!
 //! Applying a committed transaction, answering snapshot reads, paging scans, vacuuming
 //! tombstones and producing checkpoint writes all go through [`Projections`], so the rest of
 //! the engine never touches the individual stores.
+//!
+//! Since 2.3.0 the unit also holds the index catalog (see [`crate::index_catalog`]), which is
+//! checkpointed together with the projections it describes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use adb_core::{CommitTs, KeyRange, Lsn, Row, RowId};
 use adb_journal::FileWrite;
@@ -14,14 +17,22 @@ use adb_storage::{
 };
 use adb_tx::Mutation;
 
-use crate::committed::CommittedTx;
+use crate::{
+    committed::CommittedTx,
+    index_catalog::{remove_orphans, IndexCatalog, INDEXES_DIR},
+    DbError,
+};
 
-/// Current state plus history.
+/// Current state plus history (and, since 2.3.0, the index catalog).
 pub struct Projections {
+    /// Database directory.
+    dir: PathBuf,
     /// Latest state of every row.
     current: PersistentCurrentStore,
     /// Superseded row states.
     versions: PersistentVersionStore,
+    /// Definitions of the secondary indexes.
+    catalog: IndexCatalog,
 }
 
 /// Directory of the current-state projection inside a database directory.
@@ -30,12 +41,28 @@ pub const CURRENT_DIR: &str = "current";
 pub const VERSIONS_DIR: &str = "versions";
 
 impl Projections {
-    /// Opens both projections of the database in `dir`.
-    pub fn open(dir: &Path, buffer_pages: usize) -> Result<Self, StorageError> {
+    /// Opens the projections and the index catalog of the database in `dir`, removing index
+    /// directories the catalog does not name.
+    pub fn open(dir: &Path, buffer_pages: usize) -> Result<Self, DbError> {
+        std::fs::create_dir_all(dir.join(INDEXES_DIR))?;
+        let catalog = IndexCatalog::load(dir)?;
+        remove_orphans(dir, &catalog)?;
         Ok(Self {
+            dir: dir.to_path_buf(),
             current: PersistentCurrentStore::open(dir.join(CURRENT_DIR), buffer_pages)?,
             versions: PersistentVersionStore::open(dir.join(VERSIONS_DIR), buffer_pages)?,
+            catalog,
         })
+    }
+
+    /// The index catalog.
+    pub fn catalog(&self) -> &IndexCatalog {
+        &self.catalog
+    }
+
+    /// The journal write that persists the index catalog (part of every checkpoint).
+    pub fn catalog_journal_write(&self) -> Result<FileWrite, DbError> {
+        self.catalog.journal_write(&self.dir)
     }
 
     /// Latest record of a row, including tombstones.

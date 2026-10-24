@@ -56,6 +56,7 @@ version = "2.2.3"
 dependencies = [
  "adb-core",
  "adb-execution",
+ "adb-index",
  "adb-journal",
  "adb-stats",
  "adb-storage",

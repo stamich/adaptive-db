@@ -12,6 +12,7 @@ pub mod database;
 pub mod error;
 pub mod format;
 pub mod health;
+pub mod index_catalog;
 pub mod log;
 pub mod migrate;
 pub mod offsets;

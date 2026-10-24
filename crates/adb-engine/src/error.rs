@@ -1,6 +1,7 @@
 //! Top-level engine errors.
 use adb_core::Lsn;
 use adb_execution::ExecutionError;
+use adb_index::IndexError;
 use adb_journal::JournalError;
 use adb_stats::StatsError;
 use adb_storage::StorageError;
@@ -67,6 +68,12 @@ pub enum DbError {
     /// The data format marker (`format.meta`) failed validation.
     #[error("corrupt data format marker: {0}")]
     CorruptFormatMarker(String),
+    /// An index definition, maintenance step or scan failed.
+    #[error("index error: {0}")]
+    Index(#[from] IndexError),
+    /// The index catalog (`indexes/catalog.meta`) failed validation.
+    #[error("corrupt index catalog: {0}")]
+    CorruptIndexCatalog(String),
 }
 
 impl DbError {
@@ -77,7 +84,8 @@ impl DbError {
             DbError::Wal(WalError::Corrupt(_) | WalError::Serialization(_)) => true,
             DbError::Journal(JournalError::Corrupt(_)) => true,
             DbError::Storage(error) => error.is_corruption(),
-            DbError::CorruptFormatMarker(_) => true,
+            DbError::CorruptFormatMarker(_) | DbError::CorruptIndexCatalog(_) => true,
+            DbError::Index(error) => error.is_corruption(),
             _ => false,
         }
     }
