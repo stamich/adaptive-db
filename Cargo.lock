@@ -142,6 +142,7 @@ version = "2.2.3"
 dependencies = [
  "adb-core",
  "adb-execution",
+ "adb-index",
  "serde",
  "serde_json",
  "thiserror",

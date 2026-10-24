@@ -16,6 +16,14 @@ object FieldId:
   def apply(value: Int): FieldId = value
   extension (id: FieldId) def value: Int = id
 
+/** Identifier of a secondary index; assigned by the engine and never reused. */
+opaque type IndexId = Long
+/** Constructors and accessors of [[IndexId]]. */
+object IndexId:
+  /** Wraps a raw id. */
+  def apply(value: Long): IndexId = value
+  extension (id: IndexId) def value: Long = id
+
 /** Version of a catalog schema. */
 opaque type SchemaVersion = Long
 /** Constructors and accessors of [[SchemaVersion]]. */

@@ -69,7 +69,7 @@ fn relational_plan_round_trips() {
     let plan = relational_plan();
     let bytes = encode_json(&plan).unwrap();
     let text = std::str::from_utf8(&bytes).unwrap();
-    assert!(text.starts_with(r#"{"wire_version":2,"plan":{"op":"top_k""#));
+    assert!(text.starts_with(r#"{"wire_version":3,"plan":{"op":"top_k""#));
     let (decoded, shape) = decode_json(&bytes).unwrap();
     assert_eq!(decoded, plan);
     assert_eq!(shape.output, vec![SlotId(2), SlotId(3)]);
@@ -84,20 +84,25 @@ fn version_mismatch_is_reported_as_such() {
         Err(PlanWireError::UnsupportedVersion { found: 1 })
     );
     assert_eq!(
-        decode_json(br#"{"wire_version":3,"plan":{"op":"something_new"}}"#),
-        Err(PlanWireError::UnsupportedVersion { found: 3 })
+        decode_json(br#"{"wire_version":4,"plan":{"op":"something_new"}}"#),
+        Err(PlanWireError::UnsupportedVersion { found: 4 })
+    );
+    assert_eq!(
+        decode_json(br#"{"wire_version":2,"plan":{"op":"scan","columns":[]}}"#),
+        Err(PlanWireError::UnsupportedVersion { found: 2 }),
+        "a planner older than 2.3.0 is reported as a version mismatch"
     );
 }
 
 /// Unknown fields are errors, so a producer speaking another dialect cannot be half-understood.
 #[test]
 fn unknown_fields_are_rejected() {
-    let stale = br#"{"wire_version":2,"plan":{"op":"project","input":{"op":"entity_scan","entity_id":1,"columns":[]},"fields":[1]}}"#;
+    let stale = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"entity_scan","entity_id":1,"columns":[]},"fields":[1]}}"#;
     assert!(matches!(
         decode_json(stale),
         Err(PlanWireError::Malformed(_))
     ));
-    let extra = br#"{"wire_version":2,"plan":{"op":"scan","columns":[]},"hint":"x"}"#;
+    let extra = br#"{"wire_version":3,"plan":{"op":"scan","columns":[]},"hint":"x"}"#;
     assert!(matches!(
         decode_json(extra),
         Err(PlanWireError::Malformed(_))
@@ -107,7 +112,7 @@ fn unknown_fields_are_rejected() {
 /// Decoded plans are validated; encoding refuses invalid plans too.
 #[test]
 fn invalid_plans_are_rejected_both_ways() {
-    let bad = br#"{"wire_version":2,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[4]}}"#;
+    let bad = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[4]}}"#;
     assert!(matches!(decode_json(bad), Err(PlanWireError::Invalid(_))));
 
     let invalid = PhysicalPlan::Limit {

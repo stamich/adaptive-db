@@ -1,11 +1,15 @@
-# Physical plan wire format v2
+# Physical plan wire format v3
 
 The JVM planner sends physical plans to the native engine as UTF-8 JSON through
-`adb_execute_plan_json[_at]`. Version 2 (Milestone 2.1) wraps the plan in an envelope:
+`adb_execute_plan_json[_at]`. Since version 2 (Milestone 2.1) the plan is wrapped in an envelope;
+version 3 (Milestone 2.3.0) adds the index operators `index_scan` and `row_fetch`:
 
 ```json
-{"wire_version": 2, "plan": { ...plan node... }}
+{"wire_version": 3, "plan": { ...plan node... }}
 ```
+
+Only the current version is accepted: the JVM and the engine are upgraded together, and a
+version-2 document from an older planner is reported as a version mismatch.
 
 `adb-plan-wire::decode_json` is the only native entry point. It
 
@@ -17,8 +21,9 @@ The JVM planner sends physical plans to the native engine as UTF-8 JSON through
 4. validates the decoded plan (limits and slot consistency, see [execution.md](execution.md)).
 
 `encode_json` is the symmetric, validating producer (Rust tools and tests). The Scala producer is
-`io.adb.physical.PlanJsonEncoder`; `crates/adb-plan-wire/tests/fixtures/jvm-relational-plan.json`
-pins its output, and tests on both sides check that fixture (cross-language contract).
+`io.adb.physical.PlanJsonEncoder`; the fixtures `crates/adb-plan-wire/tests/fixtures/jvm-relational-plan.json`
+and `jvm-index-plan.json` pin its output, and tests on both sides check them (cross-language
+contract).
 
 ## Plan nodes (`"op"`)
 
@@ -35,8 +40,16 @@ pins its output, and tests on both sides check that fixture (cross-language cont
 | `aggregate` | `input`, `group_by` (slots), `aggregates` `[{"function":"count\|sum\|min\|max\|avg","input":s?,"output":s}]` (`input` omitted only for `COUNT(*)`) |
 | `sort` | `input`, `keys` `[{"slot":s,"descending":bool}]` |
 | `top_k` | `input`, `keys`, `limit` (≤ 1,000,000) |
+| `index_scan` (v3) | `index_id`, `bounds`, `direction` (`forward` \| `backward`, default `forward`), `columns` (key or covered fields only; may be empty), optional `limit` (≤ 1,000,000; sizes the first page) |
+| `row_fetch` (v3) | `input` (rows with row ids, e.g. an `index_scan`), `columns` (stored fields added to each row; slots must be new) |
 
 `columns` is `[{"field_id": f, "slot": s}]`: the stored field `f` is read into slot `s`.
+
+`bounds` of an `index_scan` is `{"prefix":[v...], "lower":{"value":v,"inclusive":b}, "upper":{...}}`:
+the leading key columns equal `prefix`, the next key column lies between `lower` and `upper`
+(each optional; omitted = unbounded). Values use the literal form below and are never `"Null"`.
+The scan is exact for these columns (NULL keys never match a range), runs at the query snapshot,
+and fails if the index cannot serve that snapshot (see [indexes.md](indexes.md)).
 
 ## Expressions (`"kind"`)
 
@@ -53,7 +66,7 @@ pins its output, and tests on both sides check that fixture (cross-language cont
 GROUP BY c.city ORDER BY total DESC LIMIT 2`:
 
 ```json
-{"wire_version":2,"plan":{"op":"top_k","limit":2,
+{"wire_version":3,"plan":{"op":"top_k","limit":2,
   "keys":[{"slot":4,"descending":true}],
   "input":{"op":"aggregate","group_by":[3],
     "aggregates":[{"function":"sum","input":1,"output":4}],
@@ -67,6 +80,7 @@ GROUP BY c.city ORDER BY total DESC LIMIT 2`:
 * v1 (Milestones 1.7–2.0.3): bare plan, expressions and projections by storage `field_id`,
   operators `point_lookup`, `scan`, `entity_scan`, `filter`, `project`, `limit`.
 * v2 (2.1): envelope, slots, joins, aggregation, sorting, unknown fields rejected.
+* v3 (2.3.0): `index_scan` (bounds, direction, covered columns, limit hint) and `row_fetch`.
 
 JSON remains a bootstrap protocol; `proto/` sketches the intended binary IR, which would decode
 into the same Rust `PhysicalPlan`.

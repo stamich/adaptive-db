@@ -44,6 +44,10 @@ object Explain:
       case PointLookup(rowId, cs) => s"PointLookup row_id=$rowId ${columns(cs)}"
       case Scan(cs) => s"Scan ${columns(cs)}"
       case EntityScan(entity, cs) => s"EntityScan entity=${entity.value} ${columns(cs)}"
+      case IndexScan(index, bounds, direction, cs, limit) =>
+        val dir = if direction == ScanDirection.Backward then " backward" else ""
+        s"IndexScan index=${index.value} ${renderBounds(bounds)}$dir${limit.fold("")(l => s" limit=$l")} ${columns(cs)}"
+      case RowFetch(_, cs) => s"RowFetch ${columns(cs)}"
       case Filter(_, predicate) => s"Filter ${expr(predicate)}"
       case Project(_, slots) => s"Project ${slots.map(slot).mkString("[", ", ", "]")}"
       case Limit(_, limit) => s"Limit $limit"
@@ -60,3 +64,16 @@ object Explain:
     val (prefix, suffix) = note(plan)
     val annotated = prefix + line + suffix
     (("  " * depth + annotated) +: plan.children.map(render(_, names, depth + 1, note))).mkString("\n")
+
+  /** `prefix=[v, ...] range=[lo, hi)` (only the parts that are present). */
+  def renderBounds(bounds: IndexBounds): String =
+    val prefix = if bounds.prefix.isEmpty then Vector.empty else Vector(bounds.prefix.map(PlanJsonEncoder.encodeRustValue).mkString("prefix=[", ", ", "]"))
+    val range =
+      if bounds.lower.isEmpty && bounds.upper.isEmpty then Vector.empty
+      else
+        val lower = bounds.lower.fold("(-inf")(b => (if b.inclusive then "[" else "(") + PlanJsonEncoder.encodeRustValue(b.value))
+        val upper = bounds.upper.fold("+inf)")(b => PlanJsonEncoder.encodeRustValue(b.value) + (if b.inclusive then "]" else ")"))
+        Vector(s"range=$lower, $upper")
+    val parts = prefix ++ range
+    if parts.isEmpty then "full" else parts.mkString(" ")
+
