@@ -1,11 +1,11 @@
-# Examples — Milestone 2.2.3
+# Examples — Milestone 2.3.0
 
 ## Rust data-plane benchmark
 
 ```bash
 cargo run --release -p adb-benchmark-rust -- \
   --rows 5000 --iters 1000 --threads 8 --groups 100 --nested-rows 1000 --relational-iters 5 \
-  --output examples/results/2.2.3-rust-local.json
+  --output examples/results/2.3.0-rust-local.json
 ```
 
 Storage sections: bulk load, point lookup, `EntityScan` vs. full scan + filter, plan JSON parsing,
@@ -13,18 +13,23 @@ change-feed read throughput, single-row commit throughput with 1 and N threads (
 current-heap size under update churn, and recovery time after a crash. Relational sections (2.1):
 hash join, nested-loop join, GROUP BY with SUM, sort, TopK, plan wire encode/decode.
 
-## 2.2.3 workload benchmark
+## 2.3.0 workload benchmark
 
 ```bash
-./scripts/benchmark-db.sh    # rust_native        -> examples/results/2.2.3-database.json
-./scripts/benchmark-ffi.sh   # ffi_prepared_plan, scala_cbo_ffi_rust, join order, calibration
-                             #                    -> examples/results/2.2.3-ffi.json
+./scripts/benchmark-db.sh    # rust_native, index builds, AS OF, write overhead
+                             #                    -> examples/results/2.3.0-database.json
+./scripts/benchmark-ffi.sh   # ffi_prepared_plan, scala_cbo_ffi_rust, selectivity sweep, join order,
+                             # estimation, calibration  -> examples/results/2.3.0-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.3.0-database.json examples/results/2.3.0-ffi.json
 ```
 
-Both scripts load the same tables with the same formulas (`bench_customer`: 100 rows,
-`bench_orders`: 1,000 rows) and run workload A (hash join + TopK) and workload B (hash join +
-aggregate + TopK) 100 times. The `checksum` of a workload is identical on every path. Settings:
-`ADB_BENCH_ITERATIONS`, `ADB_BENCH_OUT`, `ADB_BENCH_DATA`, `ADB_NATIVE_LIBRARY`.
+The Rust binary defines and loads the dataset (11 tables, `ADB_BENCH_SCALE`); the JVM opens the
+prepared database, creates the matching catalog and indexes through SQL, and runs workloads A
+(hash join + TopK), B (+ aggregate), C (covering index equality), D (index range + row fetch +
+LIMIT, no sort) and E (sequential control). The `checksum` of a workload is identical on every
+path. Settings: `ADB_BENCH_SCALE`, `ADB_BENCH_ITERATIONS`, `ADB_BENCH_WARMUP_MS`,
+`ADB_BENCH_OUT`, `ADB_BENCH_DATA`, `ADB_NATIVE_LIBRARY`. Sections and recorded results:
+[results/README.md](results/README.md).
 
 ## Rust relational demo
 
@@ -40,7 +45,8 @@ examples/jvm-cdc-smoke/run.sh
 
 Builds `libadb_ffi`, compiles the Java binding with plain `javac` (no Gradle/Maven) and checks the
 change feed, consumer offsets, vacuum, `entity_scan`, `ANALYZE`, statistics documents,
-modification counts and error statuses through the full Java → C ABI v5 → engine path.
+modification counts, index creation, listing and dropping, negative primary keys (data format 2)
+and error statuses through the full Java → C ABI v6 → engine path.
 
 ## JVM planner benchmark and end-to-end benchmark
 

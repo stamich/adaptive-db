@@ -40,5 +40,5 @@ final case class OptimizerConfig(
 
 /** Default configuration. */
 object OptimizerConfig:
-  /** The 2.2.3 defaults. */
+  /** The defaults (weights refitted in 2.3.0). */
   val Default: OptimizerConfig = OptimizerConfig()

@@ -7,7 +7,7 @@
 /// primary keys, `ADB_INCOMPATIBLE_FORMAT`).
 pub const ABI_VERSION: u32 = 6;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"2.2.3";
+static ENGINE_VERSION: &[u8] = b"2.3.0";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

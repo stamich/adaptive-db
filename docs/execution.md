@@ -1,12 +1,13 @@
-# Execution layer (Milestone 2.1.3)
+# Execution layer (Milestones 2.1.3 and 2.3.0)
 
 `adb-execution` turns a validated physical plan into a tree of pull-based, batch-oriented
-operators. It depends only on `adb-core`: all data access goes through `DataSource`
-(`point_lookup`, `scan_page`), so the layer knows nothing about pages, tuple slots, the B+Tree or
-the log.
+operators. It depends only on `adb-core` and on `adb-index` for index definitions and bounds.
+All data access goes through `DataSource` (`point_lookup`, `scan_page`, and since 2.3.0 the
+`IndexAccess` methods `index_scan_page` and `fetch_rows`), so the layer knows nothing about
+pages, tuple slots, the B+Tree or the log.
 
 ```text
-plan wire v2 JSON ──► adb-plan-wire::decode_json ──► PhysicalPlan::validate ──► PlanShape
+plan wire v3 JSON ──► adb-plan-wire::decode_json ──► PhysicalPlan::validate ──► PlanShape
                                                                                 (width, output slots)
                                                         │
                                                         ▼
@@ -57,6 +58,8 @@ SELECT a.id, b.id FROM orders a JOIN orders b ON a.customer_id = b.customer_id
 | `Aggregate` | blocking | GROUP BY slots + COUNT(*) / COUNT / SUM / MIN / MAX / AVG |
 | `Sort` | blocking | stable multi-key sort; NULLS LAST ascending, NULLS FIRST descending |
 | `TopK` | streaming into O(k) buffer | exactly `Limit(Sort)`, in O(n log k) time and O(k) memory |
+| `IndexScan` *(2.3.0)* | leaf, streaming | one equality prefix and one range of an index, forward or backward; keyset pages of at most `batch_size` entries (the `limit` hint sizes them); every page re-checks that the index serves the snapshot; reads only key and covered fields; counters `pages`, `entries_examined` |
+| `RowFetch` *(2.3.0)* | streaming | adds stored fields to its input rows by row id: the ids of one batch are sorted, fetched in one pass, and emitted in input order; an id that is not visible is a corruption error; counters `fetch_batches`, `rows_fetched` |
 
 ### Join semantics
 

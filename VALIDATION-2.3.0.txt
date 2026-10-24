@@ -1,0 +1,61 @@
+Adaptive DB Milestone 2.3.0 — validation record
+Date: 2026-10-24
+Base: 2.2.3 (master fa72937)
+
+Environment
+  rustc 1.97.0 (2d8144b78 2026-07-07)
+  cargo 1.97.0 (c980f4866 2026-06-30)
+  openjdk version "22.0.2" 2024-07-16
+  Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44-fc-v153, 2 vCPU cloud VM
+
+Rust (equivalent of the cargo steps of ./build-milestone-2.3.0.sh)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 258 passed, 0 failed
+  rustdoc -D warnings ............................................ OK
+  release build of libadb_ffi and adb-migrate ...................... OK
+  cargo run -p adb-rust-demo ...................................... OK
+  data-plane benchmark -> examples/results/2.3.0-rust-local.json .. OK
+  workload benchmark, rust_native -> examples/results/2.3.0-database.json (scale 1)
+                                  and 2.3.0-database-sf10.json (scale 10) OK
+  include/adb.h compiled from C with -Wall -Werror ................ OK
+
+Java / JVM
+  examples/jvm-cdc-smoke (Java FFM -> ABI v6, incl. ANALYZE, indexes,
+    negative primary keys) ........................................ PASS
+  JVM modules compiled with scalac 3.3.8 and javac 22 ............. OK
+  JVM tests (Scala + Java) ........................................ 120 passed, 0 failed
+  feature tour (io.adb.cli.Main --demo) against libadb_ffi ........ OK (65 statements, 1.0.1 -> 2.3.0)
+  workload benchmark (ffi_prepared_plan, scala_cbo_ffi_rust, selectivity sweep)
+    -> examples/results/2.3.0-ffi.json (scale 1, 100 iterations)
+       and 2.3.0-ffi-sf10.json (scale 10, 20 iterations) ............ OK
+  scripts/check-benchmarks.py on both scales ...................... "benchmark results agree"
+
+  Gradle could not be run here: Maven Central is not reachable from the validation environment.
+  The JVM modules were therefore compiled and tested with the Scala 3.3.8 compiler and javac
+  directly, and the JVM entry points (demo, benchmarks) were run from those classes. The steps
+  scripts/benchmark-ffi.sh and demo/run-demo.sh run through the Gradle wrapper (CI runs them).
+
+Workload results (p50; identical checksums on every path)
+  scale 1                        rust_native  ffi_prepared_plan  scala_cbo_ffi_rust  checksum
+  C_covering_index_eq             0.025 ms     0.040 ms           0.105 ms           5742223708
+  D_index_range_order_limit       0.155 ms     0.174 ms           0.372 ms           1052395880
+  E_seq_scan_region_eq            57 ms        88 ms              83 ms              1000
+  A_hash_join_topk                1.04 ms      0.75 ms            1.24 ms            9955
+  B_hash_join_aggregate_topk      0.66 ms      0.78 ms            1.08 ms            54550
+  selectivity sweep (0.01% .. 50%): cost mode chose the faster plan at 5 of 6 points at scale 1
+    (50%: sequential chosen, 6% slower than the index plan) and at 6 of 6 points at scale 10
+  index builds: ~4 s per index at scale 1, ~40 s at scale 10 (about 25,000 rows/s)
+  write overhead (100 rows per commit): 1 index 3.0-3.1x, 3 indexes 5.5-6.7x slower
+  max q-error with fresh statistics: 1.0 on workloads A-E
+
+Calibration
+  scripts/fit-cost-weights.py on both 2.3.0 reports: random access ~0.7 us (50-56 row
+  operations); the weights were kept (io 4,500, hash_row 1, random_io 100) because they already
+  place the index/sequential crossover where it was measured (docs/optimizer.md#calibration).
+
+Commits
+  24 commits, one per task of the 2.3.0 plan (docs/milestone-2.3.0.md), each authored by
+  Michal Stawarski; every commit builds and passes its own tests.

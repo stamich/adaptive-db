@@ -43,17 +43,17 @@ jobs:
       - name: rust_native
         run: ./scripts/benchmark-db.sh
         env:
-          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-database.json
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.3.0-database.json
       - name: JVM paths
         run: ./scripts/benchmark-ffi.sh
         env:
-          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-ffi.json
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.3.0-ffi.json
       - name: Check consistency
-        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.2.3-database.json" "$RUNNER_TEMP/2.2.3-ffi.json"
+        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.3.0-database.json" "$RUNNER_TEMP/2.3.0-ffi.json"
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-results-sf${{ inputs.scale }}
-          path: ${{ runner.temp }}/2.2.3-*.json
+          path: ${{ runner.temp }}/2.3.0-*.json
           if-no-files-found: ignore

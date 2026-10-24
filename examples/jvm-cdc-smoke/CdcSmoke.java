@@ -2,7 +2,7 @@ import io.adb.ffm.*;
 import java.nio.file.*;
 import java.util.Optional;
 
-/** Java FFM -> native engine smoke test (ABI 5): change feed, offsets, vacuum, entity scan, statistics. Needs only a JDK 22. */
+/** Java FFM -> native engine smoke test (ABI 6): change feed, offsets, vacuum, entity scan, statistics, indexes. Needs only a JDK 22. */
 public class CdcSmoke {
     /**
      * Fails the smoke test unless {@code ok} holds, otherwise prints a pass line.
@@ -13,7 +13,8 @@ public class CdcSmoke {
     static void check(boolean ok, String what) { if (!ok) throw new AssertionError(what); System.out.println("ok  " + what); }
     /**
      * Runs the scenario: writes, reads the change feed, stores a consumer offset, vacuums, scans,
-     * checks error statuses, then reopens the database and verifies the offset and new events.
+     * analyzes, creates an index, checks error statuses, then reopens the database and verifies
+     * the offset, the index, new events and a negative primary key.
      *
      * @param args {@code args[0]} is the path of the native library
      * @throws Exception on any unexpected failure
@@ -54,12 +55,23 @@ public class CdcSmoke {
             catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "mid-frame cursor rejected with INVALID_ARGUMENT"); }
             try { db.insert(1, 10, "{\"fields\":{}}"); check(false, "duplicate pk"); }
             catch (NativeException e) { check(e.status() == AdbStatus.CONFLICT, "duplicate primary key is CONFLICT"); }
+            String created = db.createIndexJson("{\"name\":\"idx_value\",\"entity_id\":1,\"columns\":[{\"field_id\":1}]}");
+            check(created.contains("\"name\":\"idx_value\"") && created.contains("\"state\":\"active\""), "CREATE INDEX returns an active index");
+            try { db.createIndexJson("{\"name\":\"IDX_VALUE\",\"entity_id\":1,\"columns\":[{\"field_id\":1}]}"); check(false, "taken index name"); }
+            catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "a taken index name is INVALID_ARGUMENT"); }
         }
         try (var db = NativeDatabase.open(lib, data)) {
             check(db.consumerOffset("indexer").getAsLong() == cursor, "consumer offset survives reopen");
             check(db.readChangesJson(cursor, 10).contains("\"events\":[]"), "no new events after stored cursor");
             db.insert(1, 11, "{\"fields\":{\"1\":{\"Int64\":7}}}");
             check(db.readChangesJson(cursor, 10).contains("\"primary_key\":\"11\""), "new event visible after reopen");
+            check(db.listIndexesJson().contains("\"name\":\"idx_value\""), "the index survives reopen");
+            db.dropIndex("idx_value");
+            try { db.dropIndex("idx_value"); check(false, "drop of a missing index"); }
+            catch (NativeException e) { check(e.status() == AdbStatus.NOT_FOUND, "dropping a missing index is NOT_FOUND"); }
+            long before = db.changeFeedEnd();
+            db.insert(1, -5, "{\"fields\":{\"1\":{\"Int64\":1}}}");
+            check(db.readChangesJson(before, 10).contains("\"primary_key\":\"-5\""), "negative primary keys round-trip (data format 2)");
         }
         System.out.println("CDC e2e smoke: PASS");
     }

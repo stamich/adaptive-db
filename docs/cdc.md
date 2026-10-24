@@ -60,7 +60,8 @@ C ABI (`include/adb.h`): `adb_read_changes_json`, `adb_change_feed_end`,
                         "after":{"fields":{"1":{"Int64":20}}}}]}]}
 ```
 
-Log positions and primary keys are decimal strings because they use the full `u64` range.
+Log positions are decimal strings because they use the full `u64` range. Primary keys are decimal
+strings too, for compatibility; since data format 2 they are the signed SQL `BIGINT` values (`"-7"`).
 
 Java (`io.adb.ffm.NativeDatabase`): `readChangesJson(cursor, maxEvents, entityIds...)`,
 `changeFeedEnd()`, `commitConsumerOffset(name, cursor)`, `consumerOffset(name)`. Cursors are

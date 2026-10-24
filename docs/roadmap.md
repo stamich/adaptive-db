@@ -45,14 +45,21 @@
 - refitting `CostWeights` per machine from the feedback log
 - feeding q-errors back into planning (adaptive re-planning)
 
-## 2.3 — secondary indexes and order-preserving keys
-- **order-preserving key encoding** (sign-flipped BIGINT keys) with a one-time storage migration,
-  done together with the index key format so storage migrates once
-- secondary B+Tree
-- IndexScan
-- covering index metadata
-- cost-based SeqScan vs IndexScan
-- Sort elision from key and index order (needs the new key encoding)
+## 2.3.0 — secondary indexes and order-preserving keys (done)
+- **order-preserving key encoding** (sign-flipped BIGINT keys, data format 2) with a one-time
+  storage migration (`adb-migrate`), done together with the index key format
+- secondary indexes as MVCC-versioned projections of the log (byte-key B+Tree), maintained in
+  the commit, recovered, vacuumed and rebuilt like the other projections
+- `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES`, covering (`INCLUDE`) columns; C ABI 6
+- IndexScan and RowFetch (plan wire v3); index statistics (statistics format 2)
+- cost-based SeqScan vs IndexScan, Sort and TopK elision from index and primary-key order
+- EXPLAIN for access paths; selectivity sweep and random-access calibration in the benchmarks
+
+## 2.3.x follow-ups
+- index intersection and union, `IN` lists and `OR` over indexes, `IS NULL` bounds
+- index nested-loop joins (probing an index per outer row)
+- unique, partial and expression indexes
+- online (non-blocking) and bulk-loaded index builds; cheaper index maintenance on writes
 
 ## 2.4 — schema evolution v1
 - ADD/RENAME/logical DROP column

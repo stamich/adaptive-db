@@ -1,20 +1,22 @@
-# Cost-based optimizer (Milestone 2.2.3)
+# Cost-based optimizer (Milestones 2.2.3 and 2.3.0)
 
 The planner of 2.1.3 decided by rules: joins ran in SQL order, the right input was always built,
 and LIMIT over ORDER BY always became a TopK. Since 2.2.3 it decides by estimated cost, using the
-engine's statistics ([statistics.md](statistics.md)). It explains every decision, and EXPLAIN
-ANALYZE checks every estimate against what the engine measured.
+engine's statistics ([statistics.md](statistics.md)). Since 2.3.0 it also chooses how each table
+is read: through a secondary index ([indexes.md](indexes.md)) or by a sequential scan. It explains
+every decision, and EXPLAIN ANALYZE checks every estimate against what the engine measured.
 
 ```text
 SQL → parse → bind → LogicalPlanner → RuleOptimizer (pushdown, point lookups)
     → JoinReorderRule (cost mode)            ┐
     → PhysicalPlanner + CostBasedPolicy      ├─ CardinalityEstimator + CostModel
-      (or DefaultPlanningPolicy, rule mode)  ┘   over StatisticsProvider
-    → plan wire v2 → engine → runtime profile (node ids) → EXPLAIN ANALYZE q-error, feedback log
+      (access paths, join strategies, order) │   over StatisticsProvider + IndexCatalog
+      (or DefaultPlanningPolicy, rule mode)  ┘
+    → plan wire v3 → engine → runtime profile (node ids) → EXPLAIN ANALYZE q-error, feedback log
 ```
 
 `SET optimizer = cost` (the default) or `SET optimizer = rule` selects the mode per session. Rule
-mode is the 2.1.3 planner. It is kept for comparison and as a fallback if a plan gets worse
+mode is the 2.1.3 planner and ignores indexes. It is kept for comparison and as a fallback if a plan gets worse
 after `ANALYZE`, and EXPLAIN still shows estimates in it.
 
 ## Cardinality estimation (`adb-optimizer/cardinality`)
@@ -110,10 +112,46 @@ Planning a 10-relation chain takes about 2 ms and a 10-relation star about 10 ms
   joins the smaller input is built, which means **swapping the inputs** when it is the logical left
   one (the engine always builds its right input). A LEFT JOIN never swaps.
 * **ORDER BY + LIMIT**: it uses a TopK whenever the engine accepts the limit (≤ 1,000,000), because
-  its memory is bounded by the limit rather than by the input.
+  its memory is bounded by the limit rather than by the input, unless the chosen access path
+  already produces the order (see below).
 
 Every decision is a `PlanDecision` with its reason. The reason includes the cost, the build side,
 the estimated rows and confidence, and the next-best alternative.
+
+## Access paths (2.3.0)
+
+For every relation, `CostBasedPolicy.chooseAccess` compares the sequential scan with every index
+of the table that serves the query snapshot (`AS OF VERSION` included; see
+[indexes.md](indexes.md#lifecycle)):
+
+1. **Matching** (`IndexPredicateMatcher`). Conjuncts `column op literal` (`=`, `<`, `<=`, `>`,
+   `>=`, either side) whose literal converts exactly to the column type form the bounds.
+   Equalities on the leading key columns become the prefix. The first key column without an
+   equality may take a range, and the tightest of several comparisons wins. Everything else
+   (and a comparison after the range column) stays a residual filter, which runs right after
+   the scan and, for non-covering scans, *before* the row fetch.
+2. **Enumeration** (`AccessPathEnumerator`). An index is a candidate if it has bounds, or if it
+   produces a required order (`ORDER BY` on its key columns, forward or backward; key columns
+   bound by equality may be skipped). A scan is **covering** when every column the query reads
+   is a key or `INCLUDE` column; otherwise a `RowFetch` adds the rest.
+3. **Costing** (`CostModel.accessCost`). Index entries cost a row operation each plus their pages
+   (encoded key + 40 bytes per entry). A non-covering scan adds, per matched row, a random
+   access (weight `randomIo`) scaled by `1 − pk_locality` plus the page reads of the fetched
+   rows. `matched` comes from `CardinalityEstimator.indexSelectivity`, which floors the
+   independence estimate of a multi-column equality prefix by the index's distinct-prefix
+   counts. Without index statistics, every fetch counts as a random access.
+4. **Order**. With a required order, a path that produces it costs only the fraction of its rows
+   a `LIMIT` needs. Every other path is charged the sort, or the TopK under a LIMIT, that it
+   would still need (`CostModel.sortCost`). The primary-key order of the sequential scan counts
+   too, because since data format 2 rows are stored in primary-key order. When the winner
+   produces the order, the planner drops the Sort (decision `access order`) or replaces the TopK
+   with a Limit over the scan (decision `access order + limit`).
+
+The selectivity sweep of the workload benchmark
+([examples/results/README.md](../examples/results/README.md)) runs a non-covering range from
+0.01% to 50% of the table as an index plan and as a sequential plan, at 100,000 and 1,000,000
+rows. Cost mode picked the faster plan at every point. The only exception was 50% at scale 1,
+where both plans take the same time within noise and the chosen sequential plan was 6% slower.
 
 ## EXPLAIN and EXPLAIN ANALYZE
 
@@ -172,19 +210,22 @@ It is also where declared intents (latency first, memory first, ...) will plug i
 ## Calibration
 
 `scripts/benchmark-ffi.sh` records a calibration point for every measured plan: the unweighted
-cost components of the plan's root (`cpu`, `io`, `memory_bytes`, `hash_rows`) and the plan's
+cost components of the plan's root (`cpu`, `io`, `memory_bytes`, `hash_rows`, and since 2.3.0
+`random_io`) and the plan's
 median engine time on the prepared-plan path (planning excluded). The points cover join plans
 (workloads A and B, the chain and star join orders in both modes) and scan-only plans (the
 estimation queries: filter and aggregate, nothing hashed), so row reads, row operations and
-hashed rows can be told apart. `scripts/fit-cost-weights.py REPORT.json ...` fits
+hashed rows can be told apart. Since 2.3.0 the points also include workloads C–E and both plans
+of every selectivity-sweep point, so random accesses can be told apart too.
+`scripts/fit-cost-weights.py REPORT.json ...` fits
 
 ```text
-engine_ms ≈ c + a · (cpu + memory · w_memory) + d · io + b · hash_rows
+engine_ms ≈ c + a · (cpu + memory · w_memory) + d · io + b · hash_rows + r · random_io
 ```
 
 by non-negative least squares on the relative error (`c` is the fixed cost of a query: plan
 decoding, the FFI round trips) and prints the weights relative to one row operation:
-`io = d / a`, `hash_row = b / a`. Several reports can be pooled.
+`io = d / a`, `hash_row = b / a`, `random_io = r / a`. Several reports can be pooled.
 
 Fitted on the reference VM over three runs (scale factors 1 and 2), a page of row data takes
 about 140 µs (walking the primary index and decoding about 200 rows) and a row operation about
@@ -195,7 +236,14 @@ per cost unit than join and TopK plans; with the fitted weights the spread is ab
 remaining variation is mostly run-to-run noise of the shared VM; the row-operation time is the
 least well determined term, because in these workloads the rows a plan reads and its row
 operations grow together). The decisions the benchmarks exercise are unchanged by the refit.
-Re-fit after changing the storage engine or the cost formulas.
+**Random accesses (2.3.0).** Fitted on the 2.3.0 reports at scales 1 and 10, a random access (an
+index descent plus a row fetched by key) takes about 0.7 µs, or 50–56 row operations. The same
+fit also moves `io` to about 11,000 and `hash_row` to 0, and on these points it spreads the
+engine time per cost unit more than the current weights do (41 vs 26). The weights therefore
+stay at `io = 4,500`, `hash_row = 1` and `random_io = 100`. With them, the modelled crossover
+between index and sequential plans matches the measured one at both scales: cost mode chose the
+faster plan at every sweep point, as noted above. More index-heavy workloads should settle
+`random_io`. Re-fit after changing the storage engine or the cost formulas.
 
 ## Known limitations
 
@@ -207,4 +255,7 @@ Re-fit after changing the storage engine or the cost formulas.
 * A filter does not narrow the distinct count of its column for a later GROUP BY. For example,
   `WHERE region = 'x' GROUP BY region` is estimated with every region (the demo shows q = 4).
 * No multi-column statistics, no automatic `ANALYZE`, no statistics of historical versions.
-* Sort elision by key order waits for the order-preserving key encoding of 2.3.
+* Access paths use one index per relation: no index intersection or union, and `OR`, `IN`,
+  `IS NULL` and expressions over columns are not matched.
+* Index nested-loop joins (probing an index per outer row) are not planned yet; joins still
+  hash or nested-loop over scans.
