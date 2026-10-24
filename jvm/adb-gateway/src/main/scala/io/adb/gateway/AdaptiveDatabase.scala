@@ -1,6 +1,6 @@
 package io.adb.gateway
 
-import io.adb.catalog.Catalog
+import io.adb.catalog.{Catalog, IndexCatalog, IndexInfo}
 import io.adb.ffm.*
 import io.adb.logical.*
 import io.adb.model.*
@@ -47,6 +47,8 @@ final class AdaptiveDatabase(
   private val optimizer = new RuleOptimizer()
   /** Statistics of the native engine. */
   private val statistics = EngineStatisticsProvider(native)
+  /** Index definitions of the native engine. */
+  private val indexCatalog = EngineIndexCatalog(native)
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
   @volatile private var mode: OptimizerMode = OptimizerMode.Cost
 
@@ -72,6 +74,25 @@ final class AdaptiveDatabase(
     case BoundCreateTable(name, fields, pk, references) =>
       val entity = catalog.createEntity(name, fields, pk, references)
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
+
+    case BoundCreateIndex(name, entity, columns, include) =>
+      val keys = columns.map((field, descending) =>
+        s"{\"field_id\":${field.id.value},\"direction\":\"${if descending then "desc" else "asc"}\"}")
+      val spec = s"{\"name\":${PlanJsonEncoder.quote(name)},\"entity_id\":${java.lang.Long.toUnsignedString(entity.id.value)}," +
+        s"\"columns\":${keys.mkString("[", ",", "]")},\"include\":${include.map(_.id.value).mkString("[", ",", "]")}}"
+      val created = IndexCatalog.decodeStatus(io.adb.model.JsonReader.parse(native.createIndexJson(spec)).asInstanceOf[Map[String, Any]])
+      QueryResult(Vector.empty, Vector.empty, Some(s"created index ${created.name} on ${entity.name} id=${created.id.value} usable from ts=${created.usableFromTs}"))
+
+    case BoundDropIndex(name) =>
+      native.dropIndex(name)
+      QueryResult(Vector.empty, Vector.empty, Some(s"dropped index $name"))
+
+    case BoundShowIndexes(entity) =>
+      val shown = entity.fold(indexCatalog.indexes)(e => indexCatalog.indexes(e.id))
+      QueryResult(
+        Vector("name", "table", "columns", "include", "usable_from_ts", "watermark_ts"),
+        shown.map(index => AdaptiveDatabase.describe(index, catalog))
+      )
 
     case BoundAnalyze(entities) =>
       val lines = entities.map { entity =>
@@ -152,6 +173,22 @@ final class AdaptiveDatabase(
 object AdaptiveDatabase:
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
+
+  /** One `SHOW INDEXES` row: name, table, key columns (`col [DESC]`), covered columns and the
+    * range of snapshots the index serves.
+    */
+  def describe(index: IndexInfo, catalog: Catalog): Vector[Any] =
+    val entity = catalog.entity(index.entity)
+    /** The column name of `field`, or `#field` if the catalog does not know it. */
+    def name(field: FieldId): String = entity.flatMap(_.fieldsById.get(field)).fold(s"#${field.value}")(_.name)
+    Vector(
+      index.name,
+      entity.fold(s"#${index.entity.value}")(_.name),
+      index.columns.map(c => name(c.field) + (if c.descending then " DESC" else "")).mkString(", "),
+      index.include.map(name).mkString(", "),
+      java.lang.Long.valueOf(index.usableFromTs),
+      java.lang.Long.valueOf(index.watermarkTs)
+    )
 
   /** The planning stages of one SELECT.
     *

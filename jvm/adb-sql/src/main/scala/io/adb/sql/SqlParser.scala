@@ -5,8 +5,9 @@ import io.adb.sql.SqlBinaryOp.*
 
 /** Hand-written recursive-descent parser for the Adaptive DB SQL subset.
   *
-  * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE], and since 2.2.3
-  * ANALYZE [table] and SET name = value. A column may declare a foreign-key hint
+  * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE], since 2.2.3
+  * ANALYZE [table] and SET name = value, and since 2.3.0 CREATE INDEX, DROP INDEX and
+  * SHOW INDEXES [ON table]. A column may declare a foreign-key hint
   * `REFERENCES table(column) NOT ENFORCED` (the engine never checks it). Since 2.1 a
   * SELECT may join tables (INNER / LEFT / CROSS), alias them, qualify columns, aggregate with
   * COUNT / SUM / MIN / MAX / AVG, GROUP BY and ORDER BY:
@@ -43,6 +44,8 @@ object SqlParser:
   val MaxGroupBy: Int = 4096
   /** ORDER BY entries per SELECT. */
   val MaxOrderBy: Int = 4096
+  /** Key columns per CREATE INDEX (the engine's limit; INCLUDE allows twice as many). */
+  val MaxIndexColumns: Int = 16
   /** Words that end a FROM item and therefore can never be an implicit alias. */
   private[sql] val ClauseKeywords: Set[String] =
     Set(
@@ -80,6 +83,8 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       else if acceptWord("DELETE") then parseDelete()
       else if acceptWord("ANALYZE") then parseAnalyze()
       else if acceptWord("SET") then parseSet()
+      else if acceptWord("DROP") then { expectWord("INDEX"); DropIndex(expectIdentifier()) }
+      else if acceptWord("SHOW") then parseShow()
       else throw error(s"expected statement, got $current")
 
     explainModes.result().reverse.foldLeft(base) { case (inner, analyze) => Explain(inner, analyze) }
@@ -100,11 +105,52 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       case other => throw error(s"expected a value for $name, got $other")
     SetOption(name, value)
 
+  /** Parses the rest of `SHOW INDEXES [ON table]` (`SHOW INDEX` is accepted too). */
+  private def parseShow(): Statement =
+    if !acceptWord("INDEXES") then expectWord("INDEX")
+    ShowIndexes(if acceptWord("ON") then Some(expectIdentifier()) else None)
+
+  /** Parses the rest of `CREATE INDEX name ON table (column [ASC|DESC], ...)
+    * [INCLUDE (column, ...)]`.
+    */
+  private def parseCreateIndex(): Statement =
+    val name = expectIdentifier()
+    expectWord("ON")
+    val table = expectIdentifier()
+    expectSymbol("(")
+    val columns = Vector.newBuilder[IndexColumnDef]
+    var count = 0
+    var done = false
+    while !done do
+      count += 1
+      if count > SqlParser.MaxIndexColumns then throw error(s"an index has at most ${SqlParser.MaxIndexColumns} columns")
+      val column = expectIdentifier()
+      val descending = if acceptWord("DESC") then true else { acceptWord("ASC"); false }
+      columns += IndexColumnDef(column, descending)
+      if !acceptSymbol(",") then { expectSymbol(")"); done = true }
+    val include = Vector.newBuilder[String]
+    if acceptWord("INCLUDE") then
+      expectSymbol("(")
+      var more = true
+      var included = 0
+      while more do
+        included += 1
+        if included > SqlParser.MaxIndexColumns * 2 then throw error(s"at most ${SqlParser.MaxIndexColumns * 2} INCLUDE columns")
+        include += expectIdentifier()
+        if !acceptSymbol(",") then { expectSymbol(")"); more = false }
+    CreateIndex(name, table, columns.result(), include.result())
+
+  /** Parses the rest of `CREATE INDEX ...` or `CREATE TABLE ...`. */
+  private def parseCreate(): Statement =
+    if acceptWord("INDEX") then parseCreateIndex()
+    else
+      expectWord("TABLE")
+      parseCreateTable()
+
   /** Parses the rest of `CREATE TABLE name (column type [NOT NULL] [PRIMARY KEY]
     * [REFERENCES table(column) NOT ENFORCED], ...)`.
     */
-  private def parseCreate(): Statement =
-    expectWord("TABLE")
+  private def parseCreateTable(): Statement =
     val name = expectIdentifier()
     expectSymbol("(")
     val columns = Vector.newBuilder[ColumnDef]
