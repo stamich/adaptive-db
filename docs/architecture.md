@@ -1,9 +1,12 @@
-# Architecture — Milestone 2.2.3
+# Architecture — Milestone 2.3.0
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
-storage architecture below, which is unchanged. 2.2.3 adds optimizer statistics owned by the
-engine and a cost-based planner in the JVM. See [Query path](#query-path-milestone-21) and
-[Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223).
+storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a
+cost-based planner in the JVM. 2.3.0 adds secondary indexes as a third kind of projection, an
+order-preserving key encoding (data format 2), and cost-based access paths. See
+[Query path](#query-path-milestone-21),
+[Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223) and
+[Secondary indexes](#secondary-indexes-milestone-230).
 
 ## The one decision everything follows from
 
@@ -199,6 +202,31 @@ them: estimates, costs, join order and build sides. Every decision stays explain
 estimate is compared with what the engine measured. That comparison closes the adaptive loop:
 2.1.3 could decide and observe, and 2.2.3 can now also predict and measure how good the
 prediction was. Details: [statistics.md](statistics.md), [optimizer.md](optimizer.md).
+
+## Secondary indexes (Milestone 2.3.0)
+
+```text
+ commit apply ─► current store ─┬─► version store                (before-images)
+                                └─► IndexProjection per index    (entries with begin_ts/end_ts)
+                                        │ ByteTree (variable-length byte keys, keyset scans)
+ checkpoint ─► journal publishes all projections + indexes/catalog.meta together
+                                        │
+ plan wire v3: index_scan ─► IndexScanOperator (pages, snapshot re-check) ─► RowFetchOperator
+                                        ▲                                      (sorted batch lookups)
+ JVM: IndexCatalog (C ABI 6) ─► IndexPredicateMatcher ─► AccessPathEnumerator ─► CostModel.accessCost
+                                                       ─► CostBasedPolicy (index vs scan, order)
+```
+
+An index follows the decision this architecture rests on: it is a projection of the log. It
+writes no log records. It is maintained inside the commit apply step from the same row images
+as the other projections, published by the same checkpoint, replayed by recovery and rebuilt by
+`rebuild_projections`. Its entries are versioned with the same `begin_ts`/`end_ts` as rows, so
+any snapshot the index serves reads it exactly as it reads the table: `AS OF` included, until
+`VACUUM` trims the history. Keys use the order-preserving encoding of `adb_core::key_encoding`.
+Since data format 2, row ids of BIGINT primary keys use it as well, so primary-key order equals
+storage order and a sequential scan can deliver `ORDER BY id`. The JVM decides when to use an
+index. The engine checks that every scan page is served at the query snapshot. Details:
+[indexes.md](indexes.md), [optimizer.md](optimizer.md#access-paths-230).
 
 ## Control plane
 

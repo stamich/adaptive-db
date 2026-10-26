@@ -4,11 +4,12 @@ version = 4
 
 [[package]]
 name = "adb-benchmark-rust"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-engine",
  "adb-execution",
+ "adb-index",
  "adb-plan-wire",
  "serde_json",
  "tempfile",
@@ -16,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "adb-btree"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-buffer",
  "adb-core",
@@ -32,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "adb-buffer"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-journal",
@@ -44,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "adb-core"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -52,10 +53,11 @@ dependencies = [
 
 [[package]]
 name = "adb-engine"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-execution",
+ "adb-index",
  "adb-journal",
  "adb-stats",
  "adb-storage",
@@ -70,9 +72,10 @@ dependencies = [
 
 [[package]]
 name = "adb-execution"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
+ "adb-index",
  "parking_lot",
  "serde",
  "serde_json",
@@ -81,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "adb-ffi"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-engine",
@@ -96,8 +99,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-index"
+version = "2.3.0"
+dependencies = [
+ "adb-btree",
+ "adb-core",
+ "adb-journal",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-journal"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "crc32fast",
  "tempfile",
@@ -105,8 +120,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-migrate"
+version = "2.3.0"
+dependencies = [
+ "adb-core",
+ "adb-engine",
+ "tempfile",
+]
+
+[[package]]
 name = "adb-page"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "crc32fast",
@@ -115,10 +139,11 @@ dependencies = [
 
 [[package]]
 name = "adb-plan-wire"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-execution",
+ "adb-index",
  "serde",
  "serde_json",
  "thiserror",
@@ -126,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "adb-rust-demo"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-engine",
@@ -138,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "adb-stats"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "adb-execution",
@@ -149,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "adb-storage"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-btree",
  "adb-buffer",
@@ -165,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "adb-tx"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "parking_lot",
@@ -173,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "adb-wal"
-version = "2.2.3"
+version = "2.3.0"
 dependencies = [
  "adb-core",
  "bincode",

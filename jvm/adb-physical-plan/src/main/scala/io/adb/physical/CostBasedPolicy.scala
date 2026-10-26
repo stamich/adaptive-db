@@ -1,8 +1,10 @@
 package io.adb.physical
 
+import io.adb.catalog.IndexCatalog
 import io.adb.logical.*
+import io.adb.optimizer.access.{AccessPath, AccessPathEnumerator}
 import io.adb.optimizer.cardinality.CardinalityEstimator
-import io.adb.optimizer.cost.{BuildSide, CostModel, JoinCost}
+import io.adb.optimizer.cost.{AccessEstimate, BuildSide, Cost, CostModel, JoinCost}
 
 /** Statistics-driven strategy choices (the default since 2.2.3).
   *
@@ -14,11 +16,22 @@ import io.adb.optimizer.cost.{BuildSide, CostModel, JoinCost}
   *    which limit the estimates exceed (the engine still enforces the limit at run time).
   *  - '''ORDER BY + LIMIT''': a TopK whenever the engine accepts the limit (its memory is
   *    bounded by the limit, a full sort's by the input), explained with the estimated input size.
+  *  - '''access paths''' (since 2.3.0): the sequential scan and every index scan the
+  *    [[AccessPathEnumerator]] finds for the relation's filter are costed by
+  *    [[CostModel.accessCost]]; the cheapest wins.
   *
   * @param estimator cardinality estimates (shared with the cost model)
   * @param costModel operator costs
+  * @param indexes   indexes of the engine
+  * @param snapshot  the query's `AS OF` snapshot (`None` = latest); indexes that cannot serve it
+  *                  are not considered
   */
-final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostModel) extends PlanningPolicy:
+final class CostBasedPolicy(
+    estimator: CardinalityEstimator,
+    costModel: CostModel,
+    indexes: IndexCatalog = IndexCatalog.Empty,
+    snapshot: Option[Long] = None
+) extends PlanningPolicy:
   /** Cheapest feasible strategy and build side. */
   def chooseJoin(request: JoinRequest): JoinChoice =
     val out = estimator.estimate(request.join)
@@ -49,6 +62,50 @@ final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostMode
     if limit > DefaultPlanningPolicy.MaxTopK then (false, s"LIMIT $limit exceeds the TopK bound ${DefaultPlanningPolicy.MaxTopK}; full sort")
     else (true, f"keeps ${math.min(limit.toDouble, rows)}%.0f of ~$rows%.0f rows in memory instead of sorting all of them")
 
+  /** The cheapest access path of the relation; listed by EXPLAIN when an index was considered.
+    *
+    * With a required order, a path that produces it (an index in that order or its reverse, or
+    * the sequential scan for primary-key order) is compared, at the fraction of its rows a LIMIT
+    * needs, with every other path plus the sort (TopK under a LIMIT) it would then need.
+    */
+  override def chooseAccess(request: AccessRequest): AccessChoice =
+    val wantsOrder = request.required.nonEmpty
+    val candidates = AccessPathEnumerator.candidates(
+      request.relation, request.conjuncts, indexes.indexes(request.relation.entity.id), snapshot, ordered = wantsOrder, backward = wantsOrder)
+    val options = candidates.map { path =>
+      val full = costModel.accessCost(path)
+      if wantsOrder && delivers(path, request) then
+        val fraction = request.limit.fold(1.0)(k => math.min(1.0, k.toDouble / math.max(1.0, full.rows)))
+        val partial = costModel.accessCost(path, fraction)
+        (partial, partial.cost, true)
+      else if wantsOrder then (full, full.cost + costModel.sortCost(full.rows, request.relation.columns, request.limit), false)
+      else (full, full.cost, false)
+    }
+    val (best, bestCost, ordered) = options.minBy((_, cost, _) => costModel.total(cost))
+    val others = options.filterNot(_._1 eq best)
+    /** ` + top_k` / ` + sort` for a path that does not produce the required order. */
+    def sortSuffix(pathOrdered: Boolean): String =
+      if wantsOrder && !pathOrdered then (if request.limit.isDefined then " + top_k" else " + sort") else ""
+    /** `<path>[ + sort] cost N`. */
+    def option(estimate: AccessEstimate, cost: Cost, pathOrdered: Boolean): String =
+      f"${CostBasedPolicy.describe(estimate.path)}${sortSuffix(pathOrdered)} cost ${costModel.total(cost)}%.1f"
+    val rejected = others.sortBy((_, cost, _) => costModel.total(cost))
+    val reason =
+      f"cost ${costModel.total(bestCost)}%.1f${sortSuffix(ordered)}, est. rows=${best.rows}%.0f" +
+        (if ordered then "; produces the required order" else "") +
+        rejected.headOption.fold("")(option.tupled.andThen("; next best " + _)) +
+        (if rejected.size > 1 then
+           val shown = rejected.slice(1, 1 + CostBasedPolicy.MaxRejectedShown).map(option.tupled)
+           val hidden = rejected.size - 1 - shown.size
+           shown.mkString("; also rejected ", ", ", if hidden > 0 then s" and $hidden more" else "")
+         else "")
+    AccessChoice(best.path, reason, Some(best), explain = candidates.size > 1 || ordered, ordered = ordered)
+
+  /** Whether `path` produces the order `request` requires. */
+  private def delivers(path: AccessPath, request: AccessRequest): Boolean = path match
+    case scan: AccessPath.IndexScan => scan.properties.satisfies(request.required, scan.constantSlots)
+    case seq: AccessPath.SeqScan => seq.properties.satisfies(request.required)
+
   /** `; next best: cost N` for the cheapest rejected alternative, if any. */
   private def alternative(others: Vector[JoinCost]): String =
     others.minByOption(c => (c.violations.size, costModel.total(c.cost))).fold("") { c =>
@@ -60,3 +117,15 @@ final class CostBasedPolicy(estimator: CardinalityEstimator, costModel: CostMode
     case LogicalPlan.TableScan(relation) => relation.alias
     case LogicalPlan.PointLookup(relation, _) => relation.alias
     case other => other.children.map(aliases).mkString(",")
+
+/** Descriptions of access paths for EXPLAIN. */
+object CostBasedPolicy:
+  /** Rejected access paths listed by name after the next best one (the rest are counted). */
+  val MaxRejectedShown: Int = 3
+
+  /** `entity_scan` or `index_scan <name> [backward] [covering]`. */
+  def describe(path: AccessPath): String = path match
+    case AccessPath.SeqScan(_, _) => "entity_scan"
+    case scan: AccessPath.IndexScan =>
+      s"index_scan ${scan.index.name}" + (if scan.backward then " backward" else "") + (if scan.covering then " (covering)" else " + row_fetch")
+

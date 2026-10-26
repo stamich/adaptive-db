@@ -51,6 +51,14 @@ final case class Select(
 final case class Update(table: String, assignments: Vector[(String, SqlExpr)], where: SqlExpr) extends Statement derives CanEqual
 /** `DELETE FROM table WHERE ...`. */
 final case class Delete(table: String, where: SqlExpr) extends Statement derives CanEqual
+/** One key column of `CREATE INDEX`: a column name and its sort direction. */
+final case class IndexColumnDef(name: String, descending: Boolean) derives CanEqual
+/** `CREATE INDEX name ON table (column [ASC|DESC], ...) [INCLUDE (column, ...)]`. */
+final case class CreateIndex(name: String, table: String, columns: Vector[IndexColumnDef], include: Vector[String]) extends Statement derives CanEqual
+/** `DROP INDEX name`. */
+final case class DropIndex(name: String) extends Statement derives CanEqual
+/** `SHOW INDEXES [ON table]`. */
+final case class ShowIndexes(table: Option[String]) extends Statement derives CanEqual
 /** `ANALYZE [table]`: collect optimizer statistics of one table, or of every table. */
 final case class Analyze(table: Option[String]) extends Statement derives CanEqual
 /** `SET name = value` (or `SET name TO value`): a session setting such as `optimizer`. */

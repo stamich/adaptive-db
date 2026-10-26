@@ -22,6 +22,9 @@ pub enum BTreeError {
     /// Structural corruption (bad node, cycle, excessive depth, bad metadata).
     #[error("corrupt btree: {0}")]
     Corrupt(String),
+    /// A key or value exceeds the size limits of the tree (caller error, nothing was changed).
+    #[error("btree limit: {0}")]
+    Limit(String),
 }
 
 impl BTreeError {

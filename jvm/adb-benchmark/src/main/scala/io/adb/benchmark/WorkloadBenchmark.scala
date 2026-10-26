@@ -6,7 +6,8 @@ import io.adb.gateway.{AdaptiveDatabase, QueryResult}
 import io.adb.logical.{Binder, BoundSelect, LogicalPlan, OptimizerMode}
 import io.adb.model.*
 import io.adb.optimizer.OptimizerConfig
-import io.adb.physical.PlanJsonEncoder
+import io.adb.optimizer.cost.CostWeights
+import io.adb.physical.{NodeEstimate, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 import io.adb.statistics.*
 import java.nio.charset.StandardCharsets
@@ -14,13 +15,13 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.2.3 workload benchmark over the native engine.
+/** Milestone 2.3.0 workload benchmark over the native engine.
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
   * data; `scripts/benchmark-ffi.sh` runs it); this benchmark creates the matching catalog in the
   * same order, so entity and field ids line up, checks every row count, and then measures:
   *
-  *  - '''workloads A and B''' on three paths: `planning_only` (parse, bind, plan, encode),
+  *  - '''workloads A–E''' on three paths: `planning_only` (parse, bind, plan, encode),
   *    `ffi_prepared_plan` (a prepared plan through Java FFM: boundary + engine) and
   *    `scala_cbo_ffi_rust` (the whole SQL path); `rust_native` is measured by the Rust binary;
   *  - '''join order''': a chain (`jo_*`) and a star schema (`st_*`) whose SQL order builds the
@@ -28,13 +29,21 @@ import scala.jdk.CollectionConverters.*
   *    scale, which is reported, not hidden);
   *  - '''estimation''': skewed (Zipf) values, a perfectly correlated predicate pair, a range,
   *    and stale statistics before and after `ANALYZE`, each with its estimated and actual rows;
+  *  - '''index build''': `CREATE INDEX` over the loaded `ix_account` rows;
+  *  - '''selectivity sweep''': a non-covering balance range from 0.01% to 50% of the rows,
+  *    run as an index plan (forced), a sequential plan (rule mode) and the plan cost mode
+  *    chooses, which shows where the two paths cross and whether the optimizer finds it;
   *  - '''planner''': planning time of chain and star queries of 2–12 relations;
-  *  - '''calibration''': measured engine time per estimated cost unit for every workload.
+  *  - '''calibration''': for every measured plan, the unweighted cost components of its root,
+  *    the weighted cost and the engine time (prepared-plan path), from which
+  *    `scripts/fit-cost-weights.py` fits the [[io.adb.optimizer.cost.CostWeights]]; plus the
+  *    engine time per cost unit and its spread across plans under the current weights.
   *
-  * Every timed path warms up for a minimum time first (JIT), and reports p50, p95 and p99.
+  * Every timed path warms up for a minimum time first (JIT), and reports p50, p95, p99, mean,
+  * min, max, the standard deviation and the medians of seven consecutive rounds of samples.
   */
 object WorkloadBenchmark:
-  /** Catalog of the dataset, in the Rust `dataset::TABLES` order (entity ids 1..10). */
+  /** Catalog of the dataset, in the Rust `dataset::TABLES` order (entity ids 1..11). */
   val Ddl: Vector[String] = Vector(
     "CREATE TABLE bench_customer (id BIGINT PRIMARY KEY, name STRING NOT NULL, segment BIGINT NOT NULL)",
     "CREATE TABLE bench_orders (id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL REFERENCES bench_customer(id) NOT ENFORCED, amount BIGINT NOT NULL)",
@@ -45,14 +54,24 @@ object WorkloadBenchmark:
     "CREATE TABLE st_dim (id BIGINT PRIMARY KEY, region_id BIGINT NOT NULL REFERENCES st_region(id) NOT ENFORCED, name STRING NOT NULL)",
     "CREATE TABLE st_fact (id BIGINT PRIMARY KEY, dim_id BIGINT NOT NULL REFERENCES st_dim(id) NOT ENFORCED, v BIGINT NOT NULL)",
     "CREATE TABLE sk_events (id BIGINT PRIMARY KEY, kind BIGINT NOT NULL, region BIGINT NOT NULL, v BIGINT NOT NULL)",
-    "CREATE TABLE sk_stale (id BIGINT PRIMARY KEY, kind BIGINT NOT NULL, v BIGINT NOT NULL)"
+    "CREATE TABLE sk_stale (id BIGINT PRIMARY KEY, kind BIGINT NOT NULL, v BIGINT NOT NULL)",
+    "CREATE TABLE ix_account (id BIGINT PRIMARY KEY, region BIGINT NOT NULL, balance BIGINT NOT NULL, owner STRING NOT NULL, note STRING NOT NULL)"
   )
+
+  /** Indexes of the 2.3.0 workloads, as the Rust `dataset::INDEXES` declares them. */
+  val IndexDdl: Vector[(String, String)] = Vector(
+    "idx_ix_owner" -> "CREATE INDEX idx_ix_owner ON ix_account (owner) INCLUDE (balance)",
+    "idx_ix_balance" -> "CREATE INDEX idx_ix_balance ON ix_account (balance)"
+  )
+
+  /** Modulus of the `ix_account.balance` permutation: balances spread over `0..BalanceModulus`. */
+  val BalanceModulus: Long = 1_000_000_007L
 
   /** Rows per table at scale factor 1, and whether they grow with the scale (as in Rust). */
   val BaseRows: Vector[(String, Long, Boolean)] = Vector(
     ("bench_customer", 100L, true), ("bench_orders", 1_000L, true), ("jo_c", 20L, false), ("jo_b", 2_000L, true),
     ("jo_a", 20_000L, true), ("st_region", 100L, false), ("st_dim", 1_000L, true), ("st_fact", 100_000L, true),
-    ("sk_events", 100_000L, true), ("sk_stale", 100_000L, true)
+    ("sk_events", 100_000L, true), ("sk_stale", 100_000L, true), ("ix_account", 100_000L, true)
   )
 
   /** Workload A: hash join + TopK. */
@@ -62,6 +81,17 @@ object WorkloadBenchmark:
   val WorkloadB: String =
     "SELECT c.name, SUM(o.amount) AS total FROM bench_customer c JOIN bench_orders o ON c.id = o.customer_id " +
       "GROUP BY c.name ORDER BY total DESC LIMIT 10"
+  /** Workload C: covering equality scan of `idx_ix_owner` (1 / 10,000 of the rows). */
+  val WorkloadC: String = "SELECT owner, balance FROM ix_account WHERE owner = 'owner-42'"
+  /** Workload D: ordered range of `idx_ix_balance` with row fetch; LIMIT replaces the sort.
+    * Balances are unique, so every plan returns the same rows.
+    */
+  val WorkloadD: String = "SELECT id, balance FROM ix_account WHERE balance >= 10000000 ORDER BY balance LIMIT 100"
+  /** Workload E (control): no index on `region`, so a sequential scan with a filter. */
+  val WorkloadE: String = "SELECT COUNT(*) FROM ix_account WHERE region = 7"
+  /** Fractions of `ix_account` the selectivity sweep selects by a balance range. */
+  val SweepFractions: Vector[Double] = Vector(0.0001, 0.001, 0.01, 0.05, 0.2, 0.5)
+
   /** Chain join order: SQL order joins the largest table first. */
   val ChainQuery: String =
     "SELECT a.v, c.tag FROM jo_a a JOIN jo_b b ON a.b_id = b.id JOIN jo_c c ON b.c_id = c.id WHERE c.tag = 3"
@@ -100,21 +130,44 @@ object WorkloadBenchmark:
       Ddl.foreach(db.execute)
       val counts = verifyRowCounts(db, settings.scale)
       BaseRows.map(_._1).filterNot(_ == "sk_stale").foreach(table => db.execute(s"ANALYZE $table"))
+      val indexBuild = IndexDdl.map { (name, ddl) =>
+        val start = System.nanoTime()
+        db.execute(ddl)
+        name -> obj("sql" -> str(ddl), "ms" -> num((System.nanoTime() - start) / 1e6))
+      }
+      db.execute("ANALYZE ix_account") // index statistics for the cost model
       val timer = Timer(settings.iterations, settings.warmupMs)
+      val points = Vector.newBuilder[CalibrationPoint]
 
-      val workloads = Vector("A_hash_join_topk" -> WorkloadA, "B_hash_join_aggregate_topk" -> WorkloadB).map { (name, sql) =>
+      val workloads = Vector(
+        "A_hash_join_topk" -> WorkloadA,
+        "B_hash_join_aggregate_topk" -> WorkloadB,
+        "C_covering_index_eq" -> WorkloadC,
+        "D_index_range_order_limit" -> WorkloadD,
+        "E_seq_scan_region_eq" -> WorkloadE
+      ).map { (name, sql) =>
         val prepared = preparedPlan(db, catalog, sql)
+        val engine = timer.measure(drain(native, prepared))
+        points += CalibrationPoint(name, rootEstimate(db, catalog, sql), engine.percentile(0.5))
         name -> obj(
           "planning_only" -> timer.measure(planOnly(db, catalog, sql)).json,
-          "ffi_prepared_plan" -> timer.measure(drain(native, prepared)).json,
+          "ffi_prepared_plan" -> engine.json,
           "scala_cbo_ffi_rust" -> timer.measure(checksum(db.execute(sql))).json,
+          "access_path" -> str(accessPath(db, catalog, sql)),
           "estimated_root_cost" -> num(rootCost(db, catalog, sql)),
           "max_q_error" -> num(maxQError(db, sql))
         )
       }
-      val joinOrder = Vector("chain" -> ChainQuery, "star" -> StarQuery).map((name, sql) => name -> modes(db, catalog, native, sql, timer))
+      val sweep = selectivitySweep(db, catalog, native, settings.scale, timer, points)
+      val joinOrder = Vector("chain" -> ChainQuery, "star" -> StarQuery).map((name, sql) => name -> modes(db, catalog, native, sql, timer, name, points))
+      // Scan-only plans (filter + aggregate, nothing hashed) separate the row-operation weight
+      // from the hash-row weight in the calibration fit.
+      EstimationQueries.foreach { (name, sql) =>
+        val engine = timer.measure(drain(native, preparedPlan(db, catalog, sql)))
+        points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
+      }
       val report = obj(
-        "milestone" -> str("2.2.3"),
+        "milestone" -> str("2.3.0"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
@@ -122,15 +175,63 @@ object WorkloadBenchmark:
         ),
         "setup" -> obj("scale" -> num(settings.scale), "iterations" -> num(settings.iterations), "warmup_ms" -> num(settings.warmupMs),
           "rows" -> obj(counts.map((t, n) => t -> num(n))*)),
+        "index_build" -> obj(indexBuild*),
         "workloads" -> obj(workloads*),
+        "selectivity_sweep" -> sweep,
         "join_order" -> obj(joinOrder*),
         "estimation" -> estimationSection(db),
         "planner" -> plannerSection(timer),
-        "calibration" -> calibration(workloads.map((n, s) => n -> s) ++ joinOrder.map((n, s) => s"join_order_$n" -> s))
+        "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights)
       )
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
     finally native.close()
+
+  /** The access path cost mode chose for the first relation of `sql` (`entity_scan` when no
+    * index was a candidate, so no access decision was recorded).
+    */
+  private def accessPath(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): String =
+    db.plan(bind(catalog, sql)).physical.decisions.find(_.operator.startsWith("access ")).fold("entity_scan")(_.choice)
+
+  /** A non-covering balance range (`COUNT(*)` and `SUM(id)` of the rows below a bound) at every
+    * fraction of [[SweepFractions]], each run three ways: an index plan (planned with weights
+    * that make sequential pages prohibitively expensive and random accesses free, so the index
+    * always wins), a sequential plan (rule mode, which ignores indexes) and the plan cost mode
+    * chooses. Reports the choice, the time of each plan, the faster path and the chosen plan's
+    * time relative to the faster one (`regret`, 1.0 = the right choice); every index and
+    * sequential plan becomes a calibration point for the random-access weight.
+    */
+  private def selectivitySweep(
+      db: AdaptiveDatabase,
+      catalog: FileCatalog,
+      native: NativeDatabase,
+      scale: Int,
+      timer: Timer,
+      points: scala.collection.mutable.Builder[CalibrationPoint, Vector[CalibrationPoint]]
+  ): String =
+    val forcedIndex = new AdaptiveDatabase(catalog, native, OptimizerConfig(weights = CostWeights(io = 1e7, randomIo = 0)))
+    val rows = SweepFractions.map { fraction =>
+      val bound = (fraction * BalanceModulus).toLong
+      val sql = s"SELECT COUNT(*) AS n, SUM(id) AS s FROM ix_account WHERE balance < $bound"
+      val chosen = accessPath(db, catalog, sql)
+      val index = timer.measure(drain(native, preparedPlan(forcedIndex, catalog, sql)))
+      db.execute("SET optimizer = rule")
+      val seq = timer.measure(drain(native, preparedPlan(db, catalog, sql)))
+      points += CalibrationPoint(s"sweep_${fraction}_seq", rootEstimate(db, catalog, sql), seq.percentile(0.5))
+      db.execute("SET optimizer = cost")
+      points += CalibrationPoint(s"sweep_${fraction}_index", rootEstimate(forcedIndex, catalog, sql), index.percentile(0.5))
+      val count = db.execute(sql).rows.head.head.asInstanceOf[java.lang.Long].longValue
+      val (indexMs, seqMs) = (index.percentile(0.5), seq.percentile(0.5))
+      val chosenMs = if chosen.startsWith("index_scan") then indexMs else seqMs
+      f"f_$fraction%.4f" -> obj(
+        "fraction" -> num(fraction), "balance_below" -> num(bound), "rows" -> num(count),
+        "cost_mode_choice" -> str(chosen),
+        "index_plan" -> index.json, "seq_plan" -> seq.json,
+        "faster" -> str(if indexMs <= seqMs then "index" else "seq"),
+        "regret" -> num(chosenMs / math.min(indexMs, seqMs))
+      )
+    }
+    obj(("table_rows" -> num(100_000L * scale)) +: rows*)
 
   /** Checks that every table holds the rows the scale factor implies; returns the counts. */
   private def verifyRowCounts(db: AdaptiveDatabase, scale: Int): Vector[(String, Long)] =
@@ -142,17 +243,28 @@ object WorkloadBenchmark:
     }
 
   /** One query in cost and in rule mode: timing (or the error that stopped it), plan cost,
-    * worst q-error and join tree per mode.
+    * worst q-error and join tree per mode; every plan that ran becomes a calibration point
+    * labelled `join_order_<name>_<mode>`.
     */
-  private def modes(db: AdaptiveDatabase, catalog: FileCatalog, native: NativeDatabase, sql: String, timer: Timer): String =
+  private def modes(
+      db: AdaptiveDatabase,
+      catalog: FileCatalog,
+      native: NativeDatabase,
+      sql: String,
+      timer: Timer,
+      name: String,
+      points: scala.collection.mutable.Builder[CalibrationPoint, Vector[CalibrationPoint]]
+  ): String =
     val results = Vector("cost", "rule").map { mode =>
       db.execute(s"SET optimizer = $mode")
       val tree = joinTree(db.plan(bind(catalog, sql)).optimized)
       val section =
         try
           val prepared = preparedPlan(db, catalog, sql)
+          val engine = timer.measure(drain(native, prepared))
+          points += CalibrationPoint(s"join_order_${name}_$mode", rootEstimate(db, catalog, sql), engine.percentile(0.5))
           obj(
-            "ffi_prepared_plan" -> timer.measure(drain(native, prepared)).json,
+            "ffi_prepared_plan" -> engine.json,
             "estimated_root_cost" -> num(rootCost(db, catalog, sql)),
             "max_q_error" -> num(maxQError(db, sql)),
             "join_tree" -> str(tree)
@@ -209,26 +321,33 @@ object WorkloadBenchmark:
       s"${shape}_$n" -> obj("relations" -> num(n), "p50_us" -> num(timing.percentile(0.5) * 1000), "p99_us" -> num(timing.percentile(0.99) * 1000), "method" -> str(method))
     obj(rows*)
 
-  /** Engine milliseconds per 1,000 estimated cost units (prepared-plan path, so planning is
-    * excluded) for every measured plan, and the spread between them.
+  /** One measured plan for the cost calibration.
+    *
+    * @param label    workload and mode
+    * @param estimate the planner's estimate of the plan's root (cost and its components)
+    * @param engineMs median engine time of the prepared plan
     */
-  private def calibration(sections: Vector[(String, String)]): String =
-    val cost = raw""""estimated_root_cost":([0-9.Ee+-]+)""".r
-    val p50 = raw""""ffi_prepared_plan":\{[^}]*"p50_ms":([0-9.Ee+-]+)""".r
-    val points = sections.flatMap { (name, section) =>
-      // A section may hold one plan (workloads) or a "cost" and a "rule" plan (join order).
-      val parts = if section.contains("\"cost\":{") then
-        Vector(s"${name}_cost" -> section.substring(0, section.indexOf("\"rule\":{")), s"${name}_rule" -> section.substring(section.indexOf("\"rule\":{")))
-      else Vector(name -> section)
-      parts.flatMap { (label, text) =>
-        for c <- cost.findFirstMatchIn(text).map(_.group(1).toDouble); m <- p50.findFirstMatchIn(text).map(_.group(1).toDouble) if c > 0
-        yield label -> m * 1000 / c
-      }
-    }
-    val ratios = points.map(_._2)
+  private final case class CalibrationPoint(label: String, estimate: Option[NodeEstimate], engineMs: Double)
+
+  /** The calibration section: every point with its cost components, and the engine time per
+    * 1,000 weighted cost units with its spread (max / min) under `weights`.
+    */
+  private def calibration(points: Vector[CalibrationPoint], weights: CostWeights): String =
+    val usable = points.flatMap(p => p.estimate.filter(_.cost > 0).map(p -> _))
+    val ratios = usable.map((p, e) => p.label -> p.engineMs * 1000 / e.cost)
     obj(
-      "ms_per_1k_cost" -> obj(points.map((label, r) => label -> num(r))*),
-      "spread" -> num(if ratios.isEmpty then Double.NaN else ratios.max / ratios.min)
+      "weights" -> obj("cpu" -> num(weights.cpu), "io" -> num(weights.io), "memory" -> num(weights.memory), "hash_row" -> num(weights.hashRow),
+        "random_io" -> num(weights.randomIo)),
+      "points" -> usable.map { (p, e) =>
+        obj(
+          "plan" -> str(p.label), "engine_ms" -> num(p.engineMs), "cost" -> num(e.cost),
+          "cpu" -> num(e.components.cpu), "io" -> num(e.components.io),
+          "memory_bytes" -> num(e.components.memoryBytes), "hash_rows" -> num(e.components.hashRows),
+          "random_io" -> num(e.components.randomIo)
+        )
+      }.mkString("[", ",", "]"),
+      "ms_per_1k_cost" -> obj(ratios.map((label, r) => label -> num(r))*),
+      "spread" -> num(if ratios.isEmpty then Double.NaN else ratios.map(_._2).max / ratios.map(_._2).min)
     )
 
   /** `((a JOIN b) JOIN c)` shape of the joins of a logical plan. */
@@ -248,7 +367,11 @@ object WorkloadBenchmark:
 
   /** Estimated weighted cost of the plan's root. */
   private def rootCost(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Double =
-    db.plan(bind(catalog, sql)).physical.estimates.get(0).fold(Double.NaN)(_.cost)
+    rootEstimate(db, catalog, sql).fold(Double.NaN)(_.cost)
+
+  /** The planner's estimate of the plan's root in the session's current mode. */
+  private def rootEstimate(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Option[NodeEstimate] =
+    db.plan(bind(catalog, sql)).physical.estimates.get(0)
 
   /** Worst q-error reported by EXPLAIN ANALYZE. */
   private def maxQError(db: AdaptiveDatabase, sql: String): Double =
@@ -304,21 +427,38 @@ object WorkloadBenchmark:
         last = body
         (System.nanoTime() - start) / 1e6
       }
-      Timing(samples.sorted, last, warm)
+      Timing(samples, last, warm)
 
   /** Timings of one path.
     *
-    * @param samples    milliseconds per iteration, sorted
+    * @param inOrder    milliseconds per iteration, in measurement order
     * @param checksum   checksum of the last iteration
     * @param warmupRuns runs before timing started
     */
-  private final case class Timing(samples: Vector[Double], checksum: Long, warmupRuns: Int):
-    /** `{"iterations":…,"warmup_runs":…,"p50_ms":…,"p95_ms":…,"p99_ms":…,"mean_ms":…,"checksum":…}`. */
-    def json: String = obj(
-      "iterations" -> num(samples.size), "warmup_runs" -> num(warmupRuns), "p50_ms" -> num(percentile(0.5)),
-      "p95_ms" -> num(percentile(0.95)), "p99_ms" -> num(percentile(0.99)), "mean_ms" -> num(samples.sum / samples.size),
-      "checksum" -> num(checksum)
-    )
+  private final case class Timing(inOrder: Vector[Double], checksum: Long, warmupRuns: Int):
+    /** The samples, sorted. */
+    val samples: Vector[Double] = inOrder.sorted
+
+    /** `{"iterations":…,"warmup_runs":…,"p50_ms":…,"p95_ms":…,"p99_ms":…,"mean_ms":…,"min_ms":…,
+      * "max_ms":…,"stddev_ms":…,"round_medians_ms":[…],"checksum":…}`.
+      */
+    def json: String =
+      val mean = samples.sum / samples.size
+      val stddev = math.sqrt(samples.map(s => (s - mean) * (s - mean)).sum / math.max(2, samples.size))
+      obj(
+        "iterations" -> num(samples.size), "warmup_runs" -> num(warmupRuns), "p50_ms" -> num(percentile(0.5)),
+        "p95_ms" -> num(percentile(0.95)), "p99_ms" -> num(percentile(0.99)), "mean_ms" -> num(mean),
+        "min_ms" -> num(samples.head), "max_ms" -> num(samples.last), "stddev_ms" -> num(stddev),
+        "round_medians_ms" -> roundMedians.map(num).mkString("[", ",", "]"),
+        "checksum" -> num(checksum)
+      )
+
+    /** Medians of seven consecutive rounds of the samples in measurement order (their spread
+      * shows run-to-run stability, which one median hides).
+      */
+    def roundMedians: Vector[Double] =
+      val size = math.max(1, math.ceil(inOrder.size / 7.0).toInt)
+      inOrder.grouped(size).map(round => round.sorted.apply(round.size / 2)).toVector
     /** The `p`-th percentile. */
     def percentile(p: Double): Double = samples(((samples.size - 1) * p).round.toInt)
 

@@ -168,3 +168,27 @@ final class CardinalityEstimatorTest:
     val cross = find(plan("SELECT c.name FROM customer c CROSS JOIN plain p")) { case j: Join => j }
     assertEquals("cross product", estimator.joinBasis(cross.asInstanceOf[Join]))
 
+  /** Index selectivity: one column keeps the column estimate; correlated equalities on two
+    * columns are lifted to the measured share of one key prefix combination.
+    */
+  @Test def indexSelectivityUsesPrefixStatistics(): Unit =
+    val select = new Binder(catalog).bind(new SqlParser().parse(
+      "SELECT c.id FROM customer c WHERE c.country = 'PL' AND c.name = 'x'")).asInstanceOf[BoundSelect]
+    val relation = select.relations.head
+    val conjuncts = TypedExpr.conjuncts(select.predicate.get)
+    val country = conjuncts.find(_.display.contains("country")).get
+    val name = conjuncts.find(_.display.contains("name")).get
+    val index = IndexId(9)
+    val withIndex = StatisticsProvider.of(
+      EntityStatistics(customerStats.copy(indexes = Map(index -> IndexStatistics(index, 100, 100, 1, 1, 12, Vector(2, 4), 0.5))), 0),
+      EntityStatistics(orderStats, 0)
+    )
+    val estimator = new CardinalityEstimator(withIndex, catalog)
+    val (single, singleBasis) = estimator.indexSelectivity(relation, index, Vector(country), Vector.empty)
+    assertEquals(0.6, single, 1e-9)
+    assertEquals(Vector("mcv"), singleBasis)
+    val (pair, pairBasis) = estimator.indexSelectivity(relation, index, Vector(country, name), Vector.empty)
+    assertEquals(0.25, pair, 1e-9, "1 / 4 distinct (country, name) pairs beats the independent estimate")
+    assertTrue(pairBasis.contains("index prefix ndv"), pairBasis.toString)
+    val (unknown, _) = new CardinalityEstimator(fresh, catalog).indexSelectivity(relation, index, Vector(country, name), Vector.empty)
+    assertTrue(unknown < 0.25, "without index statistics: independence")

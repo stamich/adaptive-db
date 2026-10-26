@@ -3,6 +3,7 @@
 //! Every node works on [`SlotId`]s. Leaf nodes carry a `columns` list that maps stored
 //! `FieldId`s to slots; that mapping is the only place where storage field ids appear.
 use adb_core::RowId;
+use adb_index::{IndexBounds, ScanDirection};
 use serde::{Deserialize, Serialize};
 
 use crate::{Expr, ScanColumn, SlotId};
@@ -30,6 +31,39 @@ pub enum PhysicalPlan {
     EntityScan {
         /// Entity (table) id.
         entity_id: u64,
+        /// Stored fields to read and the slots they are written to.
+        columns: Vec<ScanColumn>,
+    },
+
+    /// Reads the entries of a secondary index that match `bounds`, in index order (or reversed),
+    /// at the query snapshot (since plan wire v3).
+    ///
+    /// Each output row carries the row id of its entry. `columns` maps key and covered
+    /// (`INCLUDE`) fields of the index to slots; a covering scan needs nothing else, otherwise a
+    /// [`PhysicalPlan::RowFetch`] above it reads the remaining fields.
+    IndexScan {
+        /// Index id.
+        index_id: u64,
+        /// Equality prefix and range of the scan.
+        #[serde(default)]
+        bounds: IndexBounds,
+        /// Index order or reversed.
+        #[serde(default)]
+        direction: ScanDirection,
+        /// Key or covered fields read and the slots they are written to (may be empty).
+        #[serde(default)]
+        columns: Vec<ScanColumn>,
+        /// Upper bound on the rows the plan needs (sizes the first page; a `Limit` above still
+        /// enforces it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+
+    /// Reads the stored rows of its input's row ids (batched, in input order) and maps
+    /// `columns` into slots; input rows keep their slots (since plan wire v3).
+    RowFetch {
+        /// Plan producing rows with row ids (an `IndexScan`, possibly filtered).
+        input: Box<PhysicalPlan>,
         /// Stored fields to read and the slots they are written to.
         columns: Vec<ScanColumn>,
     },
@@ -190,8 +224,12 @@ impl PhysicalPlan {
     /// Child plans, left to right.
     pub fn children(&self) -> Vec<&PhysicalPlan> {
         match self {
-            Self::PointLookup { .. } | Self::Scan { .. } | Self::EntityScan { .. } => Vec::new(),
-            Self::Filter { input, .. }
+            Self::PointLookup { .. }
+            | Self::Scan { .. }
+            | Self::EntityScan { .. }
+            | Self::IndexScan { .. } => Vec::new(),
+            Self::RowFetch { input, .. }
+            | Self::Filter { input, .. }
             | Self::Project { input, .. }
             | Self::Limit { input, .. }
             | Self::Aggregate { input, .. }
@@ -219,9 +257,13 @@ impl PhysicalPlan {
         match self {
             Self::PointLookup { columns, .. }
             | Self::Scan { columns }
-            | Self::EntityScan { columns, .. } => {
-                columns.iter().map(|column| column.slot).collect()
-            }
+            | Self::EntityScan { columns, .. }
+            | Self::IndexScan { columns, .. } => columns.iter().map(|column| column.slot).collect(),
+            Self::RowFetch { input, columns } => input
+                .output_slots()
+                .into_iter()
+                .chain(columns.iter().map(|column| column.slot))
+                .collect(),
             Self::Filter { input, .. }
             | Self::Limit { input, .. }
             | Self::Sort { input, .. }

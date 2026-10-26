@@ -1,9 +1,81 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.2.3. Hardened patch releases preserve the functional scope of
+Milestone 2.3.0. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
+
+**Version numbers.** Up to 2.2.3 the patch number counted iterations of a milestone's plan
+(2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
+for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, and Milestone 2.4 is 2.4.0.
+
+## 2.3.0 — Secondary indexes and access paths
+
+Milestone 2.3 (the 2.3.3 proposal, renumbered): secondary indexes as MVCC-versioned projections
+of the log, an order-preserving key encoding with a one-time storage migration, and cost-based
+access paths with sort elision. Design and adaptations: `docs/indexes.md`,
+`docs/milestone-2.3.0.md`.
+
+### Breaking changes
+- **Data format 2.** Row ids of BIGINT primary keys flip the sign bit
+  (`RowId::from_primary_key`), so primary-key order equals storage order. Directories written
+  before 2.3.0 are refused (`DbError::IncompatibleFormat`, C status 12 `INCOMPATIBLE_FORMAT`)
+  until migrated with the new `adb-migrate` tool, which keeps every LSN and consumer offset.
+- **C ABI 6** and **plan wire v3**: v2 plan documents are refused; the JVM sends v3.
+- Statistics documents are format 2 (format 1 is still read).
+
+### Added (Rust)
+- `adb_core::key_encoding`: order-preserving, self-delimiting key encoding for every value type
+  (`ASC`/`DESC`, NULLs last, total float order), `decode_key`, `prefix_successor`.
+- `adb-engine::format` (`format.meta`), `adb-engine::migrate`, `adb-wal::rewrite_log`, crate and
+  binary `adb-migrate` (in place with backup, or into a new directory).
+- `adb-btree::ByteTree`: variable-length byte keys and values, keyset `range`/`range_rev` scans,
+  structural checks; `BPlusTree::get_many` batched lookups.
+- New crate `adb-index`: `IndexSpec` / `IndexDefinition` with limits (16 key columns, 32 covered
+  columns, 512-byte keys, 1 KiB covered values), MVCC entries `(key, row id, begin) → (end,
+  covered)`, `IndexBounds` (equality prefix + one range) with exact byte ranges, and
+  `IndexProjection` (maintenance, snapshot scans in both directions, vacuum, verify, builds,
+  journaled persistence).
+- Engine: index catalog (`indexes/catalog.meta`) published by checkpoints; `create_index`,
+  `drop_index`, `indexes`; indexes maintained in the commit apply step, recovered, vacuumed,
+  verified and rebuilt by `rebuild_projections`; crash-safe builds and drops; `DbError::Index`,
+  `IndexNotFound`, `CorruptIndexCatalog`.
+- Statistics format 2: `IndexStatistics` (entries, stored entries, height, leaf pages, key size,
+  distinct prefixes, `pk_locality`) collected by `ANALYZE`.
+- Execution: `IndexAccess` data-source methods, `IndexScan` and `RowFetch` operators with
+  profile counters; plan validation of index bounds.
+- C ABI 6: `adb_create_index_json`, `adb_drop_index`, `adb_list_indexes_json`, status 12.
+- Workload benchmark: table `ix_account`, index builds, workloads C (covering equality),
+  D (ordered range + LIMIT with row fetch) and E (sequential control), `AS OF` index reads,
+  write overhead with 0/1/3 indexes, seven-round sample statistics.
+
+### Added (JVM)
+- SQL: `CREATE INDEX name ON table (col [ASC|DESC], ...) [INCLUDE (...)]`, `DROP INDEX`,
+  `SHOW INDEXES [ON table]`; `IndexCatalog` / `IndexInfo` (decoded from the engine's listing).
+- Optimizer: `IndexStatistics` in the statistics codec, `CardinalityEstimator.indexSelectivity`,
+  `IndexPredicateMatcher`, `AccessPath` / `PhysicalProperties`, `AccessPathEnumerator`,
+  `CostModel.accessCost` (random accesses, `pk_locality`) and `sortCost`.
+- Physical planning: plan nodes `IndexScan` / `RowFetch` (plan wire v3), cost-based access paths
+  with residual filters before the row fetch, Sort elision and Limit over ordered access paths
+  (indexes forward or backward, primary-key order of sequential scans).
+- EXPLAIN: index names and bounds by column, covering scans, rejected access paths, an
+  `Indexes:` section (serving range, statistics); EXPLAIN ANALYZE index access summary.
+- Java binding: `NativeDatabase.createIndexJson`, `dropIndex`, `listIndexesJson`,
+  `AdbStatus.INCOMPATIBLE_FORMAT`; row ids composed in data format 2.
+- JVM benchmark: workloads C–E on every path, index builds through SQL, the selectivity sweep
+  (index vs sequential plan vs cost-mode choice), random-access calibration points.
+- Demo tour phase 2.3.0 (`demo/sql/2.3.0-indexes.sql`).
+
+### Changed
+- Cost weights refitted on measured calibration points: `io` 4,500 (was 8), `hash_row` 1 (hash
+  join counts build + probe rows once), new `random_io` weight; `scripts/fit-cost-weights.py`
+  fits all of them.
+- `scripts/check-benchmarks.py` checks workloads C–E, index entry counts, `AS OF` index reads
+  and the selectivity sweep.
+
+### Hardening
+- Deterministic fuzz tests of the key encoder, stored index entries, plan wire v3 and the JVM
+  index listing; index bounds validated before execution.
 
 ## 2.2.3 — Statistics and cost-based optimization
 

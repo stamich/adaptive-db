@@ -4,7 +4,8 @@ import io.adb.logical.*
 import io.adb.logical.LogicalPlan as LPlan
 import io.adb.model.*
 import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
-import io.adb.optimizer.cost.CostModel
+import io.adb.optimizer.access.{AccessPath, SortOrder}
+import io.adb.optimizer.cost.{AccessEstimate, Cost, CostModel}
 import io.adb.physical.PhysicalPlan as PPlan
 
 /** Estimated output and cost of one physical node.
@@ -15,8 +16,17 @@ import io.adb.physical.PhysicalPlan as PPlan
   * @param source     what the estimate rests on
   * @param basis      for filters and joins, the rules behind the selectivity (`mcv`,
   *                   `histogram`, `ndv`, `foreign key`, `default`, ...)
+  * @param components the unweighted cumulative cost behind `cost` (the cost calibration fits
+  *                   the weights to these components and measured times)
   */
-final case class NodeEstimate(rows: Double, cost: Double, confidence: Double, source: String, basis: Vector[String] = Vector.empty) derives CanEqual
+final case class NodeEstimate(
+    rows: Double,
+    cost: Double,
+    confidence: Double,
+    source: String,
+    basis: Vector[String] = Vector.empty,
+    components: Cost = Cost.Zero
+) derives CanEqual
 
 /** Estimator and cost model used to annotate a plan. */
 final case class PlanEstimation(estimator: CardinalityEstimator, costModel: CostModel)
@@ -84,9 +94,13 @@ object PhysicalPlanner:
     case LPlan.PointLookup(relation, _) => Vector(relation)
     case other => other.children.flatMap(relations)
 
-  /** Composes the 128-bit storage RowId from a 64-bit entity id and an unsigned 64-bit primary key. */
+  /** Composes the 128-bit storage RowId `(entity << 64) | (primaryKey XOR 2^63)` of a BIGINT
+    * primary key: the sign bit is flipped so that key order is value order (data format 2,
+    * Rust `RowId::from_primary_key`).
+    */
   def composeRowId(entityId: EntityId, primaryKey: Long): BigInt =
-    (BigInt(entityId.value) << 64) | BigInt(java.lang.Long.toUnsignedString(primaryKey))
+    (BigInt(java.lang.Long.toUnsignedString(entityId.value)) << 64) |
+      BigInt(java.lang.Long.toUnsignedString(primaryKey ^ java.lang.Long.MIN_VALUE))
 
   /** One planning run, collecting decisions, warnings and annotations. */
   private final class Run(policy: PlanningPolicy, estimation: Option[PlanEstimation]):
@@ -103,22 +117,102 @@ object PhysicalPlanner:
     /** Records the estimate of `logical` for `physical` unless it already has one (when
       * estimating); returns `physical`.
       */
-    private def annotate(physical: PPlan, logical: LPlan, cost: Option[Double] = None): PPlan =
+    private def annotate(physical: PPlan, logical: LPlan, cost: Option[Cost] = None): PPlan =
       estimation.foreach { e =>
         if !annotations.containsKey(physical) then
           val estimate = e.estimator.estimate(logical)
-          val total = cost.getOrElse(e.costModel.total(e.costModel.cost(logical)))
+          val components = cost.getOrElse(e.costModel.cost(logical))
           val basis = logical match
             case LPlan.Filter(_, predicate) => e.estimator.basis(predicate)
             case join: LPlan.Join => Vector(e.estimator.joinBasis(join))
             case _ => Vector.empty
-          annotations.put(physical, NodeEstimate(estimate.rows, total, estimate.confidence, estimate.source.label, basis))
+          annotations.put(
+            physical,
+            NodeEstimate(estimate.rows, e.costModel.total(components), estimate.confidence, estimate.source.label, basis, components)
+          )
       }
       physical
 
+    /** Records `estimate` for `physical` (a node no logical operator stands for, such as the
+      * index scan below a residual filter) unless it already has one; returns `physical`.
+      */
+    private def annotateWith(physical: PPlan, estimate: NodeEstimate): PPlan =
+      if estimation.isDefined && !annotations.containsKey(physical) then annotations.put(physical, estimate)
+      physical
+
+    /** Reads `relation` (a bare scan, or the scan under the filter `logical` with `conjuncts`)
+      * with the access path the policy chooses.
+      */
+    private def access(logical: LPlan, relation: BoundRelation, conjuncts: Vector[TypedExpr]): PPlan =
+      accessWith(logical, relation, policy.chooseAccess(AccessRequest(relation, conjuncts)), None)
+
+    /** The physical plan of `choice` for `logical`; `limit` sizes the first index page. */
+    private def accessWith(logical: LPlan, relation: BoundRelation, choice: AccessChoice, limit: Option[Int]): PPlan =
+      if choice.explain then decisions += PlanDecision(s"access ${relation.alias}", CostBasedPolicy.describe(choice.path), choice.reason)
+      choice.path match
+        case AccessPath.SeqScan(_, _) =>
+          logical match
+            case LPlan.Filter(scan @ LPlan.TableScan(_), predicate) =>
+              PPlan.Filter(annotate(PPlan.EntityScan(relation.entity.id, columns(relation)), scan), expr(predicate))
+            case _ => PPlan.EntityScan(relation.entity.id, columns(relation))
+        case scan: AccessPath.IndexScan =>
+          estimation.zip(choice.estimate).foreach((e, chosen) => e.costModel.overrideCost(logical, chosen.cost))
+          indexPlan(scan, choice.estimate, limit)
+
+    /** The relation and filter conjuncts of a plan that is a scan or a filter over a scan. */
+    private def scanOf(plan: LPlan): Option[(BoundRelation, Vector[TypedExpr])] = plan match
+      case LPlan.TableScan(relation) => Some(relation -> Vector.empty)
+      case LPlan.Filter(LPlan.TableScan(relation), predicate) => Some(relation -> TypedExpr.conjuncts(predicate))
+      case _ => None
+
+    /** For `ORDER BY keys [LIMIT limit]` directly over a scan (in cost mode): the access choice
+      * when it produces the required order itself, so the sort can be dropped.
+      */
+    private def orderedAccess(input: LPlan, keys: Vector[BoundOrder], limit: Option[Int]): Option[(BoundRelation, AccessChoice)] =
+      for
+        _ <- estimation
+        (relation, conjuncts) <- scanOf(input)
+        required = keys.map(k => SortOrder(k.attribute.slot, k.descending))
+        choice = policy.chooseAccess(AccessRequest(relation, conjuncts, required, limit)) if choice.ordered
+      yield relation -> choice
+
+    /** The physical plan of an index access: `IndexScan`, then (only if the residual uses
+      * covered columns) a filter applied before the fetch, then `RowFetch` for the columns the
+      * index does not hold, then the rest of the residual.
+      */
+    private def indexPlan(scan: AccessPath.IndexScan, estimate: Option[AccessEstimate], limit: Option[Int]): PPlan =
+      val relation = scan.relation
+      val (covered, fetched) = columns(relation).partition(column => scan.index.covers(column.fieldId))
+      val matched = scan.matched
+      val bounds = IndexBounds(
+        matched.equalities.map(_._3),
+        matched.lower.map((end, _) => ValueBound(end.value, end.inclusive)),
+        matched.upper.map((end, _) => ValueBound(end.value, end.inclusive))
+      )
+      val direction = if scan.backward then ScanDirection.Backward else ScanDirection.Forward
+      val indexScan = PPlan.IndexScan(scan.index.id, bounds, direction, covered, limit)
+      val coveredSlots = covered.map(_.slot).toSet
+      val (early, late) = scan.residual.partition(_.slots.subsetOf(coveredSlots))
+      val filtered = TypedExpr.conjunction(early).fold(indexScan: PPlan)(r => PPlan.Filter(indexScan, expr(r)))
+      val withRows = if fetched.isEmpty then filtered else PPlan.RowFetch(filtered, fetched)
+      val result = TypedExpr.conjunction(late).fold(withRows)(r => PPlan.Filter(withRows, expr(r)))
+      // The scan reads `read` entries; every node above it (early filter, row fetch, late
+      // filter) is annotated with the access path's output rows and cost, so EXPLAIN and the
+      // q-error cover each node also when no logical operator stands for it (ordered LIMIT).
+      estimation.zip(estimate).foreach { (e, chosen) =>
+        val base = e.estimator.estimate(LPlan.TableScan(relation))
+        val confidence = base.confidence * 0.9
+        annotateWith(indexScan, NodeEstimate(chosen.read, e.costModel.total(chosen.cost), confidence, base.source.label, chosen.basis, chosen.cost))
+        PPlan.preorder(result).filterNot(_ eq indexScan).foreach { node =>
+          annotateWith(node, NodeEstimate(chosen.rows, e.costModel.total(chosen.cost), confidence, base.source.label, chosen.basis, chosen.cost))
+        }
+      }
+      result
+
     /** Translates one logical operator without annotating it. */
     private def translateNode(logical: LPlan): PPlan = logical match
-      case LPlan.TableScan(relation) => PPlan.EntityScan(relation.entity.id, columns(relation))
+      case LPlan.TableScan(relation) => access(logical, relation, Vector.empty)
+      case LPlan.Filter(LPlan.TableScan(relation), predicate) => access(logical, relation, TypedExpr.conjuncts(predicate))
       case LPlan.PointLookup(relation, key) => PPlan.PointLookup(composeRowId(relation.entity.id, key), columns(relation))
       case LPlan.Filter(input, predicate) => PPlan.Filter(translate(input), expr(predicate))
       case join: LPlan.Join => translateJoin(join)
@@ -131,7 +225,12 @@ object PhysicalPlanner:
       case node @ LPlan.Limit(LPlan.Sort(input, keys), limit) => orderedLimit(node, input, keys, limit, None)
       case node @ LPlan.Limit(LPlan.Project(LPlan.Sort(input, keys), attributes), limit) =>
         orderedLimit(node, input, keys, limit, Some(attributes))
-      case LPlan.Sort(input, keys) => PPlan.Sort(translate(input), sortKeys(keys))
+      case LPlan.Sort(input, keys) =>
+        orderedAccess(input, keys, None) match
+          case Some((relation, choice)) =>
+            decisions += PlanDecision(s"ORDER BY ${keys.map(_.display).mkString(", ")}", "access order", s"${CostBasedPolicy.describe(choice.path)} produces the order; no sort")
+            accessWith(input, relation, choice, None)
+          case None => PPlan.Sort(translate(input), sortKeys(keys))
       case LPlan.Project(input, attributes) => PPlan.Project(translate(input), projectedSlots(attributes))
       case LPlan.Limit(input, limit) => PPlan.Limit(translate(input), limit)
 
@@ -140,6 +239,38 @@ object PhysicalPlanner:
       * (or Limit) below the projection carries its estimate.
       */
     private def orderedLimit(node: LPlan, input: LPlan, keys: Vector[BoundOrder], limit: Int, project: Option[Vector[Attribute]]): PPlan =
+      orderedAccess(input, keys, Some(limit)) match
+        case Some((relation, choice)) => orderedScanLimit(node, input, relation, choice, keys, limit, project)
+        case None => sortedLimit(node, input, keys, limit, project)
+
+    /** `LIMIT` over an access path that produces the `ORDER BY` order: the scan stops after
+      * `limit` rows and nothing is sorted.
+      */
+    private def orderedScanLimit(
+        node: LPlan,
+        input: LPlan,
+        relation: BoundRelation,
+        choice: AccessChoice,
+        keys: Vector[BoundOrder],
+        limit: Int,
+        project: Option[Vector[Attribute]]
+    ): PPlan =
+      decisions += PlanDecision(
+        s"ORDER BY ${keys.map(_.display).mkString(", ")} LIMIT $limit",
+        "access order + limit",
+        s"${CostBasedPolicy.describe(choice.path)} produces the order; reads about $limit rows instead of sorting"
+      )
+      val scanned = accessWith(input, relation, choice, Some(limit))
+      val cost = choice.estimate.map(_.cost)
+      val limited = annotate(PPlan.Limit(scanned, limit), node, cost)
+      project.fold(limited) { attributes =>
+        val projected = PPlan.Project(limited, projectedSlots(attributes))
+        Option(annotations.get(limited)).foreach(annotations.put(projected, _))
+        projected
+      }
+
+    /** `LIMIT` over `ORDER BY` with a sort: TopK or Sort + Limit as the policy decides. */
+    private def sortedLimit(node: LPlan, input: LPlan, keys: Vector[BoundOrder], limit: Int, project: Option[Vector[Attribute]]): PPlan =
       val translated = translate(input)
       val (topK, reason) = policy.chooseTopK(limit, keys, input)
       decisions += PlanDecision(
@@ -149,7 +280,7 @@ object PhysicalPlanner:
       )
       val ordered =
         if topK then
-          val topKCost = estimation.map(e => e.costModel.total(e.costModel.cost(input) + e.costModel.topKCost(input, limit)))
+          val topKCost = estimation.map(e => e.costModel.cost(input) + e.costModel.topKCost(input, limit))
           annotate(PPlan.TopK(translated, sortKeys(keys), limit), node, topKCost)
         else
           val sort = LPlan.Sort(input, keys)

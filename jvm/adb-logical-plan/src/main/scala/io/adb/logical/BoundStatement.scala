@@ -15,6 +15,12 @@ final case class BoundCreateTable(
 ) extends BoundStatement
 /** `ANALYZE`: the entities to analyze (one, or every entity of the catalog). */
 final case class BoundAnalyze(entities: Vector[Entity]) extends BoundStatement
+/** `CREATE INDEX`: key columns (field and descending flag) and covered fields of `entity`. */
+final case class BoundCreateIndex(name: String, entity: Entity, columns: Vector[(Field, Boolean)], include: Vector[Field]) extends BoundStatement
+/** `DROP INDEX name`. */
+final case class BoundDropIndex(name: String) extends BoundStatement
+/** `SHOW INDEXES [ON entity]`. */
+final case class BoundShowIndexes(entity: Option[Entity]) extends BoundStatement
 /** `SET optimizer = cost | rule`. */
 final case class BoundSetOptimizer(mode: OptimizerMode) extends BoundStatement
 

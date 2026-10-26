@@ -1,4 +1,7 @@
 //! Single-row INSERT / UPDATE / DELETE, each in its own serializable transaction.
+//!
+//! `primary_key` carries the bits of the SQL `BIGINT` key (a Java `long`); it is stored
+//! order-preserving with [`RowId::from_primary_key`].
 
 use std::collections::BTreeMap;
 
@@ -26,7 +29,7 @@ pub extern "C" fn adb_insert_row_json(
         init_out(out_commit_ts, 0)?;
         let database = database(db)?;
         let row: Row = parse(bytes(row_ptr, row_len, MAX_MUTATION_JSON_BYTES)?)?;
-        let row_id = RowId::compose(entity_id, primary_key);
+        let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
         commit_with(database, out_commit_ts, |tx| {
             if database
                 .get_in_tx(tx, row_id)
@@ -59,7 +62,7 @@ pub extern "C" fn adb_update_fields_json(
             assignments_len,
             MAX_MUTATION_JSON_BYTES,
         )?)?;
-        let row_id = RowId::compose(entity_id, primary_key);
+        let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
         commit_with(database, out_commit_ts, |tx| {
             let Some(mut row) = database.get_in_tx(tx, row_id).map_err(map_db_error)? else {
                 return Err((AdbStatus::NotFound, "row not found".into()));
@@ -82,7 +85,7 @@ pub extern "C" fn adb_delete_row(
     ffi_guard(|| {
         init_out(out_commit_ts, 0)?;
         let database = database(db)?;
-        let row_id = RowId::compose(entity_id, primary_key);
+        let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
         commit_with(database, out_commit_ts, |tx| {
             if database
                 .get_in_tx(tx, row_id)

@@ -159,6 +159,31 @@ final class CardinalityEstimator(statistics: StatisticsProvider, catalog: Catalo
     case TypedExpr.Binary(TypedExpr.Column(a), BinaryOp.Ne, TypedExpr.Column(b), _) => 1 - columnEquality(a, b)
     case _ => config.defaultRangeSelectivity)
 
+  /** Fraction of the rows of `relation` an index scan returns when it applies `equalities`
+    * (one conjunct per leading key column, in key order) and `ranges` (conjuncts bounding the
+    * next key column) of index `index`.
+    *
+    * Equalities on two or more leading columns are often correlated, which the independence
+    * rule of [[selectivity]] underestimates. When `ANALYZE` measured the distinct combinations
+    * of that key prefix, the estimate is therefore at least `1 / distinct(prefix)`, the average
+    * share of one combination; a single column keeps its most-common-value and histogram
+    * estimate.
+    *
+    * @return the selectivity and its basis for EXPLAIN (`index prefix ndv` when the prefix
+    *         statistics decided)
+    */
+  def indexSelectivity(relation: BoundRelation, index: IndexId, equalities: Vector[TypedExpr], ranges: Vector[TypedExpr]): (Double, Vector[String]) =
+    val independent = equalities.map(selectivity).product
+    val prefixStatistics = for
+      table <- entityStatistics(relation.entity.id)
+      stats <- table.table.index(index)
+      ndv <- stats.distinctPrefix(equalities.size) if equalities.size >= 2 && ndv > 0
+    yield 1.0 / ndv.toDouble
+    val equalityShare = prefixStatistics.fold(independent)(math.max(_, independent))
+    val usedPrefix = prefixStatistics.exists(_ > independent)
+    val basis = (equalities ++ ranges).flatMap(this.basis).distinct ++ Option.when(usedPrefix)("index prefix ndv")
+    (clamp(equalityShare * ranges.map(selectivity).product), basis)
+
   /** What the selectivity of each comparison in `predicate` rests on, for EXPLAIN:
     * `primary key`, `mcv` (a most common value), `ndv` (distinct count), `histogram`,
     * `min/max`, `null` (comparison with NULL), `constant` or `default`.

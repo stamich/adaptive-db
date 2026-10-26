@@ -301,7 +301,7 @@ impl SegmentedWalWriter {
 }
 
 /// Makes directory-entry changes durable.
-fn sync_dir(dir: &Path) -> Result<(), WalError> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<(), WalError> {
     File::open(dir)?.sync_all()?;
     Ok(())
 }

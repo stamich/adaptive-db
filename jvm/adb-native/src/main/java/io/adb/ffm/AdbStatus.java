@@ -26,6 +26,8 @@ public enum AdbStatus {
     RESOURCE_LIMIT(10),
     /** An exact computation overflowed its result type (e.g. an INT64 SUM). */
     ARITHMETIC_OVERFLOW(11),
+    /** The database directory uses another data format; migrate it with {@code adb-migrate} (ABI 6). */
+    INCOMPATIBLE_FORMAT(12),
     /** Unexpected engine failure, or a code this binding does not know. */
     INTERNAL(255);
 

@@ -1,0 +1,50 @@
+{
+  "milestone": "2.3.0",
+  "base": "2.2.3",
+  "engineVersion": "2.3.0",
+  "nativeAbi": 6,
+  "scope": "secondary-indexes-and-access-paths",
+  "sourceOfTruth": "canonical-log",
+  "derivedData": ["projections", "secondary-indexes", "optimizer-statistics", "modification-counters"],
+  "versioning": "from 2.3.0 the minor number is the milestone and the patch number is for fixes",
+  "newEngineFeatures": [
+    "order-preserving-key-encoding",
+    "data-format-2-order-preserving-primary-keys",
+    "adb-migrate-offline-migration",
+    "byte-key-btree",
+    "mvcc-versioned-index-projections",
+    "index-catalog-published-by-checkpoint",
+    "index-maintenance-in-commit-apply",
+    "index-recovery-vacuum-verify-rebuild",
+    "crash-safe-index-build-and-drop",
+    "index-statistics",
+    "index-scan-and-row-fetch-operators"
+  ],
+  "newControlPlaneFeatures": [
+    "create-drop-show-index",
+    "index-catalog-over-abi",
+    "index-predicate-matching",
+    "cost-based-access-paths",
+    "covering-index-scans",
+    "sort-and-topk-elision",
+    "explain-access-paths",
+    "random-access-cost-weight"
+  ],
+  "deferred": {
+    "onlineIndexBuilds": "later (builds block commits)",
+    "indexIntersectionAndInLists": "2.3.x follow-ups",
+    "indexNestedLoopJoins": "2.3.x follow-ups",
+    "asynchronousProjections": "4.x HTAP"
+  },
+  "formats": {
+    "data": "2 (format.meta; BIGINT primary keys with the sign bit flipped)",
+    "page": "new page kinds 4 and 5 (byte-key B+Tree leaf and internal)",
+    "btreeNode": "unchanged for the primary and version trees",
+    "wal": "unchanged record format (row ids rewritten by adb-migrate)",
+    "checkpoint": "3 (unchanged; the journal also publishes index trees and indexes/catalog.meta)",
+    "statistics": "2 (adds index statistics; format 1 still read)",
+    "planWire": "3 (index_scan, row_fetch; v2 refused)",
+    "batch": "2 (unchanged)",
+    "profile": "index_scan and row_fetch counters"
+  }
+}

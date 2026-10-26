@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Checks that the 2.2.3 workload benchmark reports agree: every path of workloads A and B
-returns the same checksum, cost and rule mode return the same rows, fresh statistics estimate
-the plain workloads well, and stale statistics are flagged and repaired by ANALYZE.
+"""Checks that the 2.3.0 workload benchmark reports agree: every path of workloads A-E returns
+the same checksum, cost and rule mode return the same rows, fresh statistics estimate the plain
+workloads well, stale statistics are flagged and repaired by ANALYZE, every index holds one
+entry per row, an index read at an older snapshot returns the older rows, and the index and
+sequential plans of the selectivity sweep return the same rows, with cost mode choosing the
+index for the most selective range.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -34,8 +37,33 @@ def main(database_path: str, ffi_path: str) -> int:
                   f"{name}: {path} checksum {jvm[path]['checksum']} != rust_native {expected}")
         check((jvm["max_q_error"] or 0) <= 1.5, f"{name}: max q-error {jvm['max_q_error']} with fresh statistics")
     if scale == 1:
-        check(native["workloads"]["A_hash_join_topk"]["checksum"] == 9955, "A: scale-1 checksum changed")
-        check(native["workloads"]["B_hash_join_aggregate_topk"]["checksum"] == 54550, "B: scale-1 checksum changed")
+        expected_checksums = {
+            "A_hash_join_topk": 9955,
+            "B_hash_join_aggregate_topk": 54550,
+            "C_covering_index_eq": 5742223708,
+            "D_index_range_order_limit": 1052395880,
+            "E_seq_scan_region_eq": 1000,
+        }
+        for name, expected in expected_checksums.items():
+            check(native["workloads"][name]["checksum"] == expected, f"{name}: scale-1 checksum changed")
+    for name, build in native["index_build"].items():
+        check(build["entries"] == build["table_rows"], f"index {name}: {build['entries']} entries for {build['table_rows']} rows")
+    as_of = native["as_of_index_read"]
+    check(as_of["as_of_before_change"]["checksum"] == native["workloads"]["D_index_range_order_limit"]["checksum"],
+          "AS OF index read does not return the rows before the change")
+    check(as_of["latest"]["checksum"] != as_of["as_of_before_change"]["checksum"],
+          "the change is not visible to the latest index read")
+    for name in ("C_covering_index_eq", "D_index_range_order_limit"):
+        check(ffi["workloads"][name]["access_path"].startswith("index_scan"),
+              f"{name}: cost mode did not use the index ({ffi['workloads'][name]['access_path']})")
+    sweep = {k: v for k, v in ffi["selectivity_sweep"].items() if k != "table_rows"}
+    for name, point in sweep.items():
+        check(point["index_plan"]["checksum"] == point["seq_plan"]["checksum"],
+              f"selectivity {name}: index and sequential plans return different rows")
+    if sweep:
+        most_selective = min(sweep.values(), key=lambda p: p["fraction"])
+        check(most_selective["cost_mode_choice"].startswith("index_scan"),
+              f"cost mode chose {most_selective['cost_mode_choice']} for {most_selective['fraction']} of the rows")
     for name, modes in ffi["join_order"].items():
         cost, rule = modes["cost"], modes["rule"]
         check("error" not in cost, f"join order {name}: cost mode failed: {cost.get('error')}")

@@ -30,12 +30,16 @@ use std::{
     },
 };
 
-use adb_core::{CommitTs, KeyRange, Row, RowId};
+use adb_core::encode_key;
+use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId};
 use adb_execution::{
-    DataSource, ExecutionContext, ExecutionError, Executor, PhysicalPlan, QueryCursor,
+    DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
+    QueryCursor,
 };
+use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
 use adb_stats::{AnalyzeOptions, TableStatistics};
+use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
     Checkpoint, CheckpointStore, Checkpointable, HistoricalVersion, IntegrityReport, StorageStats,
 };
@@ -46,9 +50,12 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     cdc::{self, ChangeBatch, ChangeCursor, ChangeFilter},
     committed::CommittedTx,
+    format,
     health::EngineHealth,
+    index_catalog::INDEXES_DIR,
     log::LogWriter,
     offsets::ConsumerOffsets,
+    projection::Projection,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
     statistics::{modifications_path, ModificationCounters, StatisticsStore},
@@ -60,12 +67,25 @@ const WAL_DIR: &str = "wal";
 /// Checkpoint record file inside the database directory.
 const CHECKPOINT_FILE: &str = "checkpoint.meta";
 
+/// An index and the snapshots it can serve (see [`crate::projection::Projection::serves`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStatus {
+    /// The definition.
+    pub definition: IndexDefinition,
+    /// Oldest snapshot the index serves: `max(created_at_ts, vacuum horizon)`.
+    pub usable_from: CommitTs,
+    /// Latest commit the index reflects.
+    pub watermark: CommitTs,
+}
+
 /// Result of [`Database::vacuum`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VacuumReport {
     /// Tombstones removed from the current store.
     pub tombstones_removed: u64,
-    /// Tombstones committed at or before this timestamp were eligible.
+    /// Index entries removed (they ended at or before the horizon).
+    pub index_entries_removed: u64,
+    /// Tombstones committed and index entries ended at or before this timestamp were eligible.
     pub horizon: CommitTs,
 }
 
@@ -119,6 +139,8 @@ impl Database {
         let dir = path.as_ref();
         fs::create_dir_all(dir)?;
         let wal_dir = dir.join(WAL_DIR);
+        // Refuse a directory written in another data format before touching anything in it.
+        format::check_or_stamp(dir, &wal_dir)?;
         fs::create_dir_all(&wal_dir)?;
         let journal = Journal::new(dir);
         let checkpoints = CheckpointStore::new(dir.join(CHECKPOINT_FILE));
@@ -154,7 +176,8 @@ impl Database {
     /// (it is never pruned by Milestone 2.0.3+). The database must not be open elsewhere.
     ///
     /// The modification counters are recounted from the log too; statistics documents are
-    /// kept (they describe a snapshot, not the store).
+    /// kept (they describe a snapshot, not the store). Index projections are derived data and
+    /// are rebuilt as well; the index catalog (their definitions) is kept.
     pub fn rebuild_projections(
         path: impl AsRef<Path>,
         options: DatabaseOptions,
@@ -172,6 +195,15 @@ impl Database {
             let path = dir.join(name);
             if path.exists() {
                 fs::remove_dir_all(path)?;
+            }
+        }
+        let indexes = dir.join(INDEXES_DIR);
+        if indexes.exists() {
+            for entry in fs::read_dir(&indexes)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    fs::remove_dir_all(path)?;
+                }
             }
         }
         for path in [
@@ -374,8 +406,70 @@ impl Database {
         // Like a query, the scan reads the version index once vacuum passes its snapshot.
         let mut statistics = adb_stats::analyze(self, entity_id, snapshot, options)?;
         statistics.modifications_at_analyze = modifications;
+        statistics.indexes = self.index_statistics(entity_id, snapshot)?;
         self.inner.statistics.save(statistics.clone())?;
         Ok(statistics)
+    }
+
+    /// Statistics of every index of `entity_id` at `snapshot`, in id order: the entries
+    /// visible at the snapshot are read in index order, one page per acquisition of the
+    /// projection lock (commits proceed between pages), and the tree shape is read. An index
+    /// dropped meanwhile is skipped.
+    fn index_statistics(
+        &self,
+        entity_id: u64,
+        snapshot: CommitTs,
+    ) -> Result<Vec<IndexStatistics>, DbError> {
+        const PAGE: usize = 1024;
+        let indexes: Vec<IndexDefinition> = self
+            .indexes()
+            .into_iter()
+            .map(|status| status.definition)
+            .filter(|definition| definition.entity_id == entity_id)
+            .collect();
+        let mut out = Vec::new();
+        'indexes: for definition in indexes {
+            let directions = definition.directions();
+            let mut collector = IndexCollector::default();
+            let mut resume: Option<Vec<u8>> = None;
+            loop {
+                let projections = self.inner.projections.read();
+                let Some(handle) = projections.index(definition.id) else {
+                    continue 'indexes;
+                };
+                let page = handle.projection.scan(
+                    &IndexBounds::all(),
+                    snapshot,
+                    ScanDirection::Forward,
+                    resume.as_deref(),
+                    PAGE,
+                    PAGE,
+                )?;
+                for entry in &page.entries {
+                    let prefixes: Vec<Vec<u8>> = (1..=entry.key.len())
+                        .map(|length| {
+                            encode_key(entry.key[..length].iter().zip(directions.iter().copied()))
+                        })
+                        .collect();
+                    let borrowed: Vec<&[u8]> = prefixes.iter().map(Vec::as_slice).collect();
+                    collector.add(&borrowed, entry.row_id.0);
+                }
+                match page.resume {
+                    Some(key) => resume = Some(key),
+                    None => {
+                        let shape = handle.projection.shape()?;
+                        out.push(collector.finish(
+                            definition.id.0,
+                            shape.entries,
+                            shape.height,
+                            shape.leaf_pages,
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The statistics document of `entity_id`, if it was analyzed.
@@ -402,12 +496,87 @@ impl Database {
         total.saturating_sub(at_analyze)
     }
 
+    // ----- secondary indexes ------------------------------------------------------------------
+
+    /// Creates and builds a secondary index (`CREATE INDEX`); returns its definition.
+    ///
+    /// The build holds the commit lock (commits wait; queries wait while the entries are
+    /// inserted): the index is filled from the current state, which then reflects exactly the
+    /// commits up to `created_at_ts`, and a forced checkpoint publishes the catalog entry and
+    /// the index pages in one journal commit before the index becomes visible. A crash before
+    /// that commit leaves no trace (the half-built files are removed on the next open); after
+    /// it, the index is complete and recovery maintains it from the log. The index serves
+    /// snapshots from `created_at_ts` on.
+    pub fn create_index(&self, spec: IndexSpec) -> Result<IndexDefinition, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.inner.health.check()?;
+        let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
+        let lsn = self.inner.log.end()?;
+        let definition = self.inner.projections.write().build_index(
+            spec,
+            created_at,
+            lsn,
+            self.inner.options.buffer_pages,
+        )?;
+        // If the build cannot be published, the failed checkpoint poisons the instance and the
+        // next open starts without the index.
+        self.checkpoint_locked()?;
+        // Every commit up to `created_at` is applied and, after the checkpoint's log sync,
+        // durable: it may be published, so a query planned right now can use the index.
+        self.inner.tx_manager.lock().publish_commit(created_at);
+        Ok(definition)
+    }
+
+    /// Drops the index `name` (`DROP INDEX`); returns its definition.
+    ///
+    /// The definition leaves the catalog and the index stops being maintained; a checkpoint
+    /// publishes the catalog without it, then its files are removed (a crash in between leaves
+    /// files that the next open removes). Queries still scanning it fail on their next page.
+    pub fn drop_index(&self, name: &str) -> Result<IndexDefinition, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.inner.health.check()?;
+        let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        self.checkpoint_locked()?;
+        if files.exists() {
+            fs::remove_dir_all(files)?;
+        }
+        Ok(definition)
+    }
+
+    /// Every index with the range of snapshots it serves, in id order.
+    pub fn indexes(&self) -> Vec<IndexStatus> {
+        let projections = self.inner.projections.read();
+        projections
+            .catalog()
+            .definitions()
+            .iter()
+            .map(|definition| {
+                let handle = projections
+                    .indexes()
+                    .iter()
+                    .find(|handle| handle.definition().id == definition.id);
+                IndexStatus {
+                    definition: definition.clone(),
+                    usable_from: handle.map_or(CommitTs(u64::MAX), |h| h.usable_from()),
+                    watermark: handle.map_or(CommitTs(0), |h| h.watermark()),
+                }
+            })
+            .collect()
+    }
+
     // ----- maintenance ----------------------------------------------------------------------
 
     /// Persists all in-memory projection changes and moves the recovery start point forward.
     pub fn checkpoint(&self) -> Result<(), DbError> {
         self.inner.health.check()?;
         let _commit = self.inner.commit_lock.lock();
+        self.checkpoint_locked()
+    }
+
+    /// Body of [`Database::checkpoint`]; the caller holds the commit lock.
+    fn checkpoint_locked(&self) -> Result<(), DbError> {
         self.inner.health.check()?;
         self.inner
             .health
@@ -451,16 +620,17 @@ impl Database {
         self.inner
             .vacuumed_through
             .fetch_max(horizon.0, Ordering::AcqRel);
-        let removed = self
+        let (tombstones, entries) = self
             .inner
             .health
             .guard(|| {
                 let lsn = self.inner.log.end()?;
-                Ok(self.inner.projections.write().vacuum(horizon, lsn)?)
+                self.inner.projections.write().vacuum(horizon, lsn)
             })
             .map_err(DbError::Poisoned)?;
         Ok(VacuumReport {
-            tombstones_removed: removed,
+            tombstones_removed: tombstones,
+            index_entries_removed: entries,
             horizon,
         })
     }
@@ -481,9 +651,10 @@ impl Database {
         Ok(self.inner.projections.read().stats()?)
     }
 
-    /// Temporal integrity check of both projections.
+    /// Integrity check of every projection: temporal invariants of the stores, entry invariants
+    /// of every index and the equality of each index with its table.
     pub fn verify(&self) -> Result<IntegrityReport, DbError> {
-        Ok(self.inner.projections.read().verify()?)
+        self.inner.projections.read().verify()
     }
 
     /// Directory of the canonical log.
@@ -496,6 +667,8 @@ impl Database {
     /// Validates `tx` and builds what its commit will write. Caller holds the commit lock.
     fn prepare(&self, tx: &Transaction) -> Result<CommittedTx, DbError> {
         let projections = self.inner.projections.read();
+        // Rows that cannot be indexed are refused here, before anything is logged.
+        projections.check(tx.writes().iter())?;
         let mut before = Vec::with_capacity(tx.writes().len());
         for row_id in tx.writes().keys() {
             before.push((*row_id, projections.current(*row_id)?));
@@ -579,4 +752,116 @@ impl DataSource for Database {
             .scan_page(range, after, limit, snapshot_ts, include_history)
             .map_err(|error| to_execution(error.into()))
     }
+}
+
+impl IndexAccess for Database {
+    /// One page of an index scan; checks that the index exists, serves the snapshot and holds
+    /// every requested field.
+    fn index_scan_page(
+        &self,
+        index: IndexId,
+        bounds: &IndexBounds,
+        direction: ScanDirection,
+        fields: &[FieldId],
+        resume: Option<&[u8]>,
+        limit: usize,
+        snapshot_ts: CommitTs,
+    ) -> Result<IndexPage, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        let projections = self.inner.projections.read();
+        let handle = projections.index(index).ok_or_else(|| {
+            ExecutionError::DataSource(format!("index {} does not exist", index.0))
+        })?;
+        if !handle.serves(snapshot_ts) {
+            return Err(ExecutionError::DataSource(format!(
+                "{} cannot serve snapshot {} (it serves {} to {}); plan the query again",
+                handle.name(),
+                snapshot_ts.0,
+                handle.usable_from().0,
+                handle.watermark().0
+            )));
+        }
+        let definition = handle.definition();
+        if let Some(field) = fields.iter().find(|field| !definition.covers(**field)) {
+            return Err(ExecutionError::InvalidPlan(format!(
+                "index {} holds neither key nor covered field {field}",
+                definition.name
+            )));
+        }
+        // Visible entries are usually dense; the examined cap keeps a page bounded when a long
+        // stretch of ended versions has to be skipped.
+        let page = handle
+            .projection
+            .scan(
+                bounds,
+                snapshot_ts,
+                direction,
+                resume,
+                limit,
+                limit.saturating_mul(4).max(256),
+            )
+            .map_err(|error| to_execution(error.into()))?;
+        let positions: Vec<(FieldId, Position)> = fields
+            .iter()
+            .map(|field| {
+                let position = match definition.columns.iter().position(|c| c.field_id == *field) {
+                    Some(at) => Position::Key(at),
+                    None => Position::Included(
+                        definition
+                            .include
+                            .iter()
+                            .position(|f| f == field)
+                            .expect("covered"),
+                    ),
+                };
+                (*field, position)
+            })
+            .collect();
+        let rows = page
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let mut row = Row::new();
+                for (field, position) in &positions {
+                    let value = match position {
+                        Position::Key(at) => &entry.key[*at],
+                        Position::Included(at) => &entry.included[*at],
+                    };
+                    if !matches!(value, adb_core::Value::Null) {
+                        row.fields.insert(*field, value.clone());
+                    }
+                }
+                (entry.row_id, row)
+            })
+            .collect();
+        Ok(IndexPage {
+            rows,
+            resume: page.resume,
+            examined: page.examined,
+        })
+    }
+
+    /// Rows at a snapshot, one descent per leaf of the primary index.
+    fn fetch_rows(
+        &self,
+        row_ids: &[RowId],
+        snapshot_ts: CommitTs,
+    ) -> Result<Vec<Option<Row>>, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        self.inner
+            .projections
+            .read()
+            .get_many_at(row_ids, snapshot_ts)
+            .map_err(|error| to_execution(error.into()))
+    }
+}
+
+/// Where a requested field sits in an index entry.
+enum Position {
+    /// Key column at this position.
+    Key(usize),
+    /// Covered column at this position.
+    Included(usize),
 }

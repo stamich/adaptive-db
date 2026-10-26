@@ -3,12 +3,13 @@ package io.adb.physical
 import io.adb.model.*
 
 /** Physical plan understood by the native engine; mirrors the Rust `PhysicalPlan` enum
-  * (plan wire v2, see docs/plan-wire-format.md). Every node works on [[SlotId]]s; only the
+  * (plan wire v3, see docs/plan-wire-format.md). Every node works on [[SlotId]]s; only the
   * leaves mention storage field ids, in their [[ScanColumn]] mappings.
   */
 sealed trait PhysicalPlan derives CanEqual:
   /** Input plans, left to right. */
   def children: Vector[PhysicalPlan] = this match
+    case PhysicalPlan.RowFetch(input, _) => Vector(input)
     case PhysicalPlan.Filter(input, _) => Vector(input)
     case PhysicalPlan.Project(input, _) => Vector(input)
     case PhysicalPlan.Limit(input, _) => Vector(input)
@@ -32,6 +33,19 @@ object PhysicalPlan:
   final case class Scan(columns: Vector[ScanColumn]) extends PhysicalPlan
   /** Streams the rows of one entity as a native key-range scan. */
   final case class EntityScan(entityId: EntityId, columns: Vector[ScanColumn]) extends PhysicalPlan
+  /** Reads the entries of a secondary index matching `bounds` (index order, or reversed), as
+    * rows carrying their row id and the key or covered (`INCLUDE`) fields mapped by `columns`.
+    * `limit` is the most rows the plan needs (it sizes the first page).
+    */
+  final case class IndexScan(
+      indexId: IndexId,
+      bounds: IndexBounds,
+      direction: ScanDirection,
+      columns: Vector[ScanColumn],
+      limit: Option[Int]
+  ) extends PhysicalPlan
+  /** Reads the stored rows of its input's row ids (batched, in input order) and adds `columns`. */
+  final case class RowFetch(input: PhysicalPlan, columns: Vector[ScanColumn]) extends PhysicalPlan
   /** Keeps the rows of `input` for which `predicate` is true. */
   final case class Filter(input: PhysicalPlan, predicate: PhysicalExpr) extends PhysicalPlan
   /** Selects and orders the output slots. */
@@ -59,6 +73,23 @@ object PhysicalPlan:
   final case class Sort(input: PhysicalPlan, keys: Vector[SortKey]) extends PhysicalPlan
   /** The first `limit` rows in `keys` order, without sorting everything. */
   final case class TopK(input: PhysicalPlan, keys: Vector[SortKey], limit: Int) extends PhysicalPlan
+
+/** Which entries an index scan reads: the leading key columns equal `prefix`, then the next
+  * key column lies between `lower` and `upper` (absent = unbounded). Never NULL.
+  */
+final case class IndexBounds(prefix: Vector[DbValue], lower: Option[ValueBound], upper: Option[ValueBound]) derives CanEqual
+/** Construction helpers of [[IndexBounds]]. */
+object IndexBounds:
+  /** The whole index. */
+  val All: IndexBounds = IndexBounds(Vector.empty, None, None)
+/** One end of a range on a key column. */
+final case class ValueBound(value: DbValue, inclusive: Boolean) derives CanEqual
+/** Order in which an index scan returns its entries. */
+enum ScanDirection derives CanEqual:
+  /** Index order. */
+  case Forward
+  /** Reverse index order. */
+  case Backward
 
 /** Leaf mapping of one stored field to the slot it is read into. */
 final case class ScanColumn(fieldId: FieldId, slot: SlotId) derives CanEqual

@@ -1,0 +1,302 @@
+{
+  "analyze": {
+    "bench_customer": {
+      "exact": true,
+      "ms": 7.658663,
+      "rows": 1000
+    },
+    "bench_orders": {
+      "exact": true,
+      "ms": 20.502550000000003,
+      "rows": 10000
+    },
+    "ix_account": {
+      "exact": false,
+      "ms": 2114.085547,
+      "rows": 1000000
+    },
+    "jo_a": {
+      "exact": false,
+      "ms": 313.94727900000004,
+      "rows": 200000
+    },
+    "jo_b": {
+      "exact": true,
+      "ms": 29.536105,
+      "rows": 20000
+    },
+    "jo_c": {
+      "exact": true,
+      "ms": 1.3017949999999998,
+      "rows": 20
+    },
+    "sk_events": {
+      "exact": false,
+      "ms": 1222.947958,
+      "rows": 1000000
+    },
+    "sk_events_distinct_ids": {
+      "actual": 1000000,
+      "estimated": 993358
+    },
+    "sk_stale": {
+      "exact": false,
+      "ms": 1420.5681270000002,
+      "rows": 1000000
+    },
+    "st_dim": {
+      "exact": true,
+      "ms": 33.120338,
+      "rows": 10000
+    },
+    "st_fact": {
+      "exact": false,
+      "ms": 1489.895317,
+      "rows": 1000000
+    },
+    "st_region": {
+      "exact": true,
+      "ms": 3.093277,
+      "rows": 100
+    },
+    "total": {
+      "ms": 6656.7859770000005,
+      "rows": 4241120,
+      "rows_per_s": 637112.2662879026
+    }
+  },
+  "as_of_index_read": {
+    "as_of_before_change": {
+      "checksum": 1054771698,
+      "input_rows": 100,
+      "input_rows_per_s": 207751.19716627366,
+      "iterations": 30,
+      "max_ms": 2.760892,
+      "mean_ms": 0.6257764333333334,
+      "min_ms": 0.45024600000000004,
+      "p50_ms": 0.48134499999999997,
+      "p95_ms": 1.940184,
+      "p99_ms": 2.760892,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.510315,
+        0.48134499999999997,
+        0.482635,
+        0.45682999999999996,
+        0.455331,
+        0.8383929999999999
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.4787406273290151,
+      "warmup_runs": 272
+    },
+    "changed_rows": 10000,
+    "latest": {
+      "checksum": 1005462428,
+      "input_rows": 100,
+      "input_rows_per_s": 293755.6364362741,
+      "iterations": 30,
+      "max_ms": 0.9336709999999999,
+      "mean_ms": 0.42698889999999995,
+      "min_ms": 0.276182,
+      "p50_ms": 0.340419,
+      "p95_ms": 0.798627,
+      "p99_ms": 0.9336709999999999,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.280717,
+        0.329624,
+        0.3533,
+        0.381904,
+        0.32698,
+        0.369392
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.18701999681074213,
+      "warmup_runs": 562
+    }
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpus": 2,
+    "os": "linux"
+  },
+  "index_build": {
+    "idx_ix_balance": {
+      "entries": 1000000,
+      "ms": 39636.076414999996,
+      "rows_per_s": 25229.540621774482,
+      "sql": "CREATE INDEX idx_ix_balance ON ix_account (balance)",
+      "table_rows": 1000000
+    },
+    "idx_ix_owner": {
+      "entries": 1000000,
+      "ms": 40098.453861,
+      "rows_per_s": 24938.61742067332,
+      "sql": "CREATE INDEX idx_ix_owner ON ix_account (owner) INCLUDE (balance)",
+      "table_rows": 1000000
+    }
+  },
+  "load": {
+    "rows": 4241120,
+    "rows_per_s": 48160.843126994405,
+    "seconds": 88.061581248
+  },
+  "milestone": "2.3.0",
+  "path": "rust_native",
+  "setup": {
+    "bench_customer": 1000,
+    "bench_orders": 10000,
+    "iterations": 30,
+    "ix_account": 1000000,
+    "scale": 10,
+    "warmup_ms": 200
+  },
+  "workloads": {
+    "A_hash_join_topk": {
+      "checksum": 10000,
+      "input_rows": 11000,
+      "input_rows_per_s": 1508003.6608845235,
+      "iterations": 30,
+      "max_ms": 12.527142999999999,
+      "mean_ms": 8.048376033333334,
+      "min_ms": 6.959372999999999,
+      "p50_ms": 7.294412,
+      "p95_ms": 12.237879999999999,
+      "p99_ms": 12.527142999999999,
+      "peak_memory_bytes": 287973,
+      "round_medians_ms": [
+        11.307027000000001,
+        7.261026,
+        7.287628,
+        7.611224,
+        7.135512,
+        7.294412
+      ],
+      "rows_out": 10,
+      "stddev_ms": 1.5618599194534157,
+      "warmup_runs": 24
+    },
+    "B_hash_join_aggregate_topk": {
+      "checksum": 99550,
+      "input_rows": 11000,
+      "input_rows_per_s": 1126964.8888966297,
+      "iterations": 30,
+      "max_ms": 11.114512,
+      "mean_ms": 9.756806566666667,
+      "min_ms": 8.854964,
+      "p50_ms": 9.76073,
+      "p95_ms": 10.939178,
+      "p99_ms": 11.114512,
+      "peak_memory_bytes": 520399,
+      "round_medians_ms": [
+        9.806559,
+        9.422329,
+        9.76073,
+        9.815615,
+        9.809864,
+        9.575233
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.5700420751196459,
+      "warmup_runs": 22
+    },
+    "C_covering_index_eq": {
+      "checksum": 51617221834,
+      "input_rows": 100,
+      "input_rows_per_s": 1202284.3402464683,
+      "iterations": 30,
+      "max_ms": 0.10970300000000001,
+      "mean_ms": 0.0863426,
+      "min_ms": 0.08066999999999999,
+      "p50_ms": 0.083175,
+      "p95_ms": 0.10796,
+      "p99_ms": 0.10970300000000001,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.083754,
+        0.083175,
+        0.086683,
+        0.082056,
+        0.081143,
+        0.082248
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.008015801588529162,
+      "warmup_runs": 2119
+    },
+    "D_index_range_order_limit": {
+      "checksum": 1054771698,
+      "input_rows": 100,
+      "input_rows_per_s": 285336.8258560818,
+      "iterations": 30,
+      "max_ms": 0.417454,
+      "mean_ms": 0.32841900000000007,
+      "min_ms": 0.214669,
+      "p50_ms": 0.350463,
+      "p95_ms": 0.411168,
+      "p99_ms": 0.417454,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.356005,
+        0.36648,
+        0.38105300000000003,
+        0.368032,
+        0.25432,
+        0.242425
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.060875040534414976,
+      "warmup_runs": 599
+    },
+    "E_seq_scan_region_eq": {
+      "checksum": 10000,
+      "input_rows": 1000000,
+      "input_rows_per_s": 587298.1152230967,
+      "iterations": 30,
+      "max_ms": 1855.270452,
+      "mean_ms": 1695.0239649666664,
+      "min_ms": 1606.348575,
+      "p50_ms": 1702.7127690000002,
+      "p95_ms": 1854.055697,
+      "p99_ms": 1855.270452,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        1635.5594330000001,
+        1708.6986,
+        1661.015156,
+        1691.6228310000001,
+        1728.8975199999998,
+        1732.292818
+      ],
+      "rows_out": 1,
+      "stddev_ms": 65.4592000037544,
+      "warmup_runs": 10
+    }
+  },
+  "write_overhead": {
+    "0_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 71734.01666488091,
+      "seconds": 0.278807753,
+      "slowdown_vs_no_index": 1.0
+    },
+    "1_index": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 23402.35344971787,
+      "seconds": 0.854614902,
+      "slowdown_vs_no_index": 3.0652479811061784
+    },
+    "3_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 10747.65439831769,
+      "seconds": 1.86087115,
+      "slowdown_vs_no_index": 6.674388104264805
+    }
+  }
+}

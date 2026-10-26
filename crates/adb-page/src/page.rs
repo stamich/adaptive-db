@@ -41,6 +41,10 @@ pub enum PageKind {
     BTreeLeaf = 2,
     /// B+Tree internal page.
     BTreeInternal = 3,
+    /// Leaf page of a byte-keyed B+Tree (variable-length keys and values; since 2.3.0).
+    ByteTreeLeaf = 4,
+    /// Internal page of a byte-keyed B+Tree (since 2.3.0).
+    ByteTreeInternal = 5,
 }
 
 /// Converts persisted page-kind tags into typed values.
@@ -54,6 +58,8 @@ impl TryFrom<u16> for PageKind {
             1 => Ok(Self::Heap),
             2 => Ok(Self::BTreeLeaf),
             3 => Ok(Self::BTreeInternal),
+            4 => Ok(Self::ByteTreeLeaf),
+            5 => Ok(Self::ByteTreeInternal),
             other => Err(PageError::Corrupt(format!("unknown page kind {other}"))),
         }
     }

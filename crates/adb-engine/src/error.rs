@@ -1,6 +1,7 @@
 //! Top-level engine errors.
 use adb_core::Lsn;
 use adb_execution::ExecutionError;
+use adb_index::IndexError;
 use adb_journal::JournalError;
 use adb_stats::StatsError;
 use adb_storage::StorageError;
@@ -53,6 +54,29 @@ pub enum DbError {
     /// Caller-supplied argument is invalid.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    /// The directory was written in another data format (see [`crate::format`]).
+    #[error(
+        "database uses data format {found}, this engine reads format {expected}; \
+         migrate it with `adb-migrate <source> <target>`"
+    )]
+    IncompatibleFormat {
+        /// Format of the directory.
+        found: u32,
+        /// Format this engine reads.
+        expected: u32,
+    },
+    /// The data format marker (`format.meta`) failed validation.
+    #[error("corrupt data format marker: {0}")]
+    CorruptFormatMarker(String),
+    /// An index definition, maintenance step or scan failed.
+    #[error("index error: {0}")]
+    Index(#[from] IndexError),
+    /// No index has the given name.
+    #[error("index {0} does not exist")]
+    IndexNotFound(String),
+    /// The index catalog (`indexes/catalog.meta`) failed validation.
+    #[error("corrupt index catalog: {0}")]
+    CorruptIndexCatalog(String),
 }
 
 impl DbError {
@@ -63,6 +87,8 @@ impl DbError {
             DbError::Wal(WalError::Corrupt(_) | WalError::Serialization(_)) => true,
             DbError::Journal(JournalError::Corrupt(_)) => true,
             DbError::Storage(error) => error.is_corruption(),
+            DbError::CorruptFormatMarker(_) | DbError::CorruptIndexCatalog(_) => true,
+            DbError::Index(error) => error.is_corruption(),
             _ => false,
         }
     }

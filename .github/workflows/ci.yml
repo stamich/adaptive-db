@@ -1,4 +1,4 @@
-# Continuous integration: the checks of build-milestone-2.2.3.sh, split into jobs.
+# Continuous integration: the checks of build-milestone-2.3.0.sh, split into jobs.
 #
 #   rust         format, lints (incl. documentation of every item), tests, rustdoc, C header
 #   jvm          Gradle wrapper validation, Scala/Java compile (-Werror) and tests
@@ -88,7 +88,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Native library (release)
         run: cargo build --release -p adb-ffi
-      - name: Java FFM -> C ABI v5 smoke test
+      - name: Java FFM -> C ABI v6 smoke test
         run: ./examples/jvm-cdc-smoke/run.sh
       - name: Rust relational demo
         run: cargo run --release -p adb-rust-demo
@@ -97,18 +97,18 @@ jobs:
       - name: Workload benchmark, rust_native (scale 1)
         run: ./scripts/benchmark-db.sh
         env:
-          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-database.json
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.3.0-database.json
       - name: Workload benchmark, JVM paths (scale 1)
         run: ./scripts/benchmark-ffi.sh
         env:
-          ADB_BENCH_OUT: ${{ runner.temp }}/2.2.3-ffi.json
+          ADB_BENCH_OUT: ${{ runner.temp }}/2.3.0-ffi.json
           ADB_BENCH_WARMUP_MS: "500"
       - name: Check benchmark consistency
-        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.2.3-database.json" "$RUNNER_TEMP/2.2.3-ffi.json"
+        run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.3.0-database.json" "$RUNNER_TEMP/2.3.0-ffi.json"
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-results
-          path: ${{ runner.temp }}/2.2.3-*.json
+          path: ${{ runner.temp }}/2.3.0-*.json
           if-no-files-found: ignore

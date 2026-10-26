@@ -5,6 +5,10 @@
 //! up to a threshold, HyperLogLog above it), and an equi-depth histogram plus most common
 //! values built from a reservoir sample.
 //!
+//! Since 2.3.0 the same run also describes the entity's secondary indexes ([`IndexCollector`],
+//! [`IndexStatistics`]: entries, tree height and leaf pages, distinct key prefixes, and how
+//! closely index order follows storage order); the document format is version 2.
+//!
 //! Statistics are *derived data*: they are never written to the log, can be deleted at any
 //! time and are rebuilt by the next `ANALYZE`. The engine persists them next to the data;
 //! the JVM planner reads them as JSON ([`TableStatistics::to_json`]).
@@ -13,14 +17,16 @@
 pub mod collector;
 pub mod error;
 pub mod hll;
+pub mod index;
 pub mod model;
 pub mod options;
 pub mod values;
 
 pub use collector::analyze;
 pub use error::StatsError;
+pub use index::IndexCollector;
 pub use model::{
-    ColumnStatistics, HistogramBucket, MostCommonValue, TableStatistics, MAX_STATISTICS_JSON_BYTES,
-    STATISTICS_FORMAT_VERSION,
+    ColumnStatistics, HistogramBucket, IndexStatistics, MostCommonValue, TableStatistics,
+    MAX_STATISTICS_JSON_BYTES, MIN_STATISTICS_FORMAT_VERSION, STATISTICS_FORMAT_VERSION,
 };
 pub use options::AnalyzeOptions;

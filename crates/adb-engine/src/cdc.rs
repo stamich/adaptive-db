@@ -61,9 +61,9 @@ impl RowChange {
         self.row_id.entity_id()
     }
 
-    /// Primary key of the row.
-    pub fn primary_key(&self) -> u64 {
-        self.row_id.primary_key()
+    /// SQL primary key of the row (see [`RowId::from_primary_key`]).
+    pub fn primary_key(&self) -> i64 {
+        self.row_id.signed_primary_key()
     }
 }
 

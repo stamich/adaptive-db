@@ -178,7 +178,7 @@ fn bare_v1_plan_is_rejected_with_a_version_message() {
     );
     assert!(last_error().contains("wire version"));
 
-    let invalid = br#"{"wire_version":2,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[1]}}"#;
+    let invalid = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[1]}}"#;
     assert_eq!(
         execute(db, invalid).unwrap_err(),
         AdbStatus::InvalidArgument

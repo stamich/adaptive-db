@@ -228,3 +228,70 @@ fn concurrent_analyze_publishes_a_consistent_document() {
     let reopened = Database::open(dir.path()).unwrap();
     assert_eq!(reopened.statistics(ENTITY), Some(published));
 }
+
+/// `ANALYZE` also describes the entity's indexes (statistics format 2): entries, distinct key
+/// prefixes and how local row fetches in index order are.
+#[test]
+fn analyze_describes_indexes() {
+    use adb_core::{Direction, Row};
+    use adb_engine::{IndexColumn, IndexSpec};
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    for pk in 0..2000i64 {
+        let mut tx = db.begin();
+        tx.put(
+            RowId::from_primary_key(ENTITY, pk),
+            Row::new()
+                .with_field(1, Value::Int64(pk / 10)) // follows the primary key
+                .with_field(2, Value::Int64((pk * 7919) % 100)) // unrelated to it
+                .with_field(3, Value::Int64(pk % 4)),
+        );
+        db.commit(tx).unwrap();
+    }
+    let index = |name: &str, fields: &[u32]| IndexSpec {
+        name: name.into(),
+        entity_id: ENTITY,
+        columns: fields
+            .iter()
+            .map(|field| IndexColumn {
+                field_id: *field,
+                direction: Direction::Asc,
+            })
+            .collect(),
+        include: vec![],
+    };
+    let ordered = db.create_index(index("ordered", &[1])).unwrap();
+    let scattered = db.create_index(index("scattered", &[3, 2])).unwrap();
+    // Some history: ended entries are stored but not counted as visible.
+    put(&db, RowId::from_primary_key(ENTITY, 0), 99);
+    let statistics = db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap();
+    assert_eq!(statistics.format_version, 2);
+    assert_eq!(statistics.indexes.len(), 2);
+    let first = &statistics.indexes[0];
+    assert_eq!(first.index_id, ordered.id.0);
+    assert_eq!(first.entries, 2000);
+    assert!(first.stored_entries > first.entries);
+    assert_eq!(first.distinct_prefixes, vec![200]); // 0..=199 (the updated row now holds 99)
+    assert!(first.pk_locality > 0.99, "{}", first.pk_locality);
+    let second = &statistics.indexes[1];
+    assert_eq!(second.index_id, scattered.id.0);
+    assert_eq!(second.distinct_prefixes[0], 5); // pk % 4, plus NULL for the updated row
+    assert!(second.distinct_prefixes[1] >= second.distinct_prefixes[0]);
+    assert!(second.pk_locality < 0.1, "{}", second.pk_locality);
+    assert!(first.height >= 1 && first.leaf_pages >= 1 && first.avg_key_bytes == 9.0);
+    // The document passes through its JSON form and survives a reopen.
+    let json = statistics.to_json().unwrap();
+    let decoded = adb_engine::TableStatistics::from_json(&json).unwrap();
+    assert_eq!(decoded.indexes.len(), 2);
+    assert_eq!(
+        decoded.indexes[1].distinct_prefixes,
+        second.distinct_prefixes
+    );
+    drop(db);
+    let db = Database::open(dir.path()).unwrap();
+    let reopened = db.statistics(ENTITY).unwrap().indexes;
+    assert_eq!(reopened.len(), 2);
+    assert_eq!(reopened[0].entries, 2000);
+    assert_eq!(reopened[0].distinct_prefixes, first.distinct_prefixes);
+}

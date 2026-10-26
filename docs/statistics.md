@@ -1,4 +1,4 @@
-# Optimizer statistics (Milestone 2.2.3)
+# Optimizer statistics (Milestones 2.2.3 and 2.3.0)
 
 Statistics are **derived data**. The canonical log stays the only source of truth. `ANALYZE`
 rebuilds statistics, they may be deleted at any time, and a query never fails because they are
@@ -11,7 +11,7 @@ missing; it only plans with less confidence.
 | Collect | Rust, `adb-stats::analyze` | one snapshot scan of one entity |
 | Persist | Rust, `adb-engine::statistics` | `stats/entity-<id>.stats`, atomic replace |
 | Count changes | Rust, commit pipeline | per-entity modification counters, checkpointed |
-| Expose | C ABI 5 | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze` |
+| Expose | C ABI 5 (unchanged in 6) | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze` |
 | Decode, judge freshness | JVM, `adb-statistics` | `StatisticsCodec`, `EntityStatistics`, `StatisticsProvider` |
 | Use | JVM, `adb-optimizer` | cardinality estimation, cost model, join order |
 
@@ -67,19 +67,43 @@ values longer than 256 bytes are truncated.
 An exceeded limit fails with `StatsError::Limit` (`ADB_RESOURCE_LIMIT` over the ABI) and
 persists nothing; the previous document stays in force.
 
+### Index statistics (2.3.0)
+
+`ANALYZE` of a table also walks every index of that table that serves the analyzed snapshot,
+reading all entries of the index, including history. Per index it records:
+
+| Statistic | Meaning |
+|---|---|
+| `entries` | entries visible at the analyzed snapshot (one per live row) |
+| `stored_entries` | all stored entries, including ended versions kept for older snapshots |
+| `height`, `leaf_pages` | shape of the index tree |
+| `avg_key_bytes` | mean encoded key size |
+| `distinct_prefixes` | element `i`: distinct combinations of the first `i + 1` key columns (exact up to 10,000, then HyperLogLog) |
+| `pk_locality` | share of consecutive visible entries whose rows are at most 64 primary keys apart, in `[0, 1]`: near 1, fetching rows in index order reads them sequentially; near 0, every fetch is a random access |
+
+The optimizer uses `distinct_prefixes` for multi-column equality prefixes, `stored_entries`
+for the entries a scan skips, and `pk_locality` for the cost of row fetches
+([optimizer.md](optimizer.md#access-paths-230)).
+
 ## The document
 
 `stats/entity-<id>.stats` is a checksummed envelope (`ADBSTA01`) around a JSON document (at
 most 4 MiB, `deny_unknown_fields`):
 
 ```json
-{"format_version":1,"entity_id":2,"row_count":1000,"avg_row_bytes":40.0,"analyzed_at_ts":1105,
+{"format_version":2,"entity_id":2,"row_count":1000,"avg_row_bytes":40.0,"analyzed_at_ts":1105,
  "modifications_at_analyze":1000,"sampled_rows":1000,"exact":true,
  "columns":[{"field_id":2,"null_count":0,"distinct_count":100,"distinct_exact":true,
    "min":{"Int64":1},"max":{"Int64":100},"avg_width_bytes":8.0,
    "histogram":[{"lower":{"Int64":1},"upper":{"Int64":2},"rows":20,"distinct":2}],
-   "most_common":[]}]}
+   "most_common":[]}],
+ "indexes":[{"index_id":0,"entries":1000,"stored_entries":1040,"height":2,"leaf_pages":4,
+   "avg_key_bytes":9.0,"distinct_prefixes":[100],"pk_locality":0.03}]}
 ```
+
+Statistics format 2 (2.3.0) adds `indexes`. The engine and the JVM read format 1 documents as
+documents without index statistics, so a database analyzed by 2.2.3 needs no new `ANALYZE` to
+plan. Index statistics appear after the next `ANALYZE`.
 
 It is written with `replace_file` (write to `.tmp`, `fsync`, rename, directory `fsync`). Publication is
 serialized, and a document of an older snapshot never replaces a newer one, so concurrent

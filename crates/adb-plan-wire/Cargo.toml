@@ -13,3 +13,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 adb-core = { path = "../adb-core" }
+adb-index = { path = "../adb-index" }

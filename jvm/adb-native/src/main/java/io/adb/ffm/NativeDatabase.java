@@ -12,9 +12,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Safe-ish Java ownership wrapper around one native Adaptive DB database handle.
  *
  * <p>Short calls are serialized on the object monitor. {@link #analyzeJson} scans a whole
- * entity, so it runs outside the monitor under the read side of {@code lifecycle} (the native
- * database is thread-safe); {@link #close} takes the write side, so the handle is never released
- * while an {@code ANALYZE} still uses it.
+ * entity and {@link #createIndexJson} builds a whole index, so they run outside the monitor under
+ * the read side of {@code lifecycle} (the native database is thread-safe); {@link #close} takes
+ * the write side, so the handle is never released while such a call still uses it.
  */
 public final class NativeDatabase implements AutoCloseable {
     /** Upper bound on the UTF-8 length of a database directory path. */
@@ -29,6 +29,12 @@ public final class NativeDatabase implements AutoCloseable {
     private static final int MAX_ANALYZE_OPTIONS_BYTES = 64 * 1024;
     /** Upper bound on the UTF-8 length of a CDC consumer name. */
     private static final int MAX_CONSUMER_NAME_BYTES = 256;
+    /** Upper bound on the UTF-8 length of an index specification (matches the native 64 KiB limit). */
+    private static final int MAX_INDEX_SPEC_BYTES = 64 * 1024;
+    /** Upper bound on the UTF-8 length of an index name. */
+    private static final int MAX_INDEX_NAME_BYTES = 128;
+    /** Upper bound on the size of an index status or listing document. */
+    private static final long MAX_INDEX_JSON_BYTES = 16L * 1024 * 1024;
 
     /** Loaded native library and its downcall handles. */
     private final NativeLibrary library;
@@ -259,6 +265,56 @@ public final class NativeDatabase implements AutoCloseable {
             var out = arena.allocate(ValueLayout.JAVA_LONG);
             library.check(library.invokeInt(library.modificationsSinceAnalyze, handle, entityId, out));
             return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    // ----- secondary indexes (ABI 6) ----------------------------------------------------------
+
+    /**
+     * Creates and builds a secondary index from a JSON specification
+     * ({@code {"name":..,"entity_id":..,"columns":[{"field_id":..,"direction":"asc"}],"include":[..]}})
+     * and returns its status as JSON (see {@code include/adb.h} and {@code docs/indexes.md}).
+     * The build blocks commits of the native database until the index is published.
+     */
+    public String createIndexJson(String specJson) {
+        lifecycle.readLock().lock();
+        try {
+            ensureOpen();
+            Objects.requireNonNull(specJson, "specJson");
+            byte[] spec = specJson.getBytes(StandardCharsets.UTF_8);
+            if (spec.length == 0 || spec.length > MAX_INDEX_SPEC_BYTES) throw new IllegalArgumentException("index spec length outside 1.." + MAX_INDEX_SPEC_BYTES);
+            try (var arena = Arena.ofConfined()) {
+                var specSegment = arena.allocateFrom(ValueLayout.JAVA_BYTE, spec);
+                var out = arena.allocate(ValueLayout.ADDRESS);
+                out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+                library.check(library.invokeInt(library.createIndex, handle, specSegment, (long) spec.length, out));
+                return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_INDEX_JSON_BYTES), StandardCharsets.UTF_8);
+            }
+        } finally {
+            lifecycle.readLock().unlock();
+        }
+    }
+
+    /** Drops the index named {@code name} (case-insensitive); a missing index throws {@link NativeException} with {@code NOT_FOUND}. */
+    public synchronized void dropIndex(String name) {
+        ensureOpen();
+        Objects.requireNonNull(name, "name");
+        byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length == 0 || bytes.length > MAX_INDEX_NAME_BYTES) throw new IllegalArgumentException("index name length outside 1.." + MAX_INDEX_NAME_BYTES);
+        try (var arena = Arena.ofConfined()) {
+            var nameSegment = arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
+            library.check(library.invokeInt(library.dropIndex, handle, nameSegment, (long) bytes.length));
+        }
+    }
+
+    /** Every index with the snapshots it serves, as JSON {@code {"indexes":[...]}}. */
+    public synchronized String listIndexesJson() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.listIndexes, handle, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_INDEX_JSON_BYTES), StandardCharsets.UTF_8);
         }
     }
 

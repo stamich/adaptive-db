@@ -1,6 +1,6 @@
 package io.adb.gateway
 
-import io.adb.catalog.InMemoryCatalog
+import io.adb.catalog.{IndexCatalog, IndexInfo, IndexKeyColumn, InMemoryCatalog}
 import io.adb.logical.*
 import io.adb.model.*
 import io.adb.optimizer.OptimizerConfig
@@ -57,6 +57,32 @@ final class CostBasedGatewayTest:
     assertFalse(text.contains("join order"), text)
     assertTrue(text.contains("builds the right input"), text)
     assertTrue(text.contains("est. rows="), text)
+
+  /** EXPLAIN names the chosen index and its bounds by column, lists the rejected access
+    * paths and reports every index of the tables read with its serving range and statistics.
+    */
+  @Test def explainNamesIndexes(): Unit =
+    val orders = catalog.entity("orders").get
+    val amount = orders.fieldsById.values.find(_.name == "amount").get.id
+    val customerId = orders.fieldsById.values.find(_.name == "customer_id").get.id
+    val indexes = IndexCatalog.of(
+      IndexInfo(IndexId(7), "idx_amount", orders.id, Vector(IndexKeyColumn(amount, true)), Vector(customerId), 5, 5, 9),
+      IndexInfo(IndexId(8), "idx_customer", orders.id, Vector(IndexKeyColumn(customerId, false)), Vector.empty, 8, 8, 9)
+    )
+    val stats = IndexStatistics(IndexId(7), 1000, 1200, 2, 4, 9.0, Vector(800), 0.25)
+    val provider = StatisticsProvider.of(
+      EntityStatistics(TableStatistics(orders.id, 1000, 30, 7, 0, 1000, true, Map.empty, Map(IndexId(7) -> stats)), 0))
+    val select = new Binder(catalog).bind(new SqlParser().parse("SELECT customer_id FROM orders WHERE amount >= 900 AND amount < 950")).asInstanceOf[BoundSelect]
+    val p = AdaptiveDatabase.plan(select, catalog, provider, OptimizerConfig.Default, OptimizerMode.Cost, indexes)
+    val text = AdaptiveDatabase.explain(p).mkString("\n\n")
+    assertTrue(text.contains("IndexScan idx_amount [amount in [900, 950)] covering"), text)
+    assertTrue(text.contains("next best entity_scan"), text)
+    assertTrue(text.contains("Indexes:\n- idx_amount ON orders (amount DESC) INCLUDE (customer_id): serves ts 5..9; 1000 entries (1200 stored), height 2, 4 leaf pages, prefix ndv [800], pk locality 0.25"), text)
+    assertTrue(text.contains("- idx_customer ON orders (customer_id): serves ts 8..9; no statistics (run ANALYZE orders)"), text)
+    val old = new Binder(catalog).bind(new SqlParser().parse("SELECT customer_id FROM orders AS OF VERSION 6 WHERE amount >= 900")).asInstanceOf[BoundSelect]
+    val oldText = AdaptiveDatabase.explain(AdaptiveDatabase.plan(old, catalog, provider, OptimizerConfig.Default, OptimizerMode.Cost, indexes)).mkString("\n")
+    assertTrue(oldText.contains("idx_customer ON orders (customer_id): cannot serve the query snapshot (serves ts 8..9)"), oldText)
+    assertFalse(plans(Query, OptimizerMode.Rule).indexes.nonEmpty)
 
   /** Documents are decoded once per generation; the modification count is always current; an
     * undecodable document counts as missing.

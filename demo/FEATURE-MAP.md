@@ -1,4 +1,4 @@
-# Feature map: 1.0.1 → 2.2.3
+# Feature map: 1.0.1 → 2.3.0
 
 ## 1.0.1 — transactions, WAL and recovery
 
@@ -86,7 +86,7 @@ batch format v2 (slot columns) + runtime profile → EXPLAIN ANALYZE
 
 ## 2.2.3 — statistics and cost-based optimization
 
-The last phase creates `region`, `shop` and `sale` (with foreign-key hints), loads 4 / 40 / 400
+This phase creates `region`, `shop` and `sale` (with foreign-key hints), loads 4 / 40 / 400
 rows and runs `sql/2.2.3-statistics.sql`:
 
 ```text
@@ -107,4 +107,31 @@ EXPLAIN (estimates, join order, statistics, warnings) / EXPLAIN ANALYZE (q-error
 | `EXPLAIN ANALYZE` | the selective region filter joined first, estimates per node with their basis, actual rows and q-error |
 | same query in cost and rule mode | identical rows from different join orders |
 | 200 more sales | statistics of `sale` reported stale (50% changed) |
+
+## 2.3.0 — secondary indexes
+
+The last phase creates `ledger`, loads 2,000 rows and runs `sql/2.3.0-indexes.sql`. Indexes are
+derived projections of the log, like the current store. They are versioned with the same
+`begin_ts`/`end_ts` as rows, so a snapshot reads an index exactly as it reads the table.
+
+```text
+commit ─► WAL (rows only) ─► current store ─┬─► version store
+                                            └─► index projections (same commit, entries with begin/end ts)
+CREATE INDEX ─► build at one snapshot ─► checkpoint publishes indexes/catalog.meta
+                                            │
+SQL ─► IndexPredicateMatcher ─► AccessPathEnumerator ─► CostModel.accessCost ─► CostBasedPolicy
+                                            │                       (index_scan / row_fetch / entity_scan)
+                                            ▼ plan wire v3, C ABI 6
+                            IndexScan (keyset pages, snapshot check) ─► RowFetch (sorted batch lookups)
+```
+
+| Step | Shows |
+|---|---|
+| `EXPLAIN` without an index | sequential scan is the only access path |
+| `CREATE INDEX ... INCLUDE (amount)`, `SHOW INDEXES` | build over existing rows, serving range of snapshots |
+| `EXPLAIN ANALYZE` on `account = 42` | covering `IndexScan` with bounds by column, rejected `entity_scan`, index statistics, index access summary |
+| `SELECT id, memo ...` | `RowFetch` for columns the index does not hold |
+| `ORDER BY amount DESC LIMIT 5` | backward index scan with a LIMIT, no TopK; rule mode returns the same rows |
+| `UPDATE` then `AS OF VERSION` | the index serves the older snapshot from its versioned entries |
+| `DROP INDEX` | the plan falls back to the sequential scan and TopK |
 

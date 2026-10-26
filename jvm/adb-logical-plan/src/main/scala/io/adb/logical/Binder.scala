@@ -34,6 +34,18 @@ final class Binder(catalog: Catalog):
 
     case Analyze(table) => BoundAnalyze(table.fold(catalog.entities)(name => Vector(requireEntity(name))))
 
+    case CreateIndex(name, table, columns, include) =>
+      val entity = requireEntity(table)
+      val keys = columns.map(c => requireField(entity, c.name) -> c.descending)
+      val covered = include.map(requireField(entity, _))
+      val all = keys.map(_._1.id) ++ covered.map(_.id)
+      require(all.distinct.size == all.size, s"a column appears twice in index $name")
+      BoundCreateIndex(name, entity, keys, covered)
+
+    case DropIndex(name) => BoundDropIndex(name)
+
+    case ShowIndexes(table) => BoundShowIndexes(table.map(requireEntity))
+
     case SetOption(name, value) =>
       require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer)")
       BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))

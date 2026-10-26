@@ -7,13 +7,13 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 /**
- * Runs the Adaptive DB feature tour (Milestone 2.2.3).
+ * Runs the Adaptive DB feature tour (Milestone 2.3.0).
  *
  * The demo executes on one current engine while presenting features in the order in which they
  * entered the project: WAL/recovery, persistent current storage, persistent history, native
  * batch execution, the Scala SQL/control plane, relational execution (joins, aggregation,
- * sorting) with explained planning decisions and runtime profiles, and finally statistics and
- * cost-based optimization.
+ * sorting) with explained planning decisions and runtime profiles, statistics and cost-based
+ * optimization, and finally secondary indexes as MVCC-versioned projections chosen by cost.
  */
 object DemoMain:
   /** Extracts the commit timestamp from a mutation result message. */
@@ -32,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.2.3 - chronological feature tour")
+    banner("Adaptive DB 2.3.0 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -82,6 +82,7 @@ object DemoMain:
 
       relationalPhase(db)
       statisticsPhase(db)
+      indexPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -146,6 +147,53 @@ object DemoMain:
     for id <- 401 to 600 do db.execute(s"INSERT INTO sale VALUES ($id, ${1 + id % 40}, 1);")
     execute(db, "EXPLAIN SELECT COUNT(*) FROM sale;")
     println("Feature shown: after 200 more sales (50% of the analyzed rows) the statistics of 'sale' are reported stale.")
+
+  /** Milestone 2.3.0: secondary indexes, covering scans, row fetches, sort elision, `AS OF`
+    * through an index, and the cost-based choice between index and sequential scans.
+    */
+  private def indexPhase(db: AdaptiveDatabase): Unit =
+    phase("2.3.0", "secondary indexes: CREATE INDEX, covering scans, ordered LIMIT, AS OF, cost-based access paths")
+    execute(db, "CREATE TABLE ledger (id BIGINT PRIMARY KEY, account BIGINT NOT NULL, amount BIGINT NOT NULL, memo STRING NOT NULL);")
+    // amount = id * 7919 mod 10007 is unique for these ids, so ORDER BY amount has no ties and
+    // every plan returns the same rows.
+    for id <- 1 to 2000 do db.execute(s"INSERT INTO ledger VALUES ($id, ${id % 200}, ${(id * 7919L) % 10007}, 'memo-$id');")
+    println("Loaded 2,000 ledger rows over 200 accounts (single-row INSERTs, not echoed).")
+    execute(db, "ANALYZE ledger;")
+    val byAccount = "SELECT account, amount FROM ledger WHERE account = 42"
+    execute(db, s"EXPLAIN $byAccount;")
+    println("Feature shown: without an index the only access path is the sequential scan of the table.")
+
+    execute(db, "CREATE INDEX idx_ledger_account ON ledger (account) INCLUDE (amount);")
+    execute(db, "SHOW INDEXES;")
+    println("Feature shown: the build reads the table at one snapshot and publishes the index with a checkpoint;")
+    println("later commits maintain it in the same commit as the row, so it is never stale.")
+
+    execute(db, "ANALYZE ledger;")
+    execute(db, s"EXPLAIN ANALYZE $byAccount;")
+    println("Feature shown: the cost model picks the covering index scan (no row fetch); EXPLAIN names the index,")
+    println("prints its bounds by column, lists the rejected sequential scan and the index statistics.")
+    execute(db, "EXPLAIN SELECT id, memo FROM ledger WHERE account = 42;")
+    println("Feature shown: columns the index does not hold are read by a batched RowFetch in index order.")
+
+    execute(db, "CREATE INDEX idx_ledger_amount ON ledger (amount);")
+    val top = "SELECT id, amount FROM ledger ORDER BY amount DESC LIMIT 5"
+    execute(db, s"EXPLAIN $top;")
+    execute(db, s"$top;")
+    execute(db, "SET optimizer = rule;")
+    execute(db, s"$top;")
+    execute(db, "SET optimizer = cost;")
+    println("Feature shown: the index read backward delivers ORDER BY ... DESC; LIMIT stops after 5 entries instead")
+    println("of a TopK over every row. Rule mode (no indexes) returns the same rows.")
+
+    val before = commitTs(execute(db, "UPDATE ledger SET amount = 20000 WHERE id = 7;"))
+    execute(db, s"$top;")
+    execute(db, s"SELECT id, amount FROM ledger AS OF VERSION ${before - 1} ORDER BY amount DESC LIMIT 5;")
+    println(s"Feature shown: index entries are versioned like rows; AS OF VERSION ${before - 1} reads the index as it was")
+    println("before the update, so history queries use indexes too (until VACUUM removes the old entries).")
+
+    execute(db, "DROP INDEX idx_ledger_amount;")
+    execute(db, s"EXPLAIN $top;")
+    println("Feature shown: after DROP INDEX the planner falls back to the sequential scan with a TopK.")
 
   /** Opens one native database and matching persistent JVM catalog for a demo phase. */
   private def withDatabase(dataDir: Path, nativeLib: Path)(body: AdaptiveDatabase => Unit): Unit =

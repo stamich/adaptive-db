@@ -265,6 +265,7 @@ impl<'a> Run<'a> {
             .collect();
         TableStatistics {
             format_version: STATISTICS_FORMAT_VERSION,
+            indexes: Vec::new(),
             entity_id: self.entity_id,
             row_count: self.rows,
             avg_row_bytes: if self.rows == 0 {

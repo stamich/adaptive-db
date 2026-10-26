@@ -2,6 +2,8 @@ package io.adb.physical
 
 import io.adb.logical.*
 import io.adb.model.*
+import io.adb.optimizer.access.{AccessPath, SortOrder}
+import io.adb.optimizer.cost.AccessEstimate
 
 /** One strategy decision taken while planning, with the reason it was taken.
   *
@@ -38,6 +40,37 @@ final case class JoinRequest(join: LogicalPlan.Join, equiKeys: Vector[(Attribute
   /** Right input. */
   def right: LogicalPlan = join.right
 
+/** Everything the policy may look at to choose how one relation is read.
+  *
+  * @param relation  the relation
+  * @param conjuncts conjuncts of the filter directly above its scan (may be empty)
+  * @param required  order the rows should come in, if a parent can use one (ORDER BY)
+  * @param limit     rows the parent needs at most, if known (LIMIT over ORDER BY)
+  */
+final case class AccessRequest(
+    relation: BoundRelation,
+    conjuncts: Vector[TypedExpr],
+    required: Vector[SortOrder] = Vector.empty,
+    limit: Option[Int] = None
+)
+
+/** An access path decision.
+  *
+  * @param path     how the relation is read
+  * @param reason   why, for EXPLAIN
+  * @param estimate cost and rows of the chosen path, when costed
+  * @param explain  whether the decision is worth listing (an index was considered)
+  * @param ordered  whether the path produces the request's required order, so the planner
+  *                 needs no Sort or TopK above it
+  */
+final case class AccessChoice(
+    path: AccessPath,
+    reason: String,
+    estimate: Option[AccessEstimate] = None,
+    explain: Boolean = false,
+    ordered: Boolean = false
+)
+
 /** A join strategy decision.
   *
   * @param strategy   hash or nested-loop join
@@ -65,7 +98,15 @@ trait PlanningPolicy:
     */
   def chooseTopK(limit: Int, keys: Vector[BoundOrder], input: LogicalPlan): (Boolean, String)
 
-/** Rule-based policy of Milestone 2.1 (no statistics), used by `SET optimizer = rule`. */
+  /** How one relation is read. The default reads every relation with a sequential scan, as
+    * the rule-based planner always did.
+    */
+  def chooseAccess(request: AccessRequest): AccessChoice =
+    AccessChoice(AccessPath.SeqScan(request.relation, request.conjuncts), "sequential scan")
+
+/** Rule-based policy of Milestone 2.1 (no statistics), used by `SET optimizer = rule`; it never
+  * uses an index.
+  */
 object DefaultPlanningPolicy extends PlanningPolicy:
   /** Largest LIMIT run as TopK; matches the engine's TopK bound. */
   val MaxTopK: Int = 1_000_000

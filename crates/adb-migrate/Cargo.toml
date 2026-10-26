@@ -1,0 +1,13 @@
+[package]
+name = "adb-migrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Offline migration of Adaptive DB database directories between data formats"
+
+[dependencies]
+adb-engine = { path = "../adb-engine" }
+
+[dev-dependencies]
+adb-core = { path = "../adb-core" }
+tempfile.workspace = true

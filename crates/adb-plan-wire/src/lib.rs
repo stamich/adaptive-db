@@ -3,7 +3,7 @@
 //! A plan travels inside an envelope that names the wire version:
 //!
 //! ```json
-//! {"wire_version": 2, "plan": {"op": "entity_scan", "entity_id": 7, "columns": [...]}}
+//! {"wire_version": 3, "plan": {"op": "entity_scan", "entity_id": 7, "columns": [...]}}
 //! ```
 //!
 //! [`decode_json`] is the only way the native side accepts a plan: it bounds the input size,
@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current plan wire version. 1 = Milestones 1.7–2.0.3 (bare plan, field ids); 2 = Milestone
-/// 2.1 (envelope, slots, joins, aggregates, sorts).
-pub const PLAN_WIRE_VERSION: u32 = 2;
+/// 2.1 (envelope, slots, joins, aggregates, sorts); 3 = Milestone 2.3.0 (`index_scan` and
+/// `row_fetch`). The JVM and the engine are upgraded together, so only the current version is
+/// accepted: a version-2 document from an older planner is reported as a version mismatch.
+pub const PLAN_WIRE_VERSION: u32 = 3;
 /// Largest encoded plan accepted, in bytes.
 pub const MAX_PLAN_WIRE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -59,7 +61,7 @@ struct VersionProbe {
     wire_version: Option<u32>,
 }
 
-/// Validates `plan` and encodes it as a version-2 envelope.
+/// Validates `plan` and encodes it in the current envelope.
 pub fn encode_json(plan: &PhysicalPlan) -> Result<Vec<u8>, PlanWireError> {
     plan.validate().map_err(PlanWireError::Invalid)?;
     let bytes = serde_json::to_vec(&Envelope {

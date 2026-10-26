@@ -5,11 +5,11 @@ import io.adb.physical.PhysicalPlan.*
 import io.adb.physical.PhysicalExpr.*
 
 /** Encodes physical plans into the JSON wire format decoded by the native engine
-  * (plan wire v2, docs/plan-wire-format.md): `{"wire_version":2,"plan":{...}}`.
+  * (plan wire v3, docs/plan-wire-format.md): `{"wire_version":3,"plan":{...}}`.
   */
 object PlanJsonEncoder:
   /** Plan wire version produced by this encoder; must match the engine's `PLAN_WIRE_VERSION`. */
-  val WireVersion: Int = 2
+  val WireVersion: Int = 3
 
   /** Encodes a plan inside the versioned envelope. */
   def encode(plan: PhysicalPlan): String =
@@ -22,6 +22,10 @@ object PlanJsonEncoder:
     case Scan(columns) => s"{\"op\":\"scan\",\"columns\":${encodeColumns(columns)}}"
     case EntityScan(entityId, columns) =>
       s"{\"op\":\"entity_scan\",\"entity_id\":${java.lang.Long.toUnsignedString(entityId.value)},\"columns\":${encodeColumns(columns)}}"
+    case IndexScan(indexId, bounds, direction, columns, limit) =>
+      s"{\"op\":\"index_scan\",\"index_id\":${java.lang.Long.toUnsignedString(indexId.value)},\"bounds\":${encodeBounds(bounds)}," +
+        s"\"direction\":\"${direction.toString.toLowerCase}\",\"columns\":${encodeColumns(columns)}${limit.fold("")(l => s",\"limit\":$l")}}"
+    case RowFetch(input, columns) => s"{\"op\":\"row_fetch\",\"input\":${encodeNode(input)},\"columns\":${encodeColumns(columns)}}"
     case Filter(input, predicate) => s"{\"op\":\"filter\",\"input\":${encodeNode(input)},\"predicate\":${encodeExpr(predicate)}}"
     case Project(input, slots) => s"{\"op\":\"project\",\"input\":${encodeNode(input)},\"slots\":${encodeSlots(slots)}}"
     case Limit(input, limit) => s"{\"op\":\"limit\",\"input\":${encodeNode(input)},\"limit\":$limit}"
@@ -53,6 +57,13 @@ object PlanJsonEncoder:
   /** `,"name":expr` for a present expression, nothing otherwise. */
   private def optionalExpr(name: String, expr: Option[PhysicalExpr]): String =
     expr.fold("")(e => s",\"$name\":${encodeExpr(e)}")
+
+  /** `{"prefix":[v,...],"lower":{"value":v,"inclusive":b},"upper":{...}}` (absent ends omitted). */
+  private def encodeBounds(bounds: IndexBounds): String =
+    /** One bound as `,"name":{...}`. */
+    def end(name: String, bound: Option[ValueBound]): String =
+      bound.fold("")(b => s",\"$name\":{\"value\":${encodeRustValue(b.value)},\"inclusive\":${b.inclusive}}")
+    s"{\"prefix\":${bounds.prefix.map(encodeRustValue).mkString("[", ",", "]")}${end("lower", bounds.lower)}${end("upper", bounds.upper)}}"
 
   /** `[{"field_id":f,"slot":s},...]`. */
   private def encodeColumns(columns: Vector[ScanColumn]): String =

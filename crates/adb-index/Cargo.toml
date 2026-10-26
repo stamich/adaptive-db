@@ -1,0 +1,15 @@
+[package]
+name = "adb-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-core = { path = "../adb-core" }
+adb-btree = { path = "../adb-btree" }
+adb-journal = { path = "../adb-journal" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

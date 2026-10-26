@@ -18,7 +18,7 @@ fn all_changes(db: &Database, from: ChangeCursor) -> adb_engine::ChangeBatch {
 fn insert_update_delete_carry_before_and_after_images() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
-    let row = RowId::compose(1, 7);
+    let row = RowId::from_primary_key(1, -7);
     let t1 = put(&db, row, 10);
     let t2 = put(&db, row, 20);
     let t3 = delete(&db, row);
@@ -37,7 +37,7 @@ fn insert_update_delete_carry_before_and_after_images() {
 
     let update = &batch.events[1].changes[0];
     assert_eq!(update.entity_id(), 1);
-    assert_eq!(update.primary_key(), 7);
+    assert_eq!(update.primary_key(), -7);
     assert_eq!(read_i64(update.before.as_ref().unwrap()), 10);
     assert_eq!(read_i64(update.after.as_ref().unwrap()), 20);
     let removal = &batch.events[2].changes[0];

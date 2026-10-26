@@ -52,3 +52,48 @@ fn jvm_encoded_plan_decodes_and_validates() {
                 .unwrap()
     );
 }
+
+/// The JVM's index plan (plan wire v3) decodes: index scan with prefix, range, direction,
+/// covered columns and a limit hint, a filter, a row fetch and a projection.
+#[test]
+fn jvm_encoded_index_plan_decodes_and_validates() {
+    use adb_core::Value;
+    use adb_index::{ScanDirection, ValueBound};
+
+    let bytes = include_bytes!("fixtures/jvm-index-plan.json");
+    let (plan, shape) = decode_json(bytes.trim_ascii_end()).expect("JVM index plan must decode");
+    assert_eq!(shape.output, vec![SlotId(2), SlotId(1)]);
+    let PhysicalPlan::Project { input, .. } = &plan else {
+        panic!("expected a projection, got {plan:?}");
+    };
+    let PhysicalPlan::RowFetch { input, columns } = input.as_ref() else {
+        panic!("expected a row fetch");
+    };
+    assert_eq!(columns[0].field_id, 4);
+    let PhysicalPlan::Filter { input, .. } = input.as_ref() else {
+        panic!("expected a filter");
+    };
+    let PhysicalPlan::IndexScan {
+        index_id,
+        bounds,
+        direction,
+        columns,
+        limit,
+    } = input.as_ref()
+    else {
+        panic!("expected an index scan");
+    };
+    assert_eq!(*index_id, 4);
+    assert_eq!(bounds.prefix, vec![Value::String("Kraków".into())]);
+    assert_eq!(
+        bounds.lower,
+        Some(ValueBound {
+            value: Value::Int64(-5),
+            inclusive: false
+        })
+    );
+    assert_eq!(bounds.upper.as_ref().map(|b| b.inclusive), Some(true));
+    assert_eq!(*direction, ScanDirection::Backward);
+    assert_eq!(columns.len(), 2);
+    assert_eq!(*limit, Some(10));
+}

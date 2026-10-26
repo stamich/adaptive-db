@@ -1,6 +1,6 @@
 package io.adb.gateway
 
-import io.adb.catalog.Catalog
+import io.adb.catalog.{Catalog, IndexCatalog, IndexInfo}
 import io.adb.ffm.*
 import io.adb.logical.*
 import io.adb.model.*
@@ -10,7 +10,7 @@ import io.adb.optimizer.cost.CostModel
 import io.adb.optimizer.join.JoinReorderRule
 import io.adb.physical.*
 import io.adb.sql.SqlParser
-import io.adb.statistics.{StatisticsCodec, StatisticsProvider}
+import io.adb.statistics.{IndexStatistics, StatisticsCodec, StatisticsProvider}
 import java.util.Optional
 import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters.*
@@ -47,6 +47,8 @@ final class AdaptiveDatabase(
   private val optimizer = new RuleOptimizer()
   /** Statistics of the native engine. */
   private val statistics = EngineStatisticsProvider(native)
+  /** Index definitions of the native engine. */
+  private val indexCatalog = EngineIndexCatalog(native)
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
   @volatile private var mode: OptimizerMode = OptimizerMode.Cost
 
@@ -65,13 +67,32 @@ final class AdaptiveDatabase(
     executeBound(bound, sql)
 
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
-  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode)
+  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement, sql: String): QueryResult = statement match
     case BoundCreateTable(name, fields, pk, references) =>
       val entity = catalog.createEntity(name, fields, pk, references)
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
+
+    case BoundCreateIndex(name, entity, columns, include) =>
+      val keys = columns.map((field, descending) =>
+        s"{\"field_id\":${field.id.value},\"direction\":\"${if descending then "desc" else "asc"}\"}")
+      val spec = s"{\"name\":${PlanJsonEncoder.quote(name)},\"entity_id\":${java.lang.Long.toUnsignedString(entity.id.value)}," +
+        s"\"columns\":${keys.mkString("[", ",", "]")},\"include\":${include.map(_.id.value).mkString("[", ",", "]")}}"
+      val created = IndexCatalog.decodeStatus(io.adb.model.JsonReader.parse(native.createIndexJson(spec)).asInstanceOf[Map[String, Any]])
+      QueryResult(Vector.empty, Vector.empty, Some(s"created index ${created.name} on ${entity.name} id=${created.id.value} usable from ts=${created.usableFromTs}"))
+
+    case BoundDropIndex(name) =>
+      native.dropIndex(name)
+      QueryResult(Vector.empty, Vector.empty, Some(s"dropped index $name"))
+
+    case BoundShowIndexes(entity) =>
+      val shown = entity.fold(indexCatalog.indexes)(e => indexCatalog.indexes(e.id))
+      QueryResult(
+        Vector("name", "table", "columns", "include", "usable_from_ts", "watermark_ts"),
+        shown.map(index => AdaptiveDatabase.describe(index, catalog))
+      )
 
     case BoundAnalyze(entities) =>
       val lines = entities.map { entity =>
@@ -153,6 +174,22 @@ object AdaptiveDatabase:
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
 
+  /** One `SHOW INDEXES` row: name, table, key columns (`col [DESC]`), covered columns and the
+    * range of snapshots the index serves.
+    */
+  def describe(index: IndexInfo, catalog: Catalog): Vector[Any] =
+    val entity = catalog.entity(index.entity)
+    /** The column name of `field`, or `#field` if the catalog does not know it. */
+    def name(field: FieldId): String = entity.flatMap(_.fieldsById.get(field)).fold(s"#${field.value}")(_.name)
+    Vector(
+      index.name,
+      entity.fold(s"#${index.entity.value}")(_.name),
+      index.columns.map(c => name(c.field) + (if c.descending then " DESC" else "")).mkString(", "),
+      index.include.map(name).mkString(", "),
+      java.lang.Long.valueOf(index.usableFromTs),
+      java.lang.Long.valueOf(index.watermarkTs)
+    )
+
   /** The planning stages of one SELECT.
     *
     * @param logical    canonical plan built from the bound statement
@@ -160,19 +197,61 @@ object AdaptiveDatabase:
     * @param physical   executable plan with decisions, estimates and warnings
     * @param mode       optimizer mode used
     * @param statistics statistics status of every entity the query reads, in plan order
+    * @param indexes    the indexes of those entities the planner considered (cost mode only)
     */
   final case class Plans(
       logical: LogicalPlan,
       optimized: LogicalPlan,
       physical: PlannedQuery,
       mode: OptimizerMode,
-      statistics: Vector[(Entity, StatisticsStatus)]
+      statistics: Vector[(Entity, StatisticsStatus)],
+      indexes: Vector[IndexReport] = Vector.empty
   )
 
-  /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies,
-    * or (rule mode) the 2.1.3 rules; both annotate the plan with estimates.
+  /** What EXPLAIN reports about one index of an entity the query reads.
+    *
+    * @param info       the engine's definition and serving range
+    * @param entity     the indexed entity
+    * @param statistics the index statistics of the last `ANALYZE`, if any
+    * @param serves     whether the index can answer the query snapshot
     */
-  def plan(select: BoundSelect, catalog: Catalog, statistics: StatisticsProvider, config: OptimizerConfig, mode: OptimizerMode): Plans =
+  final case class IndexReport(info: IndexInfo, entity: Entity, statistics: Option[IndexStatistics], serves: Boolean):
+    /** Key column names, most significant first (`#field` if the catalog does not know one). */
+    def keyColumns: Vector[String] = info.columns.map(c => fieldName(c.field))
+
+    /** `idx ON table (a, b DESC) INCLUDE (c)`. */
+    def definition: String =
+      val keys = info.columns.map(c => fieldName(c.field) + (if c.descending then " DESC" else "")).mkString(", ")
+      val include = if info.include.isEmpty then "" else info.include.map(fieldName).mkString(" INCLUDE (", ", ", ")")
+      s"${info.name} ON ${entity.name} ($keys)$include"
+
+    /** The EXPLAIN line: definition, serving range and statistics status. */
+    def display: String =
+      val range =
+        if serves then s"serves ts ${info.usableFromTs}..${java.lang.Long.toUnsignedString(info.watermarkTs)}"
+        else s"cannot serve the query snapshot (serves ts ${info.usableFromTs}..${java.lang.Long.toUnsignedString(info.watermarkTs)})"
+      val stats = statistics match
+        case None => s"no statistics (run ANALYZE ${entity.name})"
+        case Some(s) =>
+          val ndv = s.distinctPrefixes.mkString("[", ", ", "]")
+          f"${s.entries} entries (${s.storedEntries} stored), height ${s.height}, ${s.leafPages} leaf pages, prefix ndv $ndv, pk locality ${s.pkLocality}%.2f"
+      s"- $definition: $range; $stats"
+
+    /** The name of `field`. */
+    private def fieldName(field: FieldId): String = entity.fieldsById.get(field).fold(s"#${field.value}")(_.name)
+
+  /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies
+    * including access paths over `indexes`, or (rule mode) the 2.1.3 rules without indexes;
+    * both annotate the plan with estimates.
+    */
+  def plan(
+      select: BoundSelect,
+      catalog: Catalog,
+      statistics: StatisticsProvider,
+      config: OptimizerConfig,
+      mode: OptimizerMode,
+      indexes: IndexCatalog = IndexCatalog.Empty
+  ): Plans =
     val estimator = new CardinalityEstimator(statistics, catalog, config.estimation)
     val costModel = new CostModel(estimator, config)
     val logical = LogicalPlanner.plan(select)
@@ -180,14 +259,33 @@ object AdaptiveDatabase:
     val (optimized, notes) =
       if mode == OptimizerMode.Cost then new JoinReorderRule(estimator, costModel).reorder(rewritten)
       else (rewritten, Vector.empty)
-    val policy = if mode == OptimizerMode.Cost then new CostBasedPolicy(estimator, costModel) else DefaultPlanningPolicy
+    val policy =
+      if mode == OptimizerMode.Cost then new CostBasedPolicy(estimator, costModel, IndexCatalog.of(indexes.indexes*), select.asOfVersion)
+      else DefaultPlanningPolicy
     val physical = PhysicalPlanner.plan(optimized, policy, Some(PlanEstimation(estimator, costModel)))
     val orderDecisions = notes.map(note => PlanDecision("join order", note.order, f"${note.method}; est. rows=${note.rows}%.0f cost=${note.cost}%.1f"))
     val relations = PhysicalPlanner.relations(optimized).distinctBy(_.entity.id)
-    Plans(logical, optimized, physical.copy(decisions = orderDecisions ++ physical.decisions), mode, relations.map(r => r.entity -> estimator.status(r)))
+    val reports =
+      if mode != OptimizerMode.Cost then Vector.empty
+      else
+        val snapshot = select.asOfVersion
+        relations.flatMap { relation =>
+          indexes.indexes(relation.entity.id).map { info =>
+            val stats = estimator.entityStatistics(relation.entity.id).flatMap(_.table.index(info.id))
+            IndexReport(info, relation.entity, stats, snapshot.forall(info.serves))
+          }
+        }
+    Plans(
+      logical,
+      optimized,
+      physical.copy(decisions = orderDecisions ++ physical.decisions),
+      mode,
+      relations.map(r => r.entity -> estimator.status(r)),
+      reports
+    )
 
-  /** EXPLAIN sections of a plan: logical, optimized and physical plans (with estimates),
-    * decisions, statistics and warnings.
+  /** EXPLAIN sections of a plan: logical, optimized and physical plans (with estimates and
+    * index names), decisions, statistics, the indexes considered and warnings.
     */
   def explain(plans: Plans): Vector[String] =
     val physical = plans.physical
@@ -199,10 +297,12 @@ object AdaptiveDatabase:
         case StatisticsStatus.Stale(s) =>
           s"- ${entity.name}: ${s.table.rowCount} rows analyzed at ts=${s.table.analyzedAtTs}, ${s.modificationsSinceAnalyze} modifications since (stale)"
     }
+    val labels = plans.indexes.map(r => r.info.id -> IndexLabel(r.info.name, r.keyColumns)).toMap
     Vector(
       "Logical:\n" + LogicalPlan.render(plans.logical),
       "Optimized:\n" + LogicalPlan.render(plans.optimized),
-      s"Physical (optimizer=${plans.mode.toString.toLowerCase}):\n" + Explain.physical(physical.plan, physical.slotNames, physical.estimates),
+      s"Physical (optimizer=${plans.mode.toString.toLowerCase}):\n" + Explain.physical(physical.plan, physical.slotNames, physical.estimates, labels),
       "Decisions:\n" + (if physical.decisions.isEmpty then "(none)" else physical.decisions.map("- " + _.display).mkString("\n")),
       "Statistics:\n" + (if statisticsLines.isEmpty then "(no tables)" else statisticsLines.mkString("\n"))
-    ) ++ Option.when(physical.warnings.nonEmpty)("Warnings:\n" + physical.warnings.map("- " + _).mkString("\n"))
+    ) ++ Option.when(plans.indexes.nonEmpty)("Indexes:\n" + plans.indexes.map(_.display).mkString("\n")) ++
+      Option.when(physical.warnings.nonEmpty)("Warnings:\n" + physical.warnings.map("- " + _).mkString("\n"))

@@ -4,7 +4,7 @@ use adb_ffi::{adb_abi_version, adb_engine_version, AdbStatus};
 /// The ABI version, every status code and the engine version string are stable.
 #[test]
 fn abi_is_v5_and_status_codes_are_stable() {
-    assert_eq!(adb_abi_version(), 5);
+    assert_eq!(adb_abi_version(), 6);
     let codes = [
         (AdbStatus::Ok, 0),
         (AdbStatus::EndOfStream, 1),
@@ -26,5 +26,5 @@ fn abi_is_v5_and_status_codes_are_stable() {
     let mut len = 0;
     let ptr = adb_engine_version(&mut len);
     let version = unsafe { std::slice::from_raw_parts(ptr, len) };
-    assert_eq!(version, b"2.2.3");
+    assert_eq!(version, b"2.3.0");
 }

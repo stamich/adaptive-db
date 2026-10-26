@@ -7,11 +7,13 @@ pub mod cursor;
 pub mod error;
 pub mod format;
 pub mod record;
+pub mod rewrite;
 pub mod segmented;
 
 pub use cursor::{read_all, LogEntry, WalCursor};
 pub use error::WalError;
 pub use record::WalRecord;
+pub use rewrite::{rewrite_log, RewriteReport};
 pub use segmented::{
     earliest_lsn, lsn_offset, lsn_segment, make_lsn, SegmentedWalWriter, DEFAULT_SEGMENT_SIZE,
 };

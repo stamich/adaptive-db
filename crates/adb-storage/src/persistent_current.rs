@@ -38,6 +38,19 @@ impl PersistentCurrentStore {
         }
     }
 
+    /// Latest records of many rows; `row_ids` must be in ascending order (one descent per leaf,
+    /// see [`adb_btree::BPlusTree::get_many`]).
+    pub fn get_many(&self, row_ids: &[RowId]) -> Result<Vec<Option<CurrentRecord>>, StorageError> {
+        self.index
+            .get_many(row_ids)?
+            .into_iter()
+            .map(|location| match location {
+                Some(location) => Ok(Some(bincode::deserialize(&self.heap.read(location)?)?)),
+                None => Ok(None),
+            })
+            .collect()
+    }
+
     /// Replaces the record of `row_id`, freeing the previous tuple.
     pub fn put_at_lsn(
         &self,

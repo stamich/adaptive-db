@@ -35,7 +35,35 @@ object ProfileRenderer:
     val limit = number(profile("memory_limit_bytes"))
     val lines = renderOperator(profile("root"), 0, estimates)
     val worst = compare(json, estimates).maxByOption(_.qError).map(c => f"max q-error ${c.qError}%.1f at [${c.nodeId}] ${c.operator}")
-    ((s"peak memory ${bytes(peak)} of ${bytes(limit)}" +: lines) ++ worst).mkString("\n")
+    ((s"peak memory ${bytes(peak)} of ${bytes(limit)}" +: lines) ++ indexSummary(profile("root")) ++ worst).mkString("\n")
+
+  /** Totals of the index operators of a profile, if it has any:
+    * `index access: 2 pages, 40 entries examined, 25 returned (63% visible); row fetch: 1 batches, 25 rows`.
+    *
+    * Entries examined but not returned are versions invisible at the snapshot (or beyond a
+    * limit); a low visible share points at history the next `VACUUM` can remove.
+    */
+  def indexSummary(root: Any): Option[String] =
+    /** Every operator of the tree, in pre-order. */
+    def all(node: Any): Vector[Map[String, Any]] =
+      val operator = node.asInstanceOf[Map[String, Any]]
+      operator +: children(operator).flatMap(all)
+    /** Counter `name` of `operator` (0 if absent). */
+    def counter(operator: Map[String, Any], name: String): Long =
+      operator.get("counters").map(_.asInstanceOf[Map[String, Any]]).flatMap(_.get(name)).fold(0L)(number)
+    val operators = all(root)
+    val scans = operators.filter(_("operator") == "index_scan")
+    val fetches = operators.filter(_("operator") == "row_fetch")
+    Option.when(scans.nonEmpty) {
+      val pages = scans.map(counter(_, "pages")).sum
+      val examined = scans.map(counter(_, "entries_examined")).sum
+      val returned = scans.map(op => number(op("rows_out"))).sum
+      val visible = if examined == 0 then 100.0 else 100.0 * returned / examined
+      val fetch =
+        if fetches.isEmpty then "; covering (no row fetch)"
+        else s"; row fetch: ${fetches.map(counter(_, "fetch_batches")).sum} batches, ${fetches.map(counter(_, "rows_fetched")).sum} rows"
+      f"index access: $pages pages, $examined entries examined, $returned returned ($visible%.0f%% visible)$fetch"
+    }
 
   /** Every operator of the profile that has an estimate, in pre-order. */
   def compare(json: String, estimates: Map[Int, NodeEstimate]): Vector[Comparison] =

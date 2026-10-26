@@ -6,6 +6,9 @@
 //! input. Operators can then index [`crate::ExecRow`] values without bounds surprises.
 use std::collections::HashSet;
 
+use adb_core::Value;
+use adb_index::{IndexBounds, MAX_KEY_COLUMNS};
+
 use crate::{
     limits::{MAX_LIMIT, MAX_LIST_LEN, MAX_PLAN_DEPTH, MAX_SLOTS},
     AggregateFunction, Expr, PhysicalPlan, ScanColumn, SlotId, SortKey,
@@ -48,6 +51,34 @@ impl Validator {
             PhysicalPlan::PointLookup { columns, .. }
             | PhysicalPlan::Scan { columns }
             | PhysicalPlan::EntityScan { columns, .. } => self.scan_columns(columns),
+
+            PhysicalPlan::IndexScan {
+                bounds,
+                columns,
+                limit,
+                ..
+            } => {
+                if let Some(limit) = limit {
+                    check_limit("index scan limit", *limit)?;
+                }
+                check_bounds(bounds)?;
+                self.scan_columns(columns)
+            }
+
+            PhysicalPlan::RowFetch { input, columns } => {
+                let input_out = self.node(input, depth + 1)?;
+                self.list("fetched columns", columns.len())?;
+                let fetched: Vec<SlotId> = columns.iter().map(|column| column.slot).collect();
+                for slot in &fetched {
+                    if input_out.contains(slot) {
+                        return Err(format!(
+                            "row fetch slot {slot} is already produced by its input"
+                        ));
+                    }
+                }
+                self.new_slots(&fetched, "fetched columns")?;
+                Ok([input_out, fetched].concat())
+            }
 
             PhysicalPlan::Filter { input, predicate } => {
                 let output = self.node(input, depth + 1)?;
@@ -257,6 +288,30 @@ pub(crate) fn require_all(
                 "{what} reads slot {slot}, which its input does not produce"
             ));
         }
+    }
+    Ok(())
+}
+
+/// Index bounds no index can accept are rejected before the scan reaches the engine: more
+/// equality values plus range column than an index may have key columns, or a NULL bound (a
+/// comparison with NULL matches nothing, so planners never produce one). Whether the bounds
+/// fit the scanned index itself is checked by the engine, which knows its definition.
+fn check_bounds(bounds: &IndexBounds) -> Result<(), String> {
+    let ranged = bounds.lower.is_some() || bounds.upper.is_some();
+    let addressed = bounds.prefix.len() + usize::from(ranged);
+    if addressed > MAX_KEY_COLUMNS {
+        return Err(format!(
+            "index bounds address {addressed} key columns; an index has at most {MAX_KEY_COLUMNS}"
+        ));
+    }
+    let null = bounds
+        .prefix
+        .iter()
+        .chain(bounds.lower.iter().map(|bound| &bound.value))
+        .chain(bounds.upper.iter().map(|bound| &bound.value))
+        .any(|value| matches!(value, Value::Null));
+    if null {
+        return Err("index bounds never compare with NULL".into());
     }
     Ok(())
 }

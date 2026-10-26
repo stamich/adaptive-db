@@ -29,6 +29,8 @@ pub enum AdbStatus {
     ResourceLimit = 10,
     /// An exact computation overflowed its result type (e.g. an INT64 SUM).
     ArithmeticOverflow = 11,
+    /// The database directory uses another data format; migrate it with `adb-migrate` (ABI 6).
+    IncompatibleFormat = 12,
     /// Unexpected internal failure or contained panic.
     Internal = 255,
 }

@@ -1,68 +1,81 @@
-# Adaptive DB — Milestone 2.2.3
+# Adaptive DB — Milestone 2.3.0
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
 Adaptive DB is an adaptive, intent-driven database in which **the canonical log is the source of
-truth** and every physical structure (the current store, the version store, optimizer statistics
-and, in the future, columnar, search and graph projections) is rebuildable, derived data. Physical
-execution is meant to adapt to the workload and to the user's declared intent; the engine
-therefore explains every planning decision it takes, estimates what each operator will do and
-measures what it actually did.
+truth** and every physical structure (the current store, the version store, secondary indexes,
+optimizer statistics and, in the future, columnar, search and graph projections) is rebuildable,
+derived data. Physical execution is meant to adapt to the workload and to the user's declared
+intent; the engine therefore explains every planning decision it takes, estimates what each
+operator will do and measures what it actually did.
 
 This repository implements the V1 core: a single-node transactional engine with history, a native
-change stream, relational query execution (joins, aggregation, sorting) and, since 2.2.3,
-statistics and a cost-based optimizer.
+change stream, relational query execution (joins, aggregation, sorting), statistics and a
+cost-based optimizer (2.2.3) and, since 2.3.0, secondary indexes with cost-based access paths.
 
-## What 2.2.3 adds
+## What 2.3.0 adds
 
-| Area | 2.1.3 | 2.2.3 |
+| Area | 2.2.3 | 2.3.0 |
 |---|---|---|
-| Statistics | — | native **`ANALYZE`**: exact counts, NULLs, min/max, **HyperLogLog** NDV, **histograms**, **most common values**; persisted by the engine |
-| Freshness | — | per-entity **modification counters** (checkpointed, replayed); stale above 20% changed rows |
-| SQL | joins, GROUP BY, ORDER BY | + `ANALYZE [table]`, `SET optimizer = cost \| rule`, `REFERENCES t(c) NOT ENFORCED` foreign-key hints |
-| Planning | rules, SQL join order, right side built | **cardinality estimation** with confidence, **cost model** checked against engine limits, **join ordering** (DP ≤ 10, greedy ≤ 32), **build-side swap** |
-| Observability | EXPLAIN decisions, EXPLAIN ANALYZE profile | + **estimates per node**, statistics status and warnings; **q-error** per operator matched by profile **node id**; planner feedback log |
-| Boundary | C ABI 4 | **C ABI 5** (`adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze`); plan wire and batch format unchanged |
-| Version | 2.1.3 | engine, crates and JVM build **2.2.3** |
-| Tests | 158 Rust, 40 JVM | **186 Rust, 90 JVM** (incl. DP-optimality and result-equality properties) |
+| Indexes | — | **secondary indexes** as MVCC-versioned **projections of the log**: maintained in the commit, recovered, vacuumed, verified and rebuilt like the other projections; `INCLUDE` (covering) columns; `AS OF` reads through indexes |
+| SQL | `ANALYZE`, `SET optimizer` | + `CREATE INDEX name ON t (c [ASC\|DESC], ...) [INCLUDE (...)]`, `DROP INDEX`, `SHOW INDEXES [ON t]` |
+| Storage | primary keys as raw bits (negative keys last) | **order-preserving key encoding**, **data format 2** (primary-key order = storage order); `adb-migrate` for older directories (LSNs and CDC offsets kept) |
+| Planning | joins and strategies by cost | + **access paths by cost** (index vs sequential scan, covering scans, residuals before row fetches), **Sort / TopK elision** from index and primary-key order |
+| Execution | scans, joins, aggregates, sorts | + `IndexScan` (keyset pages, snapshot re-check) and batched `RowFetch` |
+| Statistics | format 1 | **format 2**: index entries, height, leaf pages, distinct prefixes, `pk_locality` |
+| Observability | estimates, q-error | + index names and bounds by column, rejected access paths, `Indexes:` section; index access summary in EXPLAIN ANALYZE |
+| Boundary | C ABI 5, plan wire v2 | **C ABI 6** (`adb_create_index_json`, `adb_drop_index`, `adb_list_indexes_json`, status `INCOMPATIBLE_FORMAT`), **plan wire v3** (`index_scan`, `row_fetch`) |
+| Version | 2.2.3 | engine, crates and JVM build **2.3.0** (from now on: minor = milestone, patch = fixes) |
+| Tests | 186 Rust, 90 JVM | **258 Rust, 120 JVM** (incl. model-based index scans at every snapshot, crash points of builds and drops, fuzzing of the key encoder and plan wire v3) |
 
-Order-preserving key encoding (needed for Sort elision) is planned for 2.3 together with secondary
-indexes, so storage migrates once. How the 2.2.3 proposal was adapted, and why:
-[docs/milestone-2.2.3.md](docs/milestone-2.2.3.md).
+How the 2.3.3 proposal was implemented as 2.3.0, and why: [docs/milestone-2.3.0.md](docs/milestone-2.3.0.md).
+Indexes in depth: [docs/indexes.md](docs/indexes.md).
+
+**Upgrading from 2.2.3:** the engine refuses a directory written by an earlier version
+(`INCOMPATIBLE_FORMAT`). Migrate it once with
+`cargo run --release -p adb-migrate -- /path/to/db` (in place, keeps a backup) or
+`... -- /path/to/db --to /new/path`.
 
 Workload benchmark (`scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, `ADB_BENCH_SCALE`;
-2-vCPU cloud VM, p50 of 100 iterations after warm-up; expect run-to-run variation). Scale 1 holds
-324,000 rows in 10 tables, scale 10 holds 3.2 million.
+2-vCPU cloud VM, p50 after warm-up; expect run-to-run variation). Scale 1 holds 424,000 rows in
+11 tables, scale 10 holds 4.2 million.
 
 | | scale 1 | scale 10 |
 |---|---|---|
-| A: hash join + TopK — rust_native / ffi_prepared_plan / full SQL | 0.66 / 1.05 / 1.01 ms | 7.7 / 8.5 / 8.9 ms |
-| B: + aggregate — rust_native / ffi_prepared_plan / full SQL | 0.71 / 0.81 / 1.60 ms | 8.3 / 8.8 / 9.6 ms |
-| join order, chain — cost / rule mode | 17 / 22 ms | 194 / 292 ms |
-| join order, star (SQL order builds the fact table) — cost / rule mode | 78 / 125 ms | 820 ms / **aborted** (`RESOURCE_LIMIT`, 256 MiB) |
-| `ANALYZE` throughput | 530,000 rows/s | 600,000 rows/s |
-| estimate q-error: Zipf most common / correlated pair / stale → after `ANALYZE` | 1.0 / 37.7 / 25 → 1.0 | 1.0 / 37 / 25 → 1.0 |
+| C: covering index equality — rust_native / ffi_prepared_plan / full SQL | 0.025 / 0.040 / 0.105 ms | 0.083 / 0.148 / 0.49 ms |
+| D: index range + row fetch, ORDER BY ... LIMIT 100 without a sort | 0.16 / 0.17 / 0.37 ms | 0.35 / 0.41 / 0.83 ms |
+| E: the same table without a usable index (sequential scan) | 57 / 88 / 83 ms | 1,703 / 912 / 936 ms |
+| selectivity sweep 0.01% → 50%: faster plan chosen by cost mode | 5 of 6 (50%: 6% slower) | 6 of 6 |
+| `CREATE INDEX` per index | 4 s | 40 s |
+| inserts with 1 / 3 indexes, relative to none | 3.0× / 5.5× slower | 3.1× / 6.7× slower |
+| A: hash join + TopK — rust_native / ffi_prepared_plan / full SQL | 1.04 / 0.75 / 1.24 ms | 7.3 / 11.4 / 9.4 ms |
+| B: + aggregate — rust_native / ffi_prepared_plan / full SQL | 0.66 / 0.78 / 1.08 ms | 9.8 / 9.0 / 10.9 ms |
+| join order, chain / star — cost vs rule mode | 15 vs 22 / 72 vs 131 ms | 183 vs 321 / 767 ms vs **aborted** (`RESOURCE_LIMIT`) |
+| `ANALYZE` throughput | 670,000 rows/s | 640,000 rows/s |
 
-Planning a 10-relation chain takes about 1.5 ms, a 10-relation star about 11 ms. Recorded runs and
-how to read them: [examples/results/README.md](examples/results/README.md).
+Indexes make selective reads two to three orders of magnitude faster and writes 3–7× slower. Builds
+are single-threaded tree inserts. Both are 2.3.x follow-ups ([docs/roadmap.md](docs/roadmap.md)).
+Recorded runs and how to read them: [examples/results/README.md](examples/results/README.md).
 
 ## Architecture
 
 ```text
 SQL -> Scala: parse -> bind (slots) -> logical plan -> rules -> join order -> physical plan
-              (estimates, cost, decisions) <- statistics <- C ABI v5 <- Rust ANALYZE / counters
-    -> plan wire v2 JSON -> Java FFM -> C ABI v5 -> Rust: validate -> operators -> batch v2
+              (access paths, estimates, cost, decisions) <- statistics, index catalog <- C ABI v6
+    -> plan wire v3 JSON -> Java FFM -> C ABI v6 -> Rust: validate -> operators -> batch v2
                                                                    -> runtime profile JSON (node ids)
 
-  commit: validate -> append to LOG -> apply to projections (memory) -> group fsync -> publish
-  read:   snapshot over current + version projections; EntityScan = key-range scan
+  commit: validate -> append to LOG -> apply to projections incl. indexes (memory) -> group fsync -> publish
+  read:   snapshot over current + version projections; EntityScan = key-range scan in PK order;
+          IndexScan = versioned index entries at the snapshot, RowFetch = batched lookups
   CDC:    WalCursor over the durable log prefix
   checkpoint: dirty pages + roots + record -> journal -> in place
 ```
 
 Details: [docs/architecture.md](docs/architecture.md) (including the query path and the adaptive
 loop), execution layer: [docs/execution.md](docs/execution.md), statistics:
-[docs/statistics.md](docs/statistics.md), optimizer: [docs/optimizer.md](docs/optimizer.md), invariants mapped to tests:
+[docs/statistics.md](docs/statistics.md), optimizer: [docs/optimizer.md](docs/optimizer.md), indexes:
+[docs/indexes.md](docs/indexes.md), invariants mapped to tests:
 [docs/invariants.md](docs/invariants.md), CDC: [docs/cdc.md](docs/cdc.md), ABI:
 [docs/ffi.md](docs/ffi.md), wire formats: [docs/plan-wire-format.md](docs/plan-wire-format.md),
 [docs/batch-format.md](docs/batch-format.md), roadmap: [docs/roadmap.md](docs/roadmap.md).
@@ -91,21 +104,27 @@ ANALYZE;                               -- statistics for every table
 EXPLAIN SELECT ...;                    -- plans with estimates, join order, decisions, warnings
 EXPLAIN ANALYZE SELECT ...;            -- plus the per-operator profile and q-error
 SET optimizer = rule;                  -- the 2.1.3 planner (cost is the default)
+CREATE INDEX idx_amount ON orders (amount) INCLUDE (customer_id);
+SELECT customer_id, amount FROM orders WHERE amount >= 500;                           -- covering IndexScan
+SELECT id, amount FROM orders ORDER BY amount DESC LIMIT 5;                          -- no TopK
+SHOW INDEXES;
+DROP INDEX idx_amount;
 ```
 
 The full grammar and its rules are in [docs/milestone-2.1.3.md](docs/milestone-2.1.3.md#supported-sql-213)
-and [docs/milestone-2.2.3.md](docs/milestone-2.2.3.md#supported-sql-223-additions).
+[docs/milestone-2.2.3.md](docs/milestone-2.2.3.md#supported-sql-223-additions)
+and [docs/milestone-2.3.0.md](docs/milestone-2.3.0.md#supported-sql-230-additions).
 
 ## Usage (Rust)
 
 ```rust
 use adb_core::{Row, RowId, Value};
-use adb_engine::{AnalyzeOptions, ChangeCursor, ChangeFilter, Database};
+use adb_engine::{AnalyzeOptions, ChangeCursor, ChangeFilter, Database, IndexColumn, IndexSpec};
 
 let db = Database::open("data")?;
 
 let mut tx = db.begin();                                   // Serializable
-let id = RowId::compose(/* entity */ 1, /* pk */ 42);
+let id = RowId::from_primary_key(/* entity */ 1, /* BIGINT pk */ 42); // order-preserving
 if db.get_in_tx(&mut tx, id)?.is_none() {
     tx.put(id, Row::new().with_field(1, Value::Int64(100)));
 }
@@ -120,6 +139,10 @@ while let Some(batch) = cursor.next_batch()? { /* columns by output slot */ }
 let profile = cursor.profile();                            // per-operator profile, node ids
 let stats = db.analyze(1, &AnalyzeOptions::default())?;    // optimizer statistics of entity 1
 let stale = db.modifications_since_analyze(1);
+db.create_index(IndexSpec {                                // built now, maintained by every commit
+    name: "idx_value".into(), entity_id: 1, include: vec![],
+    columns: vec![IndexColumn { field_id: 1, direction: adb_core::Direction::Asc }],
+})?;
 db.close()?;                                               // checkpoint (optional)
 ```
 
@@ -128,11 +151,11 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.2.3.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.3.0.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.2.3 through the JVM CLI
-./scripts/benchmark-db.sh    # 2.2.3 workloads, rust_native path
-./scripts/benchmark-ffi.sh   # 2.2.3 workloads, FFI and full SQL paths, join order, calibration
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.3.0 through the JVM CLI
+./scripts/benchmark-db.sh    # 2.3.0 workloads, rust_native path, index builds, write overhead
+./scripts/benchmark-ffi.sh   # 2.3.0 workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
 
 **CI** (`.github/workflows/ci.yml`) runs the same checks on every push to `master` and every
@@ -150,15 +173,16 @@ needs access to Maven Central. The Java FFM → Rust path is also checked withou
 ## Repository layout
 
 ```text
-crates/        Rust engine (core, journal, page, buffer, btree, storage, wal, tx, execution,
-               plan-wire, stats, engine, ffi)
-include/adb.h  C ABI v5
-jvm/           Scala/Java: model, statistics, catalog, SQL, binder, optimizer (estimation, cost,
-               join order), physical planning, FFM, gateway, CLI, benchmark
+crates/        Rust engine (core, journal, page, buffer, btree, storage, wal, tx, index, execution,
+               plan-wire, stats, engine, ffi) and the adb-migrate tool
+include/adb.h  C ABI v6
+jvm/           Scala/Java: model, statistics, catalog (incl. indexes), SQL, binder, optimizer
+               (estimation, cost, join order, access paths), physical planning, FFM, gateway,
+               CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
 examples/      Rust demo and benchmark, JVM CDC smoke test, results
 demo/          feature tour through the JVM CLI
-docs/          architecture, execution, statistics, optimizer, invariants, CDC, ABI, wire formats,
-               milestone notes, roadmap
+docs/          architecture, execution, statistics, optimizer, indexes, invariants, CDC, ABI, wire
+               formats, milestone notes, roadmap
 ```

@@ -39,8 +39,8 @@ pub(crate) struct Recovered {
     pub modifications: ModificationCounters,
 }
 
-/// Publishes the projections' dirty pages, the modification counters of the database in `dir`
-/// and `checkpoint` atomically.
+/// Publishes the projections' dirty pages, the index catalog, the modification counters of the
+/// database in `dir` and `checkpoint` atomically.
 pub(crate) fn write_checkpoint(
     dir: &Path,
     journal: &Journal,
@@ -50,6 +50,7 @@ pub(crate) fn write_checkpoint(
     checkpoint: &Checkpoint,
 ) -> Result<(), DbError> {
     let mut writes = projections.journal_writes()?;
+    writes.push(projections.catalog_journal_write()?);
     writes.push(modifications.journal_write(dir)?);
     writes.push(store.journal_write(checkpoint)?);
     journal.commit(&writes)?;
@@ -68,6 +69,7 @@ pub(crate) fn recover(
     journal.recover()?;
     let checkpoint = store.load()?;
     let projections = Projections::open(dir, options.buffer_pages)?;
+    projections.restore_horizons(checkpoint.last_commit_ts, checkpoint.vacuumed_through);
 
     // Databases migrated from format 2 re-read the whole retained log and skip what is applied.
     let start = match checkpoint.applied_through {

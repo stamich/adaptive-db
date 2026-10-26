@@ -48,13 +48,35 @@ final class StatisticsCodecTest:
   /** Unknown versions, missing fields and impossible counts are rejected. */
   @Test def rejectsMalformedDocuments(): Unit =
     for bad <- Vector(
-        document.replace("\"format_version\":1", "\"format_version\":2"),
+        document.replace("\"format_version\":1", "\"format_version\":3"),
         document.replace("\"row_count\":100,", ""),
         document.replace("\"exact\":true", "\"exact\":1"),
         document.replace("\"null_count\":10", "\"null_count\":101"),
         document.replace("\"distinct_count\":2,", "\"distinct_count\":95,"),
         document.replace("\"field_id\":3", "\"field_id\":2"),
         "[]"
+      )
+    do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
+
+  /** Format 2 documents (2.3.0) carry index statistics; format 1 documents have none. */
+  @Test def readsFormatTwo(): Unit =
+    val index = ""","indexes":[{"index_id":4,"entries":100,"stored_entries":120,"height":2,""" +
+      """"leaf_pages":3,"avg_key_bytes":9.0,"distinct_prefixes":[10,100],"pk_locality":0.25}]}"""
+    val v2 = document.replace("\"format_version\":1", "\"format_version\":2").stripSuffix("}") + index
+    val decoded = StatisticsCodec.decode(v2)
+    assertEquals(StatisticsCodec.decode(document).rowCount, decoded.rowCount)
+    val stats = decoded.index(IndexId(4)).get
+    assertEquals(Some(10L), stats.distinctPrefix(1))
+    assertEquals(Some(100L), stats.distinctPrefix(2))
+    assertEquals(None, stats.distinctPrefix(3))
+    assertEquals(0.25, stats.pkLocality)
+    assertEquals(3L, stats.leafPages)
+    assertTrue(StatisticsCodec.decode(document).indexes.isEmpty)
+    for bad <- Vector(
+        v2.replace("\"stored_entries\":120", "\"stored_entries\":90"),
+        v2.replace("[10,100]", "[10,101]"),
+        v2.replace("\"pk_locality\":0.25", "\"pk_locality\":1.5"),
+        document.replace("\"format_version\":1", "\"format_version\":2")
       )
     do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
 

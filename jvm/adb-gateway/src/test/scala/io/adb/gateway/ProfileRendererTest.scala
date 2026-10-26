@@ -39,3 +39,19 @@ final class ProfileRendererTest:
     )
     assertEquals(Vector(4.0, 1.0, 1.0), ProfileRenderer.compare(json, estimates).map(_.qError))
     assertEquals(2.5, ProfileRenderer.qError(10, 25))
+
+  /** Index operators add a summary line: pages, entries examined versus returned, row fetches. */
+  @Test def summarizesIndexAccess(): Unit =
+    val json =
+      """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"operator":"row_fetch","rows_out":25,"batches_out":1,
+        |"elapsed_us":0,"counters":{"fetch_batches":1,"rows_fetched":25},"children":[{"operator":"index_scan","rows_out":25,
+        |"batches_out":1,"elapsed_us":0,"counters":{"pages":2,"entries_examined":40}}]}}""".stripMargin
+    assertTrue(ProfileRenderer.render(json).endsWith(
+      "index access: 2 pages, 40 entries examined, 25 returned (63% visible); row fetch: 1 batches, 25 rows"), ProfileRenderer.render(json))
+    val covering =
+      """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"operator":"index_scan","rows_out":0,"batches_out":0,
+        |"elapsed_us":0,"counters":{"pages":1,"entries_examined":0}}}""".stripMargin
+    assertTrue(ProfileRenderer.render(covering).endsWith("0 returned (100% visible); covering (no row fetch)"))
+    val plain = """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"operator":"entity_scan","rows_out":0,"batches_out":0,"elapsed_us":0}}"""
+    assertFalse(ProfileRenderer.render(plain).contains("index access"))
+

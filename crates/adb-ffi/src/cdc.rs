@@ -11,7 +11,7 @@
 //!                         "after":{"fields":{"1":{"Int64":20}}}}]}]}
 //! ```
 //!
-//! Log positions and primary keys are decimal strings (they use the full `u64` range).
+//! Log positions (`u64`) and primary keys (`i64`, the SQL value) are decimal strings.
 
 use std::slice;
 

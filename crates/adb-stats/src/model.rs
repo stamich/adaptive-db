@@ -4,8 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::StatsError;
 
-/// Version of the statistics document; bumped on incompatible changes.
-pub const STATISTICS_FORMAT_VERSION: u32 = 1;
+/// Version of the statistics documents this engine writes; bumped on incompatible changes.
+/// 1 = 2.2.3 (tables and columns); 2 = 2.3.0 (adds `indexes`). Version 1 documents are still
+/// read (they have no index statistics).
+pub const STATISTICS_FORMAT_VERSION: u32 = 2;
+/// Oldest statistics document version still read.
+pub const MIN_STATISTICS_FORMAT_VERSION: u32 = 1;
+/// Most indexes one statistics document may describe.
+pub const MAX_INDEXES: usize = 64;
 /// Largest statistics document accepted or produced.
 pub const MAX_STATISTICS_JSON_BYTES: usize = 4 * 1024 * 1024;
 /// Most columns one statistics document may describe.
@@ -36,6 +42,35 @@ pub struct TableStatistics {
     pub exact: bool,
     /// One entry per analyzed field, ordered by field id.
     pub columns: Vec<ColumnStatistics>,
+    /// One entry per index of the entity, ordered by index id (format 2; empty in format 1).
+    #[serde(default)]
+    pub indexes: Vec<IndexStatistics>,
+}
+
+/// Statistics of one secondary index, collected by the same `ANALYZE` run as its table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndexStatistics {
+    /// Index described.
+    pub index_id: u64,
+    /// Entries visible at the analyzed snapshot (one per live row).
+    pub entries: u64,
+    /// Entries stored, including ended versions kept for older snapshots.
+    pub stored_entries: u64,
+    /// Levels from the root to the leaves.
+    pub height: u32,
+    /// Leaf pages.
+    pub leaf_pages: u64,
+    /// Mean encoded size of a key (key columns only), in bytes.
+    pub avg_key_bytes: f64,
+    /// Distinct values of every key prefix: element `i` counts the distinct combinations of
+    /// the first `i + 1` key columns (exact up to 10,000, HyperLogLog above).
+    pub distinct_prefixes: Vec<u64>,
+    /// Fraction of consecutive entries (in index order) whose rows lie within
+    /// [`crate::index::LOCALITY_SPAN`] storage keys of each other, in `[0, 1]`. Fetching rows in
+    /// index order touches a new storage page for roughly `1 - pk_locality` of the rows: an
+    /// index on a column that follows the primary key is near 1, an unrelated one near 0.
+    pub pk_locality: f64,
 }
 
 /// Statistics of one column.
@@ -127,11 +162,45 @@ impl TableStatistics {
     /// Checks the format version, list bounds, column order and count consistency.
     pub fn validate(&self) -> Result<(), StatsError> {
         let fail = |message: String| Err(StatsError::Format(message));
-        if self.format_version != STATISTICS_FORMAT_VERSION {
+        if !(MIN_STATISTICS_FORMAT_VERSION..=STATISTICS_FORMAT_VERSION)
+            .contains(&self.format_version)
+        {
             return fail(format!(
-                "unsupported statistics format {} (expected {STATISTICS_FORMAT_VERSION})",
+                "unsupported statistics format {} (this engine reads \
+                 {MIN_STATISTICS_FORMAT_VERSION}..={STATISTICS_FORMAT_VERSION})",
                 self.format_version
             ));
+        }
+        if self.format_version < 2 && !self.indexes.is_empty() {
+            return fail("format 1 documents have no index statistics".into());
+        }
+        if self.indexes.len() > MAX_INDEXES {
+            return fail(format!("more than {MAX_INDEXES} indexes"));
+        }
+        if !self
+            .indexes
+            .windows(2)
+            .all(|pair| pair[0].index_id < pair[1].index_id)
+        {
+            return fail("indexes must be ordered by index id without duplicates".into());
+        }
+        for index in &self.indexes {
+            if index.entries > index.stored_entries
+                || index.distinct_prefixes.len() > 16
+                || index
+                    .distinct_prefixes
+                    .iter()
+                    .any(|ndv| *ndv > index.entries)
+                || !index
+                    .distinct_prefixes
+                    .windows(2)
+                    .all(|pair| pair[0] <= pair[1])
+                || !index.avg_key_bytes.is_finite()
+                || index.avg_key_bytes < 0.0
+                || !(0.0..=1.0).contains(&index.pk_locality)
+            {
+                return fail(format!("index {}: inconsistent statistics", index.index_id));
+            }
         }
         if self.columns.len() > MAX_COLUMNS {
             return fail(format!("more than {MAX_COLUMNS} columns"));

@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.2.3)
+# Engine invariants (Milestone 2.3.0)
 
 Each invariant names the test that guards it.
 
@@ -105,3 +105,32 @@ Each invariant names the test that guards it.
     *(CardinalityEstimatorTest.boundedEstimates, CostModelTest.boundedArithmetic)*
 36. Profile node ids are the pre-order positions of the plan nodes, so estimates and actuals
     are matched exactly. *(profile::profile_numbers_nodes_in_plan_preorder, CostBasedPlanningTest.annotatesEveryNode)*
+
+## Secondary indexes (2.3.0)
+
+37. The byte order of encoded keys equals the SQL order of their values, column by column, in
+    both directions; decoding never panics on any input.
+    *(key_encoding::tests::byte_order_matches_sql_order, key_encoding_fuzz::adversarial_values_keep_their_order,
+    key_encoding_fuzz::arbitrary_bytes_never_panic)*
+38. At every snapshot an index serves, a scan returns exactly the visible rows that match its
+    bounds, in index order (ties in primary-key order), after any sequence of inserts, updates
+    and deletes. *(projection::scans_at_any_snapshot_match_the_model, index_queries::scans_are_snapshot_consistent)*
+39. An index never lags its table: a row an index cannot hold fails the commit before it is
+    logged, and a failed build leaves no files and no definition.
+    *(index_maintenance::unindexable_rows_are_refused_before_logging, index_lifecycle::failed_builds_leave_nothing_behind)*
+40. Indexes are projections of the log: after a crash, recovery and `rebuild_projections`
+    restore them, and `verify` checks them against the table.
+    *(index_maintenance::recovery_replays_and_checkpoints_publish_the_index,
+    index_maintenance::rebuild_projections_rebuilds_the_index, index_lifecycle::create_index_builds_over_existing_rows)*
+41. A published catalog names exactly the index directories on disk: an unpublished build or a
+    dropped index leaves no files after the next open.
+    *(index_lifecycle::crash_during_build_leaves_no_index, index_lifecycle::crash_after_drop_checkpoint_removes_leftover_files)*
+42. An index answers only snapshots in `usable_from..=watermark`; a scan outside fails rather
+    than returning partial results, and the planner never chooses such an index.
+    *(index_queries::unusable_snapshots_and_dropped_indexes_fail, AccessPathPlanningTest.unusableSnapshotsAndRuleModeScanTheTable)*
+43. Choosing an access path or eliding a sort never changes a query's result: index, sequential
+    and rule-mode plans return the same rows.
+    *(AccessPathPlanningTest, the selectivity sweep and workloads C and D in `scripts/check-benchmarks.py`)*
+44. A data directory of an older format is never opened as if it were current; migration keeps
+    every commit, LSN and consumer offset.
+    *(format::unmarked_directories_with_data_are_refused, migrate::migration_rewrites_keys_and_keeps_everything_else)*
