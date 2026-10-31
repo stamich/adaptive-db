@@ -15,12 +15,14 @@
 //! Invariants: a published version is never changed; versions of one entity form a chain
 //! `1, 2, 3, ...`; a [`adb_core::FieldId`] keeps its identity across renames and is never handed
 //! out again after its field is dropped; the primary key can be renamed but never dropped.
+pub mod adapter;
 pub mod change;
 pub mod error;
 pub mod limits;
 pub mod model;
 pub mod validate;
 
+pub use adapter::RowAdapter;
 pub use change::{apply, create, EntitySpec, NewField, SchemaChange};
 pub use error::SchemaError;
 pub use model::{EntitySchema, FieldDef, ForeignKey, SYSTEM_ENTITY_FIELD};
