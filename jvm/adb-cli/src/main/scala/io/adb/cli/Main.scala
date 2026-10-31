@@ -25,7 +25,7 @@ object Main:
     // The engine owns the catalog; a pre-2.4.0 catalog file is imported once.
     val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")), feedbackLog = Some(feedback))
 
-    println("Adaptive DB 2.3.0 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.4.0 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do

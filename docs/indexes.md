@@ -135,6 +135,13 @@ cargo run --release -p adb-migrate -- /path/to/db --to /new   # into a new direc
 `adb-migrate` rewrites the WAL with the new row ids. The LSNs are kept, so CDC consumer offsets
 stay valid. It then rebuilds the projections from the rewritten log and stamps the format.
 
+Since 2.4.0 the current format is **3** (row schema versions and catalog records,
+[schema.md](schema.md#data-format-3)). It encodes 2.3.0 data unchanged, so a format-2 directory
+is upgraded in place on open and `adb-migrate` goes straight from format 1 to format 3.
+Indexes of a table with a schema hold adapted rows (a column added with a default is indexed
+with the default for older rows), may only name active columns, and keep their columns from
+being dropped (RESTRICT).
+
 ## Costs and known limitations
 
 * Each index adds work to every write of its table. At scale 1, inserting 100 rows per commit

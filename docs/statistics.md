@@ -1,4 +1,4 @@
-# Optimizer statistics (Milestones 2.2.3 and 2.3.0)
+# Optimizer statistics (Milestones 2.2.3, 2.3.0 and 2.4.0)
 
 Statistics are **derived data**. The canonical log stays the only source of truth. `ANALYZE`
 rebuilds statistics, they may be deleted at any time, and a query never fails because they are
@@ -11,7 +11,7 @@ missing; it only plans with less confidence.
 | Collect | Rust, `adb-stats::analyze` | one snapshot scan of one entity |
 | Persist | Rust, `adb-engine::statistics` | `stats/entity-<id>.stats`, atomic replace |
 | Count changes | Rust, commit pipeline | per-entity modification counters, checkpointed |
-| Expose | C ABI 5 (unchanged in 6) | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze` |
+| Expose | C ABI 5 (unchanged in 6 and 7) | `adb_analyze_entity_json`, `adb_statistics_json`, `adb_statistics_generation`, `adb_modifications_since_analyze` |
 | Decode, judge freshness | JVM, `adb-statistics` | `StatisticsCodec`, `EntityStatistics`, `StatisticsProvider` |
 | Use | JVM, `adb-optimizer` | cardinality estimation, cost model, join order |
 
@@ -91,19 +91,27 @@ for the entries a scan skips, and `pk_locality` for the cost of row fetches
 most 4 MiB, `deny_unknown_fields`):
 
 ```json
-{"format_version":2,"entity_id":2,"row_count":1000,"avg_row_bytes":40.0,"analyzed_at_ts":1105,
+{"format_version":3,"entity_id":2,"row_count":1000,"avg_row_bytes":40.0,"analyzed_at_ts":1105,
  "modifications_at_analyze":1000,"sampled_rows":1000,"exact":true,
  "columns":[{"field_id":2,"null_count":0,"distinct_count":100,"distinct_exact":true,
    "min":{"Int64":1},"max":{"Int64":100},"avg_width_bytes":8.0,
    "histogram":[{"lower":{"Int64":1},"upper":{"Int64":2},"rows":20,"distinct":2}],
    "most_common":[]}],
  "indexes":[{"index_id":0,"entries":1000,"stored_entries":1040,"height":2,"leaf_pages":4,
-   "avg_key_bytes":9.0,"distinct_prefixes":[100],"pk_locality":0.03}]}
+   "avg_key_bytes":9.0,"distinct_prefixes":[100],"pk_locality":0.03}],"schema_version":1}
 ```
 
 Statistics format 2 (2.3.0) adds `indexes`. The engine and the JVM read format 1 documents as
 documents without index statistics, so a database analyzed by 2.2.3 needs no new `ANALYZE` to
 plan. Index statistics appear after the next `ANALYZE`.
+
+Statistics format 3 (2.4.0) adds `schema_version`: the version of the entity's schema the rows
+were read through (`ANALYZE` reads adapted rows, so a column added with a default is analyzed
+with that default in older rows). It is 0 for an entity without a schema and absent (read as 0)
+in older documents, which must not carry it. A column added after `ANALYZE` has no statistics in
+the document; the planner derives them from the column's default (`SchemaStatistics`: every
+analyzed row reads the default, or NULL without one) and EXPLAIN says so in its Schema section.
+Rows written since `ANALYZE` count as modifications as before.
 
 It is written with `replace_file` (write to `.tmp`, `fsync`, rename, directory `fsync`). Publication is
 serialized, and a document of an older snapshot never replaces a newer one, so concurrent

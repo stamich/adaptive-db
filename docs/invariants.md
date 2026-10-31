@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.3.0)
+# Engine invariants (Milestone 2.4.0)
 
 Each invariant names the test that guards it.
 
@@ -6,7 +6,7 @@ Each invariant names the test that guards it.
 
 1. The canonical log is the source of truth; the engine never deletes log segments.
    *(crash::checkpoints_never_delete_log_segments)*
-2. A transaction is appended as one contiguous run `Begin, Version*, Put/Delete*, Commit`; runs of
+2. A transaction is appended as one contiguous run `Begin, Version*, Put/Delete*, Catalog*, Commit`; runs of
    different transactions never interleave. *(committed::tests)*
 3. `commit()` returns only after the transaction's records are durable.
    *(group_commit::concurrent_disjoint_commits_are_all_durable)*
@@ -134,3 +134,29 @@ Each invariant names the test that guards it.
 44. A data directory of an older format is never opened as if it were current; migration keeps
     every commit, LSN and consumer offset.
     *(format::unmarked_directories_with_data_are_refused, migrate::migration_rewrites_keys_and_keeps_everything_else)*
+
+## Schema evolution (2.4.0)
+
+45. A DDL statement is validated against a copy of the registry before it is logged: a refused
+    statement leaves no record, no epoch change and no poisoned instance.
+    *(schema_ddl::refused_ddl_leaves_no_trace, schema_restrict::drop_column_is_restricted_by_indexes)*
+46. The registry is a projection of the log: recovery replays catalog records with the rows,
+    `rebuild_projections` restores it, and a damaged `registry.meta` is reported as corruption.
+    *(schema_registry::recovery_replays_catalog_records, schema_registry::rebuild_restores_the_registry,
+    schema_registry::damaged_registry_is_corruption)*
+47. Every row written to a table with a schema fits its latest version when it is logged (only
+    active fields, right types, `NOT NULL` present, primary key equal to the row key).
+    *(schema_writes::invalid_rows_are_refused_before_logging, fuzz::random_evolutions_keep_valid_chains_and_adapt_any_row)*
+48. A row is read through the version of the read view's epoch: fields dropped by then are
+    hidden, fields added after the row was written read their default, and a query's epoch never
+    moves while it runs. *(adapter::*, schema_reads::running_queries_keep_their_schema,
+    schema_hardening::ddl_writes_and_scans_run_concurrently)*
+49. A plan runs only at the catalog epoch it was made at; any other epoch is refused before a row
+    is produced. *(schema_reads::plans_of_another_epoch_are_refused, ffi index::stale_plans_are_refused_over_the_abi)*
+50. Field and entity ids are never reused, and no index key or covered column, primary key or
+    referenced table can be dropped. *(validation::unsafe_changes_are_refused, schema_restrict::*)*
+51. Indexes and statistics see rows exactly as queries do (adapted to the latest version).
+    *(schema_reads::indexes_and_statistics_see_adapted_rows)*
+52. Data format 2 upgrades to 3 without rewriting anything; a newer format is refused.
+    *(format::format_two_directories_are_upgraded_in_place, format::newer_formats_are_refused)*
+

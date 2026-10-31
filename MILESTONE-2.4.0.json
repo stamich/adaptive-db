@@ -1,0 +1,55 @@
+{
+  "milestone": "2.4.0",
+  "base": "2.3.0",
+  "engineVersion": "2.4.0",
+  "nativeAbi": 7,
+  "scope": "schema-evolution",
+  "sourceOfTruth": "canonical-log",
+  "derivedData": ["projections", "secondary-indexes", "schema-registry", "optimizer-statistics", "modification-counters"],
+  "versioning": "from 2.3.0 the minor number is the milestone and the patch number is for fixes",
+  "newEngineFeatures": [
+    "adb-schema-versioned-entity-schemas",
+    "schema-changes-add-rename-drop-column",
+    "row-adapter-virtual-defaults",
+    "catalog-records-in-the-canonical-log",
+    "schema-registry-projection-and-checkpoint",
+    "catalog-epochs",
+    "ddl-create-alter-drop-table",
+    "write-validation-and-default-filling",
+    "lazy-migration-on-write",
+    "read-views-pinning-the-schema-epoch",
+    "indexes-and-statistics-over-adapted-rows",
+    "restrict-drops-of-indexed-or-referenced-objects",
+    "stale-plan-refusal",
+    "schema-events-in-the-change-feed",
+    "data-format-3-upgrade-in-place"
+  ],
+  "newControlPlaneFeatures": [
+    "engine-owned-catalog",
+    "one-time-import-of-catalog-properties",
+    "adb-schema-jvm-module",
+    "schema-evolution-planner-and-dependency-graph",
+    "alter-table-drop-table-show-schema",
+    "column-defaults",
+    "replan-once-on-schema-changed",
+    "statistics-for-columns-added-after-analyze",
+    "explain-schema-section"
+  ],
+  "deferred": {
+    "typeChangesAndSplitMerge": "later 2.4.x (needs row rewriting or computed adapters)",
+    "dropCascade": "not planned (RESTRICT only)",
+    "renameTable": "later 2.4.x",
+    "backgroundMigration": "later 2.4.x (rows migrate when written)",
+    "onlineIndexBuilds": "later (builds block commits)"
+  },
+  "formats": {
+    "data": "3 (format.meta; format 2 is upgraded in place on open, format 1 needs adb-migrate)",
+    "row": "optional schema version (reserved field u32::MAX in bincode, \"schema_version\" in JSON); unversioned rows read as version 1",
+    "wal": "new Catalog record (appended variant; earlier records unchanged)",
+    "checkpoint": "3 (unchanged; the journal also publishes schema/registry.meta)",
+    "statistics": "3 (adds schema_version; formats 1 and 2 still read)",
+    "planWire": "4 (envelope carries schema_epoch; v3 refused)",
+    "batch": "2 (unchanged)",
+    "cdc": "row changes carry schema_version; schema and drop_table entries"
+  }
+}

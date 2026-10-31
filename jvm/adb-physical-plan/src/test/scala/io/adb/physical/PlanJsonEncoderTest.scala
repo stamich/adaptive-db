@@ -6,7 +6,7 @@ import java.nio.file.Files
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Wire-format tests of [[PlanJsonEncoder]] (plan wire v3). */
+/** Wire-format tests of [[PlanJsonEncoder]] (plan wire v4). */
 class PlanJsonEncoderTest:
   /** Every plan is wrapped in the version-3 envelope; operator and expression tags match the
     * Rust serde representation.

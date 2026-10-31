@@ -1,22 +1,22 @@
 {
   "cdc_read": {
     "events": 150,
-    "ms": 21
+    "ms": 34
   },
   "churn_heap_pages": {
     "after": 1,
     "before": 1
   },
   "commit_single_row": {
-    "n_threads_ops_s": 11316.50344826591,
-    "one_thread_ops_s": 3907.3069188901004
+    "n_threads_ops_s": 6939.806316459728,
+    "one_thread_ops_s": 3138.1270699262673
   },
   "entity_scan": {
-    "ms": 2.6010389999999997,
+    "ms": 4.623529,
     "rows": 5000
   },
   "full_scan_filter": {
-    "ms": 8.417905,
+    "ms": 13.816453,
     "rows": 15000
   },
   "host": {
@@ -27,38 +27,38 @@
   },
   "iters": 1000,
   "load": {
-    "ms": 181,
+    "ms": 270,
     "rows": 15000,
-    "rows_s": 82541.57755455025
+    "rows_s": 55430.1471059935
   },
   "milestone": "2.4.0",
-  "plan_json_parse_ops_s": 1275323.1349993304,
+  "plan_json_parse_ops_s": 842161.2890457555,
   "point_lookup": {
-    "ops_s": 596263.4554302011,
-    "p50_ns": 1484,
-    "p95_ns": 2055,
-    "p99_ns": 3208
+    "ops_s": 306570.9184374203,
+    "p50_ns": 3037,
+    "p95_ns": 3677,
+    "p99_ns": 6095
   },
-  "recovery_ms": 53,
+  "recovery_ms": 101,
   "relational": {
     "aggregate_sum_group_by": {
-      "ms": 2.5659402,
+      "ms": 5.473440999999999,
       "rows_out": 100
     },
     "hash_join": {
-      "ms": 3.8805794,
+      "ms": 9.771761199999998,
       "rows_out": 5000
     },
     "join_aggregate_top_k": {
-      "ms": 3.7667645999999997,
+      "ms": 7.015799599999999,
       "rows_out": 10
     },
     "nested_loop_join": {
-      "ms": 10.2838082,
+      "ms": 23.7442612,
       "rows_out": 1000
     },
-    "plan_wire_decode_validate_ops_s": 138674.61734472777,
-    "plan_wire_encode_ops_s": 390464.5434766651,
+    "plan_wire_decode_validate_ops_s": 56948.895712505575,
+    "plan_wire_encode_ops_s": 163130.72660220068,
     "setup": {
       "fact_rows": 5000,
       "groups": 100,
@@ -66,11 +66,11 @@
       "nested_rows": 1000
     },
     "sort": {
-      "ms": 3.3204042,
+      "ms": 6.8248374,
       "rows_out": 5000
     },
     "top_k": {
-      "ms": 2.45127,
+      "ms": 4.3138702,
       "rows_out": 10
     }
   },

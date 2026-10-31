@@ -1,0 +1,66 @@
+Adaptive DB Milestone 2.4.0 — validation record
+Date: 2026-10-31
+Base: 2.3.0 (master 5424e25)
+
+Environment
+  rustc 1.97.0 (2d8144b78 2026-07-07)
+  cargo 1.97.0 (c980f4866 2026-06-30)
+  openjdk version "22.0.2" 2024-07-16
+  Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44-fc-v185, 2 vCPU cloud VM (Intel Xeon @ 2.80GHz)
+
+Rust (equivalent of the cargo steps of ./build-milestone-2.4.0.sh)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 320 passed, 0 failed
+  rustdoc -D warnings ............................................ OK
+  release build of libadb_ffi and adb-migrate ...................... OK
+  cargo run -p adb-rust-demo ...................................... OK
+  data-plane benchmark -> examples/results/2.4.0-rust-local.json .. OK
+  workload benchmark, rust_native -> examples/results/2.4.0-database.json (scale 1,
+    incl. the schema-evolution section) ............................ OK
+  include/adb.h compiled from C with -Wall -Werror ................ OK
+
+Java / JVM
+  examples/jvm-cdc-smoke (Java FFM -> ABI v7, incl. ANALYZE, indexes,
+    schemas, stale plans and schema events in the change feed) ...... PASS
+  JVM modules compiled with scalac 3.3.8 and javac 22 ............. OK
+  JVM tests (Scala + Java) ........................................ 159 passed, 0 failed
+  feature tour (io.adb.cli.DemoMain) against libadb_ffi ........... OK (82 statements, 1.0.1 -> 2.4.0)
+  workload benchmark (ffi_prepared_plan, scala_cbo_ffi_rust, selectivity sweep), on the
+    engine catalog -> examples/results/2.4.0-ffi.json (scale 1, 30 iterations) .. OK
+  scripts/check-benchmarks.py ..................................... "benchmark results agree"
+
+  Gradle could not be run here: Maven Central is not reachable from the validation environment.
+  The JVM modules were therefore compiled and tested with the Scala 3.3.8 compiler and javac
+  directly, and the JVM entry points (demo, benchmarks) were run from those classes. The steps
+  scripts/benchmark-ffi.sh and demo/run-demo.sh run through the Gradle wrapper (CI runs them).
+  Scale-10 runs were not repeated for 2.4.0.
+
+Schema-evolution results (scale 1, 50,000 rows per table, p50)
+  G_schema_adapted_scan   0% / 50% / 100% migrated / unversioned control
+                          36.9 / 42.0 / 46.4 / 36.7 ms, identical checksums
+  F_virtual_default_point_read   old row 0.0030 ms (reads 'EUR'), migrated row 0.0029 ms
+  H_stale_schema_epoch_reject    refused in 0.00006 ms (30 of 30), accepted plan 0.0049 ms
+  ALTER TABLE ADD COLUMN         1,000 rows: 0.38 ms, 296 log bytes; 50,000 rows: 0.30 ms, 300 log bytes
+  write validation               inserts with a schema 1.04x slower than without
+
+Workload results (p50; identical checksums on every path)
+  scale 1                        rust_native  ffi_prepared_plan  scala_cbo_ffi_rust  checksum
+  C_covering_index_eq             0.028 ms     0.048 ms           0.444 ms           5742223708
+  D_index_range_order_limit       0.181 ms     0.430 ms           0.874 ms           1052395880
+  E_seq_scan_region_eq            67 ms        111 ms             133 ms             1000
+  A_hash_join_topk                0.72 ms      1.00 ms            2.18 ms            9955
+  B_hash_join_aggregate_topk      1.49 ms      2.26 ms            1.96 ms            54550
+  selectivity sweep (0.01% .. 50%): cost mode chose the faster plan at 5 of 6 points
+    (one point 11% slower than the faster plan)
+  max q-error with fresh statistics: 1.0 on workloads A-E
+
+  These timings come from a different and noisier VM than the 2.3.0 record, so they are not a
+  regression measurement. On this VM a direct comparison of an index scan with row fetch over a
+  table with and without a schema showed no consistent difference (run-to-run spread ±30%).
+
+Commits
+  25 commits, one per task of the 2.4.0 plan (docs/milestone-2.4.0.md), each authored by
+  Michal Stawarski; every commit builds and passes its own tests.

@@ -3,7 +3,7 @@ package io.adb.physical
 import io.adb.model.*
 
 /** Physical plan understood by the native engine; mirrors the Rust `PhysicalPlan` enum
-  * (plan wire v3, see docs/plan-wire-format.md). Every node works on [[SlotId]]s; only the
+  * (plan wire v4, see docs/plan-wire-format.md). Every node works on [[SlotId]]s; only the
   * leaves mention storage field ids, in their [[ScanColumn]] mappings.
   */
 sealed trait PhysicalPlan derives CanEqual:

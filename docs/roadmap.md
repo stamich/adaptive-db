@@ -61,11 +61,18 @@
 - unique, partial and expression indexes
 - online (non-blocking) and bulk-loaded index builds; cheaper index maintenance on writes
 
-## 2.4 — schema evolution v1
-- ADD/RENAME/logical DROP column
-- versioned catalog snapshots
-- virtual defaults
-- compatibility checks
+## 2.4.0 — schema evolution (done)
+- engine-owned catalog: versioned schemas as catalog records in the log, a registry projection
+- `ALTER TABLE` ADD / RENAME / logical DROP COLUMN, `DROP TABLE`, `SHOW SCHEMA`, column defaults
+- virtual defaults on read, lazy migration on write, write validation
+- catalog epochs: queries pin theirs, stale plans are refused and re-planned
+- RESTRICT for indexed columns and referenced tables; schema events in the change feed
+- details: [milestone-2.4.0.md](milestone-2.4.0.md), [schema.md](schema.md)
+
+## 2.4.x follow-ups
+- type changes (widening first), column splits and merges with computed adapters
+- table renames; background migration of old rows (vacuum-style)
+- `IS NULL` / `NOT NULL` predicates on columns added with defaults through indexes
 
 ## 3.x — distribution
 - 3.0 replicated single partition

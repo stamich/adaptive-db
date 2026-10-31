@@ -9,7 +9,7 @@
 /// `ADB_SCHEMA_CHANGED`, statistics format 3).
 pub const ABI_VERSION: u32 = 7;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"2.3.0";
+static ENGINE_VERSION: &[u8] = b"2.4.0";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

@@ -1,13 +1,16 @@
-# Execution layer (Milestones 2.1.3 and 2.3.0)
+# Execution layer (Milestones 2.1.3, 2.3.0 and 2.4.0)
 
 `adb-execution` turns a validated physical plan into a tree of pull-based, batch-oriented
 operators. It depends only on `adb-core` and on `adb-index` for index definitions and bounds.
 All data access goes through `DataSource` (`point_lookup`, `scan_page`, and since 2.3.0 the
 `IndexAccess` methods `index_scan_page` and `fetch_rows`), so the layer knows nothing about
-pages, tuple slots, the B+Tree or the log.
+pages, tuple slots, the B+Tree or the log. Since 2.4.0 every access takes a `ReadView`
+(`snapshot_ts` and the pinned catalog epoch): the engine returns rows adapted to the schemas of
+that epoch, so a query sees one schema per table from its first batch to its last, whatever DDL
+commits meanwhile ([schema.md](schema.md#reads)).
 
 ```text
-plan wire v3 JSON ──► adb-plan-wire::decode_json ──► PhysicalPlan::validate ──► PlanShape
+plan wire v4 JSON ──► adb-plan-wire::decode_json ──► PhysicalPlan::validate ──► PlanShape
                                                                                 (width, output slots)
                                                         │
                                                         ▼
