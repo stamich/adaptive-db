@@ -5,7 +5,7 @@ use std::ptr;
 use adb_ffi::{
     adb_alter_entity_json, adb_batch_data, adb_batch_len, adb_batch_release, adb_close,
     adb_create_entity_json, adb_current_schema_epoch, adb_drop_entity, adb_insert_row_json,
-    adb_last_error_len, adb_last_error_ptr, adb_list_schemas_json, adb_open,
+    adb_last_error_len, adb_last_error_ptr, adb_list_schemas_json, adb_open, adb_read_changes_json,
     adb_schema_history_json,
     handle::{AdbBatchHandle, AdbDatabaseHandle},
     AdbStatus,
@@ -314,5 +314,41 @@ fn schemas_survive_reopen() {
     let mut out = ptr::null_mut();
     assert_eq!(adb_list_schemas_json(db, &mut out), AdbStatus::Ok);
     assert_eq!(active_names(&take_json(out)["entities"][0]), ["id", "b"]);
+    assert_eq!(adb_close(db), AdbStatus::Ok);
+}
+
+/// The change feed carries DDL as `schema` and `drop_table` entries and every row change names
+/// its schema version.
+#[test]
+fn change_feed_carries_schema_events() {
+    let (_dir, db) = open();
+    assert_eq!(create(db, ACCOUNT).0, AdbStatus::Ok);
+    assert_eq!(insert(db, 1, r#"{"1":{"Int64":1}}"#), AdbStatus::Ok);
+    assert_eq!(adb_drop_entity(db, 3), AdbStatus::Ok);
+    let mut out = ptr::null_mut();
+    assert_eq!(
+        adb_read_changes_json(db, 0, 100, ptr::null(), 0, &mut out),
+        AdbStatus::Ok
+    );
+    let feed = take_json(out);
+    let changes: Vec<&Value> = feed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|event| event["changes"].as_array().unwrap())
+        .collect();
+    assert_eq!(changes.len(), 3, "{feed}");
+    assert_eq!(changes[0]["kind"], "schema");
+    assert_eq!(changes[0]["entity_id"], 3);
+    assert_eq!(changes[0]["schema"]["version"], 1);
+    assert_eq!(changes[1]["kind"], "insert");
+    assert_eq!(changes[1]["schema_version"], 1);
+    assert_eq!(
+        changes[1]["after"]["fields"]["2"],
+        serde_json::json!({"Int64":0}),
+        "the stored row holds the filled-in default"
+    );
+    assert_eq!(changes[2]["kind"], "drop_table");
+    assert_eq!(changes[2]["epoch"], 2);
     assert_eq!(adb_close(db), AdbStatus::Ok);
 }

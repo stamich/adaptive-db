@@ -31,7 +31,9 @@ pub use adb_schema::{
 };
 pub use adb_stats::{AnalyzeOptions, StatsError, TableStatistics};
 pub use adb_tx::{Conflict, IsolationLevel, Transaction};
-pub use cdc::{ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind, RowChange};
+pub use cdc::{
+    CatalogChange, ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind, RowChange,
+};
 pub use database::{Database, IndexStatus, VacuumReport};
 pub use error::DbError;
 pub use migrate::{migrate, migrate_in_place, MigrationReport};

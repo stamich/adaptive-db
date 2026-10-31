@@ -10,10 +10,18 @@
 //!
 //! Only the durable prefix of the log is exposed: a consumer can never observe a commit that a
 //! crash could still take back.
+//!
+//! Since Milestone 2.4.0 the feed also carries the catalog: a `CREATE`/`ALTER TABLE` arrives as a
+//! [`CatalogChange::Schema`] with the full new schema version, a `DROP TABLE` as
+//! [`CatalogChange::DropEntity`], in commit order with the row changes. Every row change names
+//! the schema version its row was written under, so a consumer can interpret old and new rows
+//! without asking the engine (rows are delivered as stored, never adapted). Index DDL only moves
+//! the catalog epoch and is not part of the feed.
 
 use std::{collections::BTreeSet, path::Path};
 
-use adb_core::{CommitTs, Lsn, Row, RowId, TxId};
+use adb_core::{CommitTs, Lsn, Row, RowId, SchemaEpoch, SchemaVersion, TxId};
+use adb_schema::{CatalogEvent, EntitySchema};
 use adb_tx::Mutation;
 use adb_wal::{WalCursor, WalError};
 
@@ -53,6 +61,53 @@ pub struct RowChange {
     pub before: Option<Row>,
     /// State after the transaction.
     pub after: Option<Row>,
+    /// Schema version the row was written under (of `after`, or of `before` for a delete);
+    /// 0 for rows written without a schema.
+    pub schema_version: SchemaVersion,
+}
+
+/// A change of the catalog committed by a DDL statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CatalogChange {
+    /// `CREATE TABLE` (version 1) or `ALTER TABLE` (a later version) published `schema`.
+    Schema {
+        /// Catalog epoch the version was published at.
+        epoch: SchemaEpoch,
+        /// The new version, with every field ever defined.
+        schema: EntitySchema,
+    },
+    /// `DROP TABLE` of `entity_id`.
+    DropEntity {
+        /// Catalog epoch of the drop.
+        epoch: SchemaEpoch,
+        /// Dropped entity.
+        entity_id: u64,
+    },
+}
+
+impl CatalogChange {
+    /// Entity the change concerns.
+    pub fn entity_id(&self) -> u64 {
+        match self {
+            CatalogChange::Schema { schema, .. } => schema.entity_id,
+            CatalogChange::DropEntity { entity_id, .. } => *entity_id,
+        }
+    }
+
+    /// The feed's view of one logged catalog event (`None` for an epoch-only event).
+    fn from_event(epoch: SchemaEpoch, event: &CatalogEvent) -> Option<Self> {
+        match event {
+            CatalogEvent::Schema(schema) => Some(CatalogChange::Schema {
+                epoch,
+                schema: schema.clone(),
+            }),
+            CatalogEvent::DropEntity { entity_id } => Some(CatalogChange::DropEntity {
+                epoch,
+                entity_id: *entity_id,
+            }),
+            CatalogEvent::Epoch => None,
+        }
+    }
 }
 
 impl RowChange {
@@ -78,6 +133,8 @@ pub struct ChangeEvent {
     pub commit_lsn: Lsn,
     /// Cursor that resumes right after this event (for per-event acknowledgement).
     pub cursor_after: ChangeCursor,
+    /// Catalog changes of the transaction (applied before its row changes).
+    pub catalog: Vec<CatalogChange>,
     /// Row changes in row order.
     pub changes: Vec<RowChange>,
 }
@@ -113,9 +170,14 @@ impl ChangeFilter {
 
     /// Whether a change of `row_id` is delivered.
     pub fn matches(&self, row_id: RowId) -> bool {
+        self.matches_entity(row_id.entity_id())
+    }
+
+    /// Whether changes of `entity_id` (rows or its schema) are delivered.
+    pub fn matches_entity(&self, entity_id: u64) -> bool {
         self.entities
             .as_ref()
-            .is_none_or(|entities| entities.contains(&row_id.entity_id()))
+            .is_none_or(|entities| entities.contains(&entity_id))
     }
 }
 
@@ -208,19 +270,31 @@ fn to_event(logged: LoggedTx, filter: &ChangeFilter) -> Option<ChangeEvent> {
                 (Some(_), None) => ChangeKind::Delete,
                 (None, None) => return None, // deleting a row that did not exist
             };
+            let schema_version = after
+                .as_ref()
+                .or(before.as_ref())
+                .map_or(SchemaVersion::default(), |row| row.schema_version);
             Some(RowChange {
                 row_id: *row_id,
                 kind,
                 before,
                 after,
+                schema_version,
             })
         })
         .collect();
-    (!changes.is_empty()).then_some(ChangeEvent {
+    let catalog: Vec<CatalogChange> = tx
+        .catalog
+        .iter()
+        .filter_map(|(epoch, event)| CatalogChange::from_event(*epoch, event))
+        .filter(|change| filter.matches_entity(change.entity_id()))
+        .collect();
+    (!changes.is_empty() || !catalog.is_empty()).then_some(ChangeEvent {
         tx_id: tx.tx_id,
         commit_ts: tx.commit_ts,
         commit_lsn,
         cursor_after: ChangeCursor(end),
+        catalog,
         changes,
     })
 }
