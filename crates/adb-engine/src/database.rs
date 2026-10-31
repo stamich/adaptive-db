@@ -44,7 +44,7 @@ use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
     Checkpoint, CheckpointStore, Checkpointable, HistoricalVersion, IntegrityReport, StorageStats,
 };
-use adb_tx::{validate, IsolationLevel, Transaction, TransactionManager};
+use adb_tx::{validate, IsolationLevel, Mutation, Transaction, TransactionManager};
 use adb_wal::earliest_lsn;
 use parking_lot::{Mutex, RwLock};
 
@@ -858,8 +858,26 @@ impl Database {
     /// Validates `tx` and builds what its commit will write. Caller holds the commit lock.
     fn prepare(&self, tx: &Transaction) -> Result<CommittedTx, DbError> {
         let projections = self.inner.projections.read();
+        // Rows of entities with a schema are brought to its latest version and validated: the
+        // engine, not the caller, decides what a valid row is.
+        let mut mutations = Vec::with_capacity(tx.writes().len());
+        for (row_id, mutation) in tx.writes() {
+            mutations.push((
+                *row_id,
+                match mutation {
+                    Mutation::Put(row) => {
+                        Mutation::Put(projections.registry().prepare_write(*row_id, row.clone())?)
+                    }
+                    Mutation::Delete => Mutation::Delete,
+                },
+            ));
+        }
         // Rows that cannot be indexed are refused here, before anything is logged.
-        projections.check(tx.writes().iter())?;
+        projections.check(
+            mutations
+                .iter()
+                .map(|(row_id, mutation)| (row_id, mutation)),
+        )?;
         let mut before = Vec::with_capacity(tx.writes().len());
         for row_id in tx.writes().keys() {
             before.push((*row_id, projections.current(*row_id)?));
@@ -892,11 +910,7 @@ impl Database {
                     })
                 })
                 .collect(),
-            mutations: tx
-                .writes()
-                .iter()
-                .map(|(row_id, mutation)| (*row_id, mutation.clone()))
-                .collect(),
+            mutations,
             catalog: Vec::new(),
         })
     }

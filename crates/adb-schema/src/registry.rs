@@ -12,13 +12,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use adb_core::{Row, SchemaEpoch, SchemaVersion};
+use adb_core::{Row, RowId, SchemaEpoch, SchemaVersion};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     limits::MAX_ENTITIES,
     model::same_name,
-    validate::{validate_chain, validate_schema, validate_successor},
+    validate::{check_row, validate_chain, validate_schema, validate_successor},
     EntitySchema, RowAdapter, SchemaError,
 };
 
@@ -284,6 +284,47 @@ impl SchemaRegistry {
                 Arc::new(RowAdapter::compile(history.latest(), from, to))
             })
             .clone()
+    }
+
+    /// `row`, about to be written under `row_id`, as the engine stores it: at the latest version
+    /// of its entity, validated ([`check_row`]). Entities without a registered schema store rows
+    /// as written.
+    ///
+    /// * An unversioned row is a new row written against the latest version: fields it omits
+    ///   that have a default get the default (so a stored row never depends on a default).
+    /// * A row of an older version (read, changed, written back) is adapted first: defaults it
+    ///   predates are materialized and dropped fields are left out. This is how rows migrate
+    ///   lazily: only rows that change are rewritten, and they reclaim dropped columns.
+    /// * A row stamped with a version newer than the latest is refused.
+    pub fn prepare_write(&self, row_id: RowId, row: Row) -> Result<Row, SchemaError> {
+        let entity = row_id.entity_id();
+        let Some(schema) = self.latest(entity) else {
+            return Ok(row);
+        };
+        let row = if row.schema_version.is_unversioned() {
+            let mut row = row.with_schema_version(schema.version);
+            for field in schema.active_fields() {
+                if let Some(default) = &field.default {
+                    row.fields
+                        .entry(field.id)
+                        .or_insert_with(|| default.clone());
+                }
+            }
+            row
+        } else if row.schema_version <= schema.version {
+            self.adapter(entity, row.schema_version, schema.version)
+                .adapt(row)
+        } else {
+            return Err(SchemaError::Row {
+                entity: schema.name.clone(),
+                reason: format!(
+                    "row is stamped version {}, newer than the latest version {}",
+                    row.schema_version.0, schema.version.0
+                ),
+            });
+        };
+        check_row(schema, row_id, &row)?;
+        Ok(row)
     }
 
     /// `row` of entity `id` as seen by a reader pinned at `epoch` (the latest version when

@@ -5,7 +5,9 @@
 //! record is reported as corruption instead of being trusted.
 use std::collections::HashSet;
 
-use adb_core::{encode_key, Direction, SchemaVersion, ValueType, SCHEMA_VERSION_FIELD};
+use adb_core::{
+    encode_key, Direction, Row, RowId, SchemaVersion, Value, ValueType, SCHEMA_VERSION_FIELD,
+};
 
 use crate::{
     limits::{MAX_DEFAULT_BYTES, MAX_FIELDS_PER_ENTITY, MAX_NAME_CHARS},
@@ -218,6 +220,57 @@ pub fn validate_chain(versions: &[EntitySchema]) -> Result<(), SchemaError> {
     for pair in versions.windows(2) {
         validate_schema(&pair[1]).map_err(corrupt)?;
         validate_successor(&pair[0], &pair[1]).map_err(corrupt)?;
+    }
+    Ok(())
+}
+
+/// Checks that `row`, stored under `row_id`, fits `schema` (the version it is stamped with):
+/// every field is the system field 0 or a field active in that version, every value has its
+/// field's type, every `NOT NULL` field holds a value, and the primary-key field holds the key of
+/// `row_id`. This is the engine's authoritative check of every write.
+pub fn check_row(schema: &EntitySchema, row_id: RowId, row: &Row) -> Result<(), SchemaError> {
+    let refuse = |reason: String| {
+        Err(SchemaError::Row {
+            entity: schema.name.clone(),
+            reason,
+        })
+    };
+    if row.schema_version != schema.version {
+        return refuse(format!(
+            "row is stamped version {}, the schema is version {}",
+            row.schema_version.0, schema.version.0
+        ));
+    }
+    for (id, value) in &row.fields {
+        if *id == SYSTEM_ENTITY_FIELD {
+            continue;
+        }
+        let Some(field) = schema.field_by_id(*id) else {
+            return refuse(format!("unknown field id {id}"));
+        };
+        if !field.is_active_in(schema.version) {
+            return refuse(format!("column {} was dropped", field.name));
+        }
+        if !field.value_type.admits(value) {
+            return refuse(format!(
+                "column {} holds {:?}, expected {:?}",
+                field.name,
+                ValueType::of(value).expect("not NULL"),
+                field.value_type
+            ));
+        }
+    }
+    for field in schema.active_fields().filter(|field| !field.nullable) {
+        if matches!(row.get(field.id), None | Some(Value::Null)) {
+            return refuse(format!("column {} is NOT NULL", field.name));
+        }
+    }
+    let key = row_id.signed_primary_key();
+    if row.get(schema.primary_key) != Some(&Value::Int64(key)) {
+        return refuse(format!(
+            "the primary-key column {} must hold the row key {key}",
+            schema.primary_key_field().name
+        ));
     }
     Ok(())
 }
