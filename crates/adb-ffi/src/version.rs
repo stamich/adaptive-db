@@ -4,8 +4,10 @@
 /// 4 = Milestone 2.1 (plan wire v2, batch format v2, query profiles, resource statuses);
 /// 5 = Milestone 2.2.3 (ANALYZE, statistics documents, modification counters, profile node ids);
 /// 6 = Milestone 2.3.0 (secondary indexes, plan wire v3, statistics format 2, order-preserving
-/// primary keys, `ADB_INCOMPATIBLE_FORMAT`).
-pub const ABI_VERSION: u32 = 6;
+/// primary keys, `ADB_INCOMPATIBLE_FORMAT`);
+/// 7 = Milestone 2.4.0 (entity schemas and DDL, plan wire v4 with the catalog epoch,
+/// `ADB_SCHEMA_CHANGED`, statistics format 3).
+pub const ABI_VERSION: u32 = 7;
 /// Engine version reported through the C ABI.
 static ENGINE_VERSION: &[u8] = b"2.3.0";
 

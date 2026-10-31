@@ -5,7 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v6
+/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v7
  * function as a downcall handle, and translates native status codes into exceptions. */
 final class NativeLibrary implements AutoCloseable {
     /** Upper bound on the length of a native error message. */
@@ -13,7 +13,7 @@ final class NativeLibrary implements AutoCloseable {
     /** Whether {@link #close()} already released the arena. */
     private boolean closed;
     /** C ABI version this binding was written against; any other version is rejected. */
-    static final int EXPECTED_ABI = 6;
+    static final int EXPECTED_ABI = 7;
 
     /** Shared arena that keeps the library mapped until {@link #close()}. */
     final Arena arena = Arena.ofShared();
@@ -86,6 +86,16 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle dropIndex;
     /** {@code adb_list_indexes_json}: every index with the snapshots it serves (ABI 6). */
     final MethodHandle listIndexes;
+    /** {@code adb_create_entity_json}: creates an entity from a schema definition (ABI 7). */
+    final MethodHandle createEntity;
+    /** {@code adb_alter_entity_json}: applies one schema change to an entity (ABI 7). */
+    final MethodHandle alterEntity;
+    /** {@code adb_drop_entity}: drops an entity (ABI 7). */
+    final MethodHandle dropEntity;
+    /** {@code adb_list_schemas_json}: the catalog epoch and every live schema (ABI 7). */
+    final MethodHandle listSchemas;
+    /** {@code adb_schema_history_json}: every schema version of one entity (ABI 7). */
+    final MethodHandle schemaHistory;
 
     /**
      * Loads the library, binds every downcall, and verifies the ABI version.
@@ -128,6 +138,11 @@ final class NativeLibrary implements AutoCloseable {
         createIndex = downcall("adb_create_index_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         dropIndex = downcall("adb_drop_index", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
         listIndexes = downcall("adb_list_indexes_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        createEntity = downcall("adb_create_entity_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        alterEntity = downcall("adb_alter_entity_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        dropEntity = downcall("adb_drop_entity", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+        listSchemas = downcall("adb_list_schemas_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        schemaHistory = downcall("adb_schema_history_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);

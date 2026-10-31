@@ -649,6 +649,14 @@ impl Database {
             .collect()
     }
 
+    /// The catalog epoch and the latest schema of every live entity, read under one lock so
+    /// the schemas are exactly those of that epoch (what a planner caches as its catalog).
+    pub fn catalog_snapshot(&self) -> (SchemaEpoch, Vec<Arc<EntitySchema>>) {
+        let projections = self.inner.projections.read();
+        let registry = projections.registry();
+        (registry.epoch(), registry.entities().cloned().collect())
+    }
+
     /// Creates an entity (`CREATE TABLE`) and returns its version 1.
     ///
     /// The engine assigns the entity id (unless an imported catalog names one) and the field

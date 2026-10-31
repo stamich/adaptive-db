@@ -1,4 +1,4 @@
-//! C ABI of Adaptive DB (ABI version 6, Milestone 2.3.0). See `include/adb.h`.
+//! C ABI of Adaptive DB (ABI version 7, Milestone 2.4.0). See `include/adb.h`.
 //!
 //! Every entry point validates its raw arguments, initializes its output slots first, contains
 //! panics, and reports failures as an [`AdbStatus`] plus a thread-local error message.
@@ -19,6 +19,7 @@ pub mod maintenance;
 pub mod metadata;
 pub mod mutation;
 pub mod query;
+pub mod schema;
 pub mod statistics;
 pub mod status;
 pub mod version;
@@ -36,6 +37,10 @@ pub use mutation::{adb_delete_row, adb_insert_row_json, adb_update_fields_json};
 pub use query::{
     adb_execute_plan_json, adb_execute_plan_json_at, adb_query_cancel, adb_query_close,
     adb_query_next_batch, adb_query_profile_json,
+};
+pub use schema::{
+    adb_alter_entity_json, adb_create_entity_json, adb_drop_entity, adb_list_schemas_json,
+    adb_schema_history_json,
 };
 pub use statistics::{
     adb_analyze_entity_json, adb_modifications_since_analyze, adb_statistics_generation,
