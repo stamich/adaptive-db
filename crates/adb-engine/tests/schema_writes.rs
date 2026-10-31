@@ -136,3 +136,65 @@ fn entities_without_a_schema_are_not_validated() {
     let stored = db.get(RowId::from_primary_key(9, 1)).unwrap().unwrap();
     assert!(stored.schema_version.is_unversioned());
 }
+
+/// After ADD COLUMN ... DEFAULT and DROP COLUMN an old row reads through the latest version
+/// without being rewritten; an update rewrites it at the latest version, with the default
+/// materialized and the dropped column's value gone.
+#[test]
+fn updates_migrate_rows_lazily() {
+    let dir = tempdir().unwrap();
+    let db = database(dir.path());
+    put(
+        &db,
+        1,
+        5,
+        account(5).with_field(3, Value::String("ada".into())),
+    )
+    .unwrap();
+    let key = RowId::from_primary_key(1, 5);
+    db.alter_entity(
+        1,
+        &SchemaChange::AddField {
+            field: field("tier", ValueType::Int64, false, Some(Value::Int64(1))),
+        },
+    )
+    .unwrap();
+    db.alter_entity(
+        1,
+        &SchemaChange::DropField {
+            name: "owner".into(),
+        },
+    )
+    .unwrap();
+
+    let read = db.get(key).unwrap().unwrap();
+    assert_eq!(read.schema_version, SchemaVersion(3));
+    assert_eq!(read.get(5), Some(&Value::Int64(1)), "virtual default");
+    assert_eq!(read.get(3), None, "dropped column hidden");
+    let stored = db.history(key).unwrap().pop().unwrap().value.unwrap();
+    assert_eq!(
+        stored.schema_version,
+        SchemaVersion(1),
+        "nothing was rewritten"
+    );
+    assert_eq!(stored.get(3), Some(&Value::String("ada".into())));
+
+    let mut tx = db.begin();
+    let mut row = db.get_in_tx(&mut tx, key).unwrap().unwrap();
+    row.fields.insert(2, Value::Int64(250));
+    tx.put(key, row);
+    db.commit(tx).unwrap();
+    let rewritten = db.history(key).unwrap().pop().unwrap().value.unwrap();
+    assert_eq!(rewritten.schema_version, SchemaVersion(3));
+    assert_eq!(
+        rewritten.get(5),
+        Some(&Value::Int64(1)),
+        "default materialized"
+    );
+    assert_eq!(
+        rewritten.get(3),
+        None,
+        "space of the dropped column reclaimed"
+    );
+    assert_eq!(rewritten.get(2), Some(&Value::Int64(250)));
+}

@@ -235,8 +235,11 @@ impl Database {
         self.inner.tx_manager.lock().begin(isolation)
     }
 
-    /// Reads a row inside `tx`: its own writes first, then its snapshot. The read is recorded
-    /// for serializable validation.
+    /// Reads a row inside `tx`: its own writes first, then its snapshot (through the latest
+    /// schema, like [`Database::get_at`]). The read is recorded for serializable validation.
+    ///
+    /// Because the row comes back at the latest version, writing it back after a change stores
+    /// it at that version: this is how rows migrate lazily, one update at a time.
     pub fn get_in_tx(&self, tx: &mut Transaction, row_id: RowId) -> Result<Option<Row>, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
@@ -306,13 +309,20 @@ impl Database {
         self.get_at(row_id, self.latest_committed_ts())
     }
 
-    /// State of a row at snapshot `ts`.
+    /// State of a row at snapshot `ts`, read through the latest schema of its entity (a row
+    /// written under an older version is adapted: virtual defaults, dropped fields hidden).
+    /// Rows of entities without a schema are returned as stored; [`Database::history`] returns
+    /// stored rows.
     pub fn get_at(&self, row_id: RowId, ts: CommitTs) -> Result<Option<Row>, DbError> {
         self.inner.health.check()?;
-        Ok(self.inner.projections.read().get_at(row_id, ts)?)
+        let projections = self.inner.projections.read();
+        Ok(projections
+            .get_at(row_id, ts)?
+            .map(|row| projections.registry().adapt(row_id.entity_id(), row, None)))
     }
 
-    /// Every version of a row, oldest first; the current one has an open end.
+    /// Every stored version of a row, oldest first, as written (not adapted); the current one
+    /// has an open end.
     pub fn history(&self, row_id: RowId) -> Result<Vec<HistoricalVersion>, DbError> {
         self.inner.health.check()?;
         Ok(self.inner.projections.read().history(row_id)?)
