@@ -6,6 +6,7 @@ members = [
     "crates/adb-buffer",
     "crates/adb-btree",
     "crates/adb-index",
+    "crates/adb-schema",
     "crates/adb-wal",
     "crates/adb-storage",
     "crates/adb-tx",

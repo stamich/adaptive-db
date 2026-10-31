@@ -164,6 +164,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-schema"
+version = "2.3.0"
+dependencies = [
+ "adb-core",
+ "bincode",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-stats"
 version = "2.3.0"
 dependencies = [
