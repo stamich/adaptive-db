@@ -84,3 +84,51 @@ fn earlier_record_kinds_keep_their_encoding() {
     assert_eq!(&bytes[..4], &2u32.to_le_bytes());
     assert_eq!(bincode::deserialize::<WalRecord>(&bytes).unwrap(), put);
 }
+
+/// Damage anywhere in a log holding catalog records is reported (or cuts the log short at the
+/// damaged frame); the reader never panics and never returns an altered catalog record.
+#[test]
+fn damaged_catalog_frames_are_detected() {
+    let dir = tempdir().unwrap();
+    let tx_id = TxId(1);
+    let records = vec![
+        WalRecord::Begin {
+            tx_id,
+            snapshot_ts: CommitTs(0),
+        },
+        WalRecord::Catalog {
+            tx_id,
+            epoch: SchemaEpoch(1),
+            event: CatalogEvent::Schema(schema()),
+        },
+        WalRecord::Commit {
+            tx_id,
+            commit_ts: CommitTs(1),
+        },
+    ];
+    let mut writer = SegmentedWalWriter::open(dir.path(), 1 << 20).unwrap();
+    for record in &records {
+        writer.append(record).unwrap();
+    }
+    writer.sync().unwrap();
+    drop(writer);
+    let segment = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.is_file())
+        .unwrap();
+    let original = std::fs::read(&segment).unwrap();
+    for at in 0..original.len() {
+        let mut damaged = original.clone();
+        damaged[at] ^= 0x5a;
+        std::fs::write(&segment, &damaged).unwrap();
+        if let Ok(entries) = read_all(dir.path()) {
+            let read: Vec<WalRecord> = entries.into_iter().map(|entry| entry.record).collect();
+            assert!(
+                records.starts_with(&read),
+                "byte {at}: a damaged log yields only an unaltered prefix"
+            );
+        }
+    }
+    std::fs::write(&segment, &original).unwrap();
+}
