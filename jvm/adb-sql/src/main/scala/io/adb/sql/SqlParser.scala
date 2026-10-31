@@ -270,7 +270,12 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
     expectWord("FROM")
     val from = parseFrom()
     val asOf =
-      if acceptWord("AS") then { expectWord("OF"); expectWord("VERSION"); Some(expectLong()) }
+      if acceptWord("AS") then
+        expectWord("OF"); expectWord("VERSION")
+        // A commit timestamp: unsigned in the engine, so a negative value would wrap around.
+        val ts = expectLong()
+        if ts < 0 then throw error("AS OF VERSION must be a non-negative commit timestamp")
+        Some(ts)
       else None
     val where = if acceptWord("WHERE") then Some(parseExpr()) else None
     val groupBy =
