@@ -50,6 +50,38 @@ object SchemaJson:
       s"{\"op\":\"rename_field\",\"from\":${string(from)},\"to\":${string(to)}}"
     case SchemaChange.DropField(name) => s"{\"op\":\"drop_field\",\"name\":${string(name)}}"
 
+  /** Encodes a schema version exactly as the engine writes it (tools, tests and fakes of the
+    * engine; the gateway only decodes).
+    */
+  def encodeSchema(schema: EntitySchema): String =
+    def optional(value: Option[Long]): String = value.fold("null")(_.toString)
+    val fields = schema.fields.map { field =>
+      Vector(
+        s"\"default\":${field.default.fold("null")(encodeValue)}",
+        s"\"dropped_in\":${optional(field.droppedIn.map(_.value))}",
+        s"\"id\":${field.id.value}",
+        s"\"introduced_in\":${field.introducedIn.value}",
+        s"\"name\":${string(field.name)}",
+        s"\"nullable\":${field.nullable}",
+        s"\"references\":${field.references.fold("null")(fk => s"{\"entity_id\":${fk.entity.value},\"field_id\":${fk.field.value}}")}",
+        s"\"value_type\":\"${typeName(field.dataType)}\""
+      ).mkString("{", ",", "}")
+    }
+    Vector(
+      s"\"entity_id\":${schema.entityId.value}",
+      s"\"epoch\":${schema.epoch.value}",
+      s"\"fields\":${fields.mkString("[", ",", "]")}",
+      s"\"name\":${string(schema.name)}",
+      s"\"next_field_id\":${schema.nextFieldId.value}",
+      s"\"parent\":${optional(schema.parent.map(_.value))}",
+      s"\"primary_key\":${schema.primaryKey.value}",
+      s"\"version\":${schema.version.value}"
+    ).mkString("{", ",", "}")
+
+  /** Encodes a catalog listing exactly as `adb_list_schemas_json` writes it. */
+  def encodeCatalog(listing: CatalogListing): String =
+    s"{\"entities\":${listing.entities.map(encodeSchema).mkString("[", ",", "]")},\"schema_epoch\":${listing.epoch.value}}"
+
   /** Encodes a value in the engine's form. */
   def encodeValue(value: DbValue): String = value match
     case DbValue.NullValue => "\"Null\""

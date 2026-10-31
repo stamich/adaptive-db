@@ -47,6 +47,11 @@ final class SchemaJsonTest:
     )
     assertEquals("""{"op":"drop_field","name":"c"}""", SchemaJson.encodeChange(SchemaChange.DropField("c")))
 
+  /** Encoding reproduces the engine's documents byte for byte. */
+  @Test def encodesLikeTheEngine(): Unit =
+    val listing = SchemaJson.decodeCatalog(SchemaFixtures.CatalogJson)
+    assertEquals(SchemaFixtures.CatalogJson.replace("\n", ""), SchemaJson.encodeCatalog(listing))
+
   /** Values round-trip through the engine form. */
   @Test def valuesRoundTrip(): Unit =
     for value <- Vector(DbValue.NullValue, DbValue.BoolValue(true), DbValue.Int64Value(-5), DbValue.Float64Value(1.5), DbValue.StringValue("ü\n")) do

@@ -9,7 +9,12 @@ import java.security.MessageDigest
 import scala.jdk.CollectionConverters.*
 
 /**
- * Durable file-backed catalog for Milestone 2 schema metadata.
+ * Durable file-backed catalog of Milestones 2.0–2.3 (`catalog.properties`).
+ *
+ * Since Milestone 2.4.0 the engine owns the catalog ([[EngineCatalog]]): a database opened by the
+ * gateway imports this file once ([[CatalogImport]]) and retires it. The class remains for that
+ * import and for tools that bind and plan without an engine (benchmarks, what-if planning); it
+ * has no versioned schemas, `ALTER TABLE` or `DROP TABLE`.
  *
  * The hardened implementation bounds the input file and entity/field counts, validates restored
  * catalog shape, and publishes updates using file fsync, atomic rename and directory fsync.

@@ -12,4 +12,4 @@ tasks.test {
     useJUnitPlatform()
 }
 
-dependencies { api(project(":adb-model")) }
+dependencies { api(project(":adb-model")); api(project(":adb-schema")) }
