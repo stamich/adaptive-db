@@ -17,14 +17,21 @@ final case class ForeignKeyRef(entity: EntityId, field: FieldId) derives CanEqua
   * @param name       column name as declared
   * @param dataType   logical column type
   * @param nullable   whether the column accepts NULL
-  * @param references declared foreign-key hint (`REFERENCES t(c) NOT ENFORCED`), if any
+  * @param references   declared foreign-key hint (`REFERENCES t(c) NOT ENFORCED`), if any
+  * @param default      value of the column in rows that do not store it: rows written before the
+  *                     column was added (a "virtual default") and inserts that omit it
+  *                     (`None` = NULL)
+  * @param introducedIn schema version of the entity that added the column (1 = created with
+  *                     the table); statistics collected at an older version know nothing of it
   */
 final case class Field(
     id: FieldId,
     name: String,
     dataType: DataType,
     nullable: Boolean,
-    references: Option[ForeignKeyRef] = None
+    references: Option[ForeignKeyRef] = None,
+    default: Option[DbValue] = None,
+    introducedIn: SchemaVersion = SchemaVersion(1)
 ) derives CanEqual
 
 /** Schema of one entity (table).
@@ -33,7 +40,8 @@ final case class Field(
   * @param name          entity name as declared
   * @param fields        columns in declaration order
   * @param primaryKey    field id of the BIGINT primary-key column
-  * @param schemaVersion catalog version that created this entity
+  * @param schemaVersion schema version of the entity (engine catalog), or the catalog version
+  *                      that created it (file-based catalogs)
   */
 final case class Entity(
     id: EntityId,
