@@ -153,6 +153,7 @@ fn tx_id_of(record: &WalRecord) -> u64 {
         | WalRecord::Put { tx_id, .. }
         | WalRecord::Delete { tx_id, .. }
         | WalRecord::Commit { tx_id, .. }
+        | WalRecord::Catalog { tx_id, .. }
         | WalRecord::Abort { tx_id } => tx_id.0,
     }
 }

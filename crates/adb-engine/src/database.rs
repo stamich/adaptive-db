@@ -706,6 +706,7 @@ impl Database {
                 .iter()
                 .map(|(row_id, mutation)| (*row_id, mutation.clone()))
                 .collect(),
+            catalog: Vec::new(),
         })
     }
 

@@ -4,10 +4,10 @@
 //! recovery and change-data capture turn log records back into [`CommittedTx`] values
 //! ([`TxAssembler`]). Both directions live here so the log format has exactly one owner.
 
-use adb_core::{CommitTs, Lsn, RowId, TxId};
+use adb_core::{CommitTs, Lsn, RowId, SchemaEpoch, TxId};
 use adb_storage::HistoricalVersion;
 use adb_tx::Mutation;
-use adb_wal::{LogEntry, WalError, WalRecord};
+use adb_wal::{CatalogEvent, LogEntry, WalError, WalRecord};
 
 /// Everything a commit changes, in log order.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,17 +22,29 @@ pub struct CommittedTx {
     pub before_images: Vec<(RowId, HistoricalVersion)>,
     /// New row states in row order.
     pub mutations: Vec<(RowId, Mutation)>,
+    /// Catalog changes, each with the epoch it moves the catalog to (DDL transactions only;
+    /// data transactions carry none). Applied before the row changes of the same transaction.
+    pub catalog: Vec<(SchemaEpoch, CatalogEvent)>,
 }
 
 impl CommittedTx {
     /// The contiguous run of log records describing this commit.
     pub fn to_records(&self) -> Vec<WalRecord> {
         let tx_id = self.tx_id;
-        let mut records = Vec::with_capacity(self.before_images.len() + self.mutations.len() + 2);
+        let mut records = Vec::with_capacity(
+            self.catalog.len() + self.before_images.len() + self.mutations.len() + 2,
+        );
         records.push(WalRecord::Begin {
             tx_id,
             snapshot_ts: self.snapshot_ts,
         });
+        for (epoch, event) in &self.catalog {
+            records.push(WalRecord::Catalog {
+                tx_id,
+                epoch: *epoch,
+                event: event.clone(),
+            });
+        }
         for (row_id, version) in &self.before_images {
             records.push(WalRecord::Version {
                 tx_id,
@@ -118,7 +130,18 @@ impl TxAssembler {
                     commit_ts: CommitTs(0),
                     before_images: Vec::new(),
                     mutations: Vec::new(),
+                    catalog: Vec::new(),
                 });
+                Ok(None)
+            }
+            WalRecord::Catalog {
+                tx_id,
+                epoch,
+                event,
+            } => {
+                if let Some(open) = self.open_for(tx_id, lsn)? {
+                    open.catalog.push((epoch, event));
+                }
                 Ok(None)
             }
             WalRecord::Version {
@@ -241,6 +264,7 @@ mod tests {
                 (RowId(1), Mutation::Delete),
                 (RowId(2), Mutation::Put(Row::new())),
             ],
+            catalog: Vec::new(),
         }
     }
 
@@ -256,6 +280,23 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].tx, tx);
         assert_eq!(out[0].end, Lsn(5));
+    }
+
+    /// Catalog records travel with their transaction and come back in order, with their epochs.
+    #[test]
+    fn catalog_records_round_trip() {
+        let mut tx = sample(9);
+        tx.catalog = vec![
+            (SchemaEpoch(3), CatalogEvent::Epoch),
+            (SchemaEpoch(4), CatalogEvent::DropEntity { entity_id: 2 }),
+        ];
+        let mut assembler = TxAssembler::strict();
+        let logged: Vec<_> = entries(tx.to_records(), 0)
+            .into_iter()
+            .filter_map(|entry| assembler.push(entry).unwrap())
+            .collect();
+        assert_eq!(logged[0].tx, tx);
+        assert_eq!(logged[0].end, Lsn(7));
     }
 
     /// A run cut off by a crash is followed by the next process's transactions.

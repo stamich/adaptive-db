@@ -214,6 +214,7 @@ name = "adb-wal"
 version = "2.3.0"
 dependencies = [
  "adb-core",
+ "adb-schema",
  "bincode",
  "crc32fast",
  "serde",
