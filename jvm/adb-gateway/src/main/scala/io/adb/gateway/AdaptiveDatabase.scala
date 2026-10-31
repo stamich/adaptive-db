@@ -12,7 +12,7 @@ import io.adb.physical.*
 import io.adb.schema.{EntitySpec, IndexDependency, NewField, SchemaHistory}
 import java.nio.file.{Files, Path, StandardCopyOption}
 import io.adb.sql.SqlParser
-import io.adb.statistics.{IndexStatistics, StatisticsCodec, StatisticsProvider}
+import io.adb.statistics.{IndexStatistics, SchemaStatistics, StatisticsCodec, StatisticsProvider}
 import java.util.Optional
 import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters.*
@@ -300,6 +300,8 @@ object AdaptiveDatabase:
     * @param indexes    the indexes of those entities the planner considered (cost mode only)
     * @param schemaEpoch catalog epoch the plan was made at (sent with the plan; the engine
     *                    refuses it once the epoch has moved)
+    * @param schema     per table read: its schema version and the columns added after its last
+    *                   `ANALYZE`, whose estimates are derived from their defaults
     */
   final case class Plans(
       logical: LogicalPlan,
@@ -308,7 +310,8 @@ object AdaptiveDatabase:
       mode: OptimizerMode,
       statistics: Vector[(Entity, StatisticsStatus)],
       indexes: Vector[IndexReport] = Vector.empty,
-      schemaEpoch: Long = 0
+      schemaEpoch: Long = 0,
+      schema: Vector[(Entity, Vector[SchemaStatistics.AddedAfterAnalyze])] = Vector.empty
   )
 
   /** What EXPLAIN reports about one index of an entity the query reads.
@@ -345,7 +348,8 @@ object AdaptiveDatabase:
 
   /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies
     * including access paths over `indexes`, or (rule mode) the 2.1.3 rules without indexes;
-    * both annotate the plan with estimates.
+    * both annotate the plan with estimates. Statistics are seen through the current schema:
+    * columns added after `ANALYZE` get statistics derived from their defaults.
     */
   def plan(
       select: BoundSelect,
@@ -355,7 +359,8 @@ object AdaptiveDatabase:
       mode: OptimizerMode,
       indexes: IndexCatalog = IndexCatalog.Empty
   ): Plans =
-    val estimator = new CardinalityEstimator(statistics, catalog, config.estimation)
+    val schemaAware = SchemaStatistics.provider(statistics, catalog.entity)
+    val estimator = new CardinalityEstimator(schemaAware, catalog, config.estimation)
     val costModel = new CostModel(estimator, config)
     val logical = LogicalPlanner.plan(select)
     val rewritten = new RuleOptimizer().optimize(logical)
@@ -384,7 +389,10 @@ object AdaptiveDatabase:
       physical.copy(decisions = orderDecisions ++ physical.decisions),
       mode,
       relations.map(r => r.entity -> estimator.status(r)),
-      reports
+      reports,
+      schema = relations.map(r =>
+        r.entity -> statistics.statistics(r.entity.id).fold(Vector.empty)(s => SchemaStatistics.addedAfterAnalyze(s.table, r.entity))
+      )
     )
 
   /** EXPLAIN sections of a plan: logical, optimized and physical plans (with estimates and
@@ -401,11 +409,17 @@ object AdaptiveDatabase:
           s"- ${entity.name}: ${s.table.rowCount} rows analyzed at ts=${s.table.analyzedAtTs}, ${s.modificationsSinceAnalyze} modifications since (stale)"
     }
     val labels = plans.indexes.map(r => r.info.id -> IndexLabel(r.info.name, r.keyColumns)).toMap
+    val schemaLines = plans.schema.flatMap { (entity, added) =>
+      s"- ${entity.name}: schema version ${entity.schemaVersion.value}" +: added.map("  - " + _.display)
+    }
+    val schemaSection = Option.when(plans.schemaEpoch > 0 || plans.schema.exists(_._2.nonEmpty))(
+      s"Schema (catalog epoch ${plans.schemaEpoch}):\n" + (if schemaLines.isEmpty then "(no tables)" else schemaLines.mkString("\n"))
+    )
     Vector(
       "Logical:\n" + LogicalPlan.render(plans.logical),
       "Optimized:\n" + LogicalPlan.render(plans.optimized),
       s"Physical (optimizer=${plans.mode.toString.toLowerCase}):\n" + Explain.physical(physical.plan, physical.slotNames, physical.estimates, labels),
       "Decisions:\n" + (if physical.decisions.isEmpty then "(none)" else physical.decisions.map("- " + _.display).mkString("\n")),
       "Statistics:\n" + (if statisticsLines.isEmpty then "(no tables)" else statisticsLines.mkString("\n"))
-    ) ++ Option.when(plans.indexes.nonEmpty)("Indexes:\n" + plans.indexes.map(_.display).mkString("\n")) ++
+    ) ++ schemaSection ++ Option.when(plans.indexes.nonEmpty)("Indexes:\n" + plans.indexes.map(_.display).mkString("\n")) ++
       Option.when(physical.warnings.nonEmpty)("Warnings:\n" + physical.warnings.map("- " + _).mkString("\n"))
