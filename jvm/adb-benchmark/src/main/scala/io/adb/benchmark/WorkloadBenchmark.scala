@@ -1,6 +1,6 @@
 package io.adb.benchmark
 
-import io.adb.catalog.{FileCatalog, InMemoryCatalog}
+import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.{NativeDatabase, NativeException}
 import io.adb.gateway.{AdaptiveDatabase, QueryResult}
 import io.adb.logical.{Binder, BoundSelect, LogicalPlan, OptimizerMode}
@@ -15,7 +15,8 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.3.0 workload benchmark over the native engine.
+/** Milestone 2.4.0 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
+  * the tables are created in the engine catalog, so every row read goes through its schema).
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
   * data; `scripts/benchmark-ffi.sh` runs it); this benchmark creates the matching catalog in the
@@ -120,13 +121,12 @@ object WorkloadBenchmark:
 
   /** Runs everything and writes the JSON report. */
   def run(settings: Settings): Unit =
-    val catalogPath = settings.dataDir.resolve("catalog.properties")
     require(Files.isDirectory(settings.dataDir.resolve("rust")), s"${settings.dataDir}/rust not found; prepare it with `workloads --prepare`")
-    require(!Files.exists(catalogPath), s"$catalogPath exists; use a freshly prepared directory")
-    val catalog = new FileCatalog(catalogPath)
     val native = NativeDatabase.open(settings.nativeLib, settings.dataDir.resolve("rust"))
     try
-      val db = new AdaptiveDatabase(catalog, native)
+      val db = AdaptiveDatabase.open(native)
+      val catalog = db.catalog
+      require(catalog.entities.isEmpty, s"${settings.dataDir} already has tables; use a freshly prepared directory")
       Ddl.foreach(db.execute)
       val counts = verifyRowCounts(db, settings.scale)
       BaseRows.map(_._1).filterNot(_ == "sk_stale").foreach(table => db.execute(s"ANALYZE $table"))
@@ -167,7 +167,7 @@ object WorkloadBenchmark:
         points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
       }
       val report = obj(
-        "milestone" -> str("2.3.0"),
+        "milestone" -> str("2.4.0"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
@@ -190,7 +190,7 @@ object WorkloadBenchmark:
   /** The access path cost mode chose for the first relation of `sql` (`entity_scan` when no
     * index was a candidate, so no access decision was recorded).
     */
-  private def accessPath(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): String =
+  private def accessPath(db: AdaptiveDatabase, catalog: Catalog, sql: String): String =
     db.plan(bind(catalog, sql)).physical.decisions.find(_.operator.startsWith("access ")).fold("entity_scan")(_.choice)
 
   /** A non-covering balance range (`COUNT(*)` and `SUM(id)` of the rows below a bound) at every
@@ -203,7 +203,7 @@ object WorkloadBenchmark:
     */
   private def selectivitySweep(
       db: AdaptiveDatabase,
-      catalog: FileCatalog,
+      catalog: Catalog,
       native: NativeDatabase,
       scale: Int,
       timer: Timer,
@@ -248,7 +248,7 @@ object WorkloadBenchmark:
     */
   private def modes(
       db: AdaptiveDatabase,
-      catalog: FileCatalog,
+      catalog: Catalog,
       native: NativeDatabase,
       sql: String,
       timer: Timer,
@@ -358,19 +358,19 @@ object WorkloadBenchmark:
     case other => other.children.map(joinTree).mkString(",")
 
   /** Parses, binds, plans and encodes `sql` without executing it; returns the plan size. */
-  private def planOnly(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Long =
+  private def planOnly(db: AdaptiveDatabase, catalog: Catalog, sql: String): Long =
     preparedPlan(db, catalog, sql).length.toLong
 
   /** Physical plan JSON of `sql` in the session's current mode. */
-  private def preparedPlan(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): String =
-    PlanJsonEncoder.encode(db.plan(bind(catalog, sql)).physical.plan)
+  private def preparedPlan(db: AdaptiveDatabase, catalog: Catalog, sql: String): String =
+    { val plans = db.plan(bind(catalog, sql)); PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch) }
 
   /** Estimated weighted cost of the plan's root. */
-  private def rootCost(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Double =
+  private def rootCost(db: AdaptiveDatabase, catalog: Catalog, sql: String): Double =
     rootEstimate(db, catalog, sql).fold(Double.NaN)(_.cost)
 
   /** The planner's estimate of the plan's root in the session's current mode. */
-  private def rootEstimate(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Option[NodeEstimate] =
+  private def rootEstimate(db: AdaptiveDatabase, catalog: Catalog, sql: String): Option[NodeEstimate] =
     db.plan(bind(catalog, sql)).physical.estimates.get(0)
 
   /** Worst q-error reported by EXPLAIN ANALYZE. */
@@ -379,7 +379,7 @@ object WorkloadBenchmark:
     raw"max q-error ([0-9.]+)".r.findFirstMatchIn(text).fold(Double.NaN)(_.group(1).toDouble)
 
   /** Binds a SELECT. */
-  private def bind(catalog: FileCatalog, sql: String): BoundSelect =
+  private def bind(catalog: Catalog, sql: String): BoundSelect =
     new Binder(catalog).bind(new SqlParser().parse(sql)).asInstanceOf[BoundSelect]
 
   /** Executes a prepared plan and sums its INT64 values (the Rust binary's checksum). */

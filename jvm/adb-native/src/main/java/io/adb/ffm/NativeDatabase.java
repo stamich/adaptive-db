@@ -35,6 +35,10 @@ public final class NativeDatabase implements AutoCloseable {
     private static final int MAX_INDEX_NAME_BYTES = 128;
     /** Upper bound on the size of an index status or listing document. */
     private static final long MAX_INDEX_JSON_BYTES = 16L * 1024 * 1024;
+    /** Upper bound on the UTF-8 length of a schema definition or change (matches the native 1 MiB limit). */
+    private static final int MAX_SCHEMA_REQUEST_BYTES = 1024 * 1024;
+    /** Upper bound on the size of a schema, catalog or history document. */
+    private static final long MAX_SCHEMA_JSON_BYTES = 64L * 1024 * 1024;
 
     /** Loaded native library and its downcall handles. */
     private final NativeLibrary library;
@@ -71,6 +75,19 @@ public final class NativeDatabase implements AutoCloseable {
         try (var arena = Arena.ofConfined()) {
             var out = arena.allocate(ValueLayout.JAVA_LONG);
             library.check(library.invokeInt(library.latestCommittedTs, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /**
+     * Returns the current catalog epoch. Every plan carries the epoch it was made at (plan wire
+     * v4); {@link #execute} fails with {@link AdbStatus#SCHEMA_CHANGED} when it moved since.
+     */
+    public synchronized long currentSchemaEpoch() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.currentSchemaEpoch, handle, out));
             return out.get(ValueLayout.JAVA_LONG, 0);
         }
     }
@@ -315,6 +332,72 @@ public final class NativeDatabase implements AutoCloseable {
             out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
             library.check(library.invokeInt(library.listIndexes, handle, out));
             return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_INDEX_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    // ----- entity schemas (ABI 7) -------------------------------------------------------------
+
+    /**
+     * Creates an entity ({@code CREATE TABLE}) from a JSON definition
+     * ({@code {"name":..,"entity_id":..,"primary_key":..,"fields":[{"name":..,"value_type":..,"nullable":..,"default":..}]}})
+     * and returns its first schema version as JSON (see {@code include/adb.h} and {@code docs/schema.md}).
+     * The call commits one catalog record and advances the catalog epoch.
+     */
+    public synchronized String createEntityJson(String specJson) {
+        return schemaRequest(library.createEntity, specJson, "entity spec");
+    }
+
+    /**
+     * Applies one schema change ({@code {"entity_id":..,"change":{"op":"add_field"|"rename_field"|"drop_field",..}}})
+     * and returns the new schema version as JSON. Existing rows are not rewritten.
+     */
+    public synchronized String alterEntityJson(String requestJson) {
+        return schemaRequest(library.alterEntity, requestJson, "alter request");
+    }
+
+    /** Drops an entity ({@code DROP TABLE}); a missing entity throws {@link NativeException} with {@code NOT_FOUND}. */
+    public synchronized void dropEntity(long entityId) {
+        ensureOpen();
+        library.check(library.invokeInt(library.dropEntity, handle, entityId));
+    }
+
+    /**
+     * The catalog as JSON {@code {"schema_epoch":N,"entities":[schema,..]}}: the latest schema of every live
+     * entity, consistent with the epoch, which is what a planner caches.
+     */
+    public synchronized String listSchemasJson() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.listSchemas, handle, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_SCHEMA_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** Every schema version of one entity, oldest first, as JSON {@code {"entity_id":N,"versions":[..]}}. */
+    public synchronized String schemaHistoryJson(long entityId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.schemaHistory, handle, entityId, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_SCHEMA_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** Sends a bounded JSON request to a schema function of the form {@code (db, ptr, len, out_json)}. */
+    private String schemaRequest(java.lang.invoke.MethodHandle function, String json, String what) {
+        ensureOpen();
+        Objects.requireNonNull(json, what);
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length == 0 || bytes.length > MAX_SCHEMA_REQUEST_BYTES) throw new IllegalArgumentException(what + " length outside 1.." + MAX_SCHEMA_REQUEST_BYTES);
+        try (var arena = Arena.ofConfined()) {
+            var segment = arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(function, handle, segment, (long) bytes.length, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_SCHEMA_JSON_BYTES), StandardCharsets.UTF_8);
         }
     }
 

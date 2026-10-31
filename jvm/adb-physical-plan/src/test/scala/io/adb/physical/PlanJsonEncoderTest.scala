@@ -6,7 +6,7 @@ import java.nio.file.Files
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-/** Wire-format tests of [[PlanJsonEncoder]] (plan wire v3). */
+/** Wire-format tests of [[PlanJsonEncoder]] (plan wire v4). */
 class PlanJsonEncoderTest:
   /** Every plan is wrapped in the version-3 envelope; operator and expression tags match the
     * Rust serde representation.
@@ -17,16 +17,16 @@ class PlanJsonEncoderTest:
       PhysicalExpr.Binary(PhysicalExpr.Slot(SlotId(0)), PhysicalBinaryOp.Gt, PhysicalExpr.Literal(DbValue.Int64Value(100)))
     )
     assertEquals(
-      "{\"wire_version\":3,\"plan\":{\"op\":\"filter\",\"input\":{\"op\":\"entity_scan\",\"entity_id\":7," +
+      "{\"wire_version\":4,\"schema_epoch\":3,\"plan\":{\"op\":\"filter\",\"input\":{\"op\":\"entity_scan\",\"entity_id\":7," +
         "\"columns\":[{\"field_id\":2,\"slot\":0}]},\"predicate\":{\"kind\":\"binary\",\"left\":{\"kind\":\"slot\",\"slot\":0}," +
         "\"op\":\"gt\",\"right\":{\"kind\":\"literal\",\"value\":{\"Int64\":100}}}}}",
-      PlanJsonEncoder.encode(plan)
+      PlanJsonEncoder.encode(plan, 3)
     )
 
   /** A composed 128-bit RowId is emitted as a decimal JSON string without precision loss. */
   @Test def encodesFullWidthRowIdAsString(): Unit =
     val rowId = (BigInt(7) << 64) | BigInt("18446744073709551615")
-    val json = PlanJsonEncoder.encode(PhysicalPlan.PointLookup(rowId, Vector.empty))
+    val json = PlanJsonEncoder.encode(PhysicalPlan.PointLookup(rowId, Vector.empty), 0)
     assertTrue(json.contains(s"\"row_id\":\"$rowId\""))
 
   /** Doubles that JSON cannot represent are rejected instead of producing invalid JSON. */
@@ -38,11 +38,11 @@ class PlanJsonEncoderTest:
     * Regenerate the fixture only together with a deliberate wire change.
     */
   @Test def matchesTheNativeContractFixture(): Unit =
-    val encoded = PlanJsonEncoder.encode(PlanningFixtures.planned(PlanningFixtures.ContractQuery).plan)
+    val encoded = PlanJsonEncoder.encode(PlanningFixtures.planned(PlanningFixtures.ContractQuery).plan, 7)
     val fixture = new String(Files.readAllBytes(PlanningFixtures.contractFixture), StandardCharsets.UTF_8).trim
     assertEquals(fixture, encoded)
 
-  /** Cross-language contract for the index operators of plan wire v3: the encoded plan is
+  /** Cross-language contract for the index operators (plan wire v3 nodes, v4 envelope): the encoded plan is
     * byte-identical to the fixture that `adb-plan-wire/tests/jvm_contract.rs` decodes.
     */
   @Test def matchesTheNativeIndexFixture(): Unit =
@@ -65,7 +65,7 @@ class PlanJsonEncoderTest:
       Vector(SlotId(2), SlotId(1))
     )
     val fixture = PlanningFixtures.contractFixture.resolveSibling("jvm-index-plan.json")
-    assertEquals(new String(Files.readAllBytes(fixture), StandardCharsets.UTF_8).trim, PlanJsonEncoder.encode(plan))
+    assertEquals(new String(Files.readAllBytes(fixture), StandardCharsets.UTF_8).trim, PlanJsonEncoder.encode(plan, 7))
     assertEquals(Vector(scan), PhysicalPlan.preorder(plan).collect { case s: PhysicalPlan.IndexScan => s })
     val text = Explain.physical(plan, Map(SlotId(0) -> "balance"))
     assertTrue(text.contains("IndexScan index=4 prefix=[{\"String\":\"Kraków\"}] range=({\"Int64\":-5}, {\"Int64\":100}] backward limit=10"), text)

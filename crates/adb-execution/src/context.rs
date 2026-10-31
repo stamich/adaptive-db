@@ -1,9 +1,11 @@
 //! Per-query execution settings.
 use std::{sync::Arc, time::Instant};
 
-use adb_core::CommitTs;
+use adb_core::{CommitTs, SchemaEpoch};
 
-use crate::{limits::ExecutionLimits, memory::MemoryTracker, CancellationToken, ExecutionError};
+use crate::{
+    limits::ExecutionLimits, memory::MemoryTracker, CancellationToken, ExecutionError, ReadView,
+};
 
 /// Rows per batch (and per scan page) unless configured otherwise.
 pub const DEFAULT_BATCH_SIZE: usize = 1024;
@@ -15,6 +17,9 @@ pub const DEFAULT_BATCH_SIZE: usize = 1024;
 pub struct ExecutionContext {
     /// Snapshot every read of the query observes.
     pub snapshot_ts: CommitTs,
+    /// Catalog epoch whose schemas every read of the query observes (`None`: the latest; the
+    /// engine pins the epoch current when the query starts).
+    pub schema_epoch: Option<SchemaEpoch>,
     /// Rows per batch and per scan page.
     pub batch_size: usize,
     /// Upper bound on the estimated heap size of one output batch.
@@ -35,12 +40,21 @@ impl ExecutionContext {
         let limits = ExecutionLimits::default();
         Self {
             snapshot_ts,
+            schema_epoch: None,
             batch_size: DEFAULT_BATCH_SIZE,
             memory_limit_bytes: 64 * 1024 * 1024,
             deadline: None,
             cancellation: CancellationToken::new(),
             limits,
             memory: MemoryTracker::new(limits.query_memory_bytes),
+        }
+    }
+
+    /// The view every read of the query observes.
+    pub fn read_view(&self) -> ReadView {
+        ReadView {
+            snapshot_ts: self.snapshot_ts,
+            schema_epoch: self.schema_epoch,
         }
     }
 

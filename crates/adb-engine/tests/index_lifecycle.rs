@@ -53,7 +53,8 @@ fn create_index_builds_over_existing_rows() {
     let status = db.indexes();
     assert_eq!(status.len(), 1);
     assert_eq!(status[0].usable_from, before);
-    assert_eq!(status[0].watermark, before);
+    // The catalog transaction that moved the epoch is the latest commit the index reflects.
+    assert_eq!(status[0].watermark, db.latest_committed_ts());
     assert!(db.verify().unwrap().is_ok());
 
     accounts(&db, 500, 20);

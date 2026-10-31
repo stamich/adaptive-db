@@ -117,19 +117,23 @@ fn main() -> Result<()> {
     let db = Database::open(dir.path())?;
     load(&db)?;
 
-    let wire = adb_plan_wire::encode_json(&plan())?;
+    let wire = adb_plan_wire::encode_json(&plan(), db.schema_epoch())?;
     println!(
-        "plan wire v2 ({} bytes):\n{}\n",
+        "plan wire v4 ({} bytes):\n{}\n",
         wire.len(),
         String::from_utf8_lossy(&wire)
     );
-    let (decoded, shape) = adb_plan_wire::decode_json(&wire)?;
+    let adb_plan_wire::DecodedPlan {
+        plan: decoded,
+        shape,
+        schema_epoch,
+    } = adb_plan_wire::decode_json(&wire)?;
     println!(
         "decoded and validated: row width {} slots, output slots {:?}\n",
         shape.width, shape.output
     );
 
-    let mut cursor = db.execute(decoded)?;
+    let mut cursor = db.execute_planned(decoded, schema_epoch, None)?;
     println!("city   | total");
     while let Some(batch) = cursor.next_batch()? {
         for row in 0..batch.len() {

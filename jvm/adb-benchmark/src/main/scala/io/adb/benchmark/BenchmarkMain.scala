@@ -1,6 +1,6 @@
 package io.adb.benchmark
 
-import io.adb.catalog.{Catalog, FileCatalog, InMemoryCatalog}
+import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.AdaptiveDatabase
 import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
@@ -11,11 +11,11 @@ import io.adb.sql.SqlParser
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.3.0) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.4.0) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
-  * native engine. `--workloads` runs the 2.3.0 workload benchmark instead
+  * native engine. `--workloads` runs the workload benchmark (2.3.0 workloads, engine catalog since 2.4.0) instead
   * ([[WorkloadBenchmark]]).
   */
 object BenchmarkMain:
@@ -25,7 +25,7 @@ object BenchmarkMain:
     * @param gatewayIterations iterations of the SQL-to-native gateway benchmark
     * @param dataDir           database directory for the gateway benchmark
     * @param nativeLib         path of the native library for the gateway benchmark
-    * @param workloads         run the 2.3.0 workload benchmark (needs `dataDir` and `nativeLib`)
+    * @param workloads         run the workload benchmark (needs `dataDir` and `nativeLib`)
     * @param out               where the workload benchmark writes its JSON report
     * @param scale             scale factor the workload data was prepared with
     * @param warmupMs          minimum warm-up time of each timed workload path
@@ -57,7 +57,7 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.3.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.4.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
@@ -101,7 +101,7 @@ object BenchmarkMain:
     val optimized = optimizer.optimize(logical)
     val physicalNs = time(iterations) { PhysicalPlanner.plan(optimized) }
     val physical = PhysicalPlanner.plan(optimized)
-    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan) }
+    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan, 0) }
     val totalNs = time(iterations) { pipeline(parser, binder, optimizer, sql) }
 
     report(s"sql_parse$suffix", iterations, parseNs)
@@ -117,18 +117,17 @@ object BenchmarkMain:
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
     val logical = LogicalPlanner.plan(bound)
     val optimized = optimizer.optimize(logical)
-    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan)
+    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan, 0)
 
   /** Times end-to-end SQL execution through FFM: point lookups, a filtered scan with LIMIT,
     * and the relational query over 1,000 accounts and 10,000 transfers.
     */
   private def benchmarkGateway(iterations: Int, dataDir: Path, nativeLib: Path): Unit =
     Files.createDirectories(dataDir)
-    val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
     try
-      val db = new AdaptiveDatabase(catalog, native)
-      if catalog.entity("account").isEmpty then
+      val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")))
+      if db.catalog.entity("account").isEmpty then
         Ddl.foreach(db.execute)
         for i <- 1 to 1000 do db.execute(s"INSERT INTO account VALUES ($i, ${i * 10L}, 'owner-${i % 50}');")
         for i <- 1 to 10000 do db.execute(s"INSERT INTO transfer VALUES ($i, ${1 + i % 1000}, ${i % 97});")

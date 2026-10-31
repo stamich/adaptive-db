@@ -1,0 +1,553 @@
+{
+  "analyze": {
+    "bench_customer": {
+      "exact": true,
+      "ms": 9.671691,
+      "rows": 100
+    },
+    "bench_orders": {
+      "exact": true,
+      "ms": 22.009518,
+      "rows": 1000
+    },
+    "ix_account": {
+      "exact": false,
+      "ms": 132.519165,
+      "rows": 100000
+    },
+    "jo_a": {
+      "exact": true,
+      "ms": 35.513388,
+      "rows": 20000
+    },
+    "jo_b": {
+      "exact": true,
+      "ms": 17.582743,
+      "rows": 2000
+    },
+    "jo_c": {
+      "exact": true,
+      "ms": 41.947405,
+      "rows": 20
+    },
+    "sk_events": {
+      "exact": false,
+      "ms": 126.27901999999999,
+      "rows": 100000
+    },
+    "sk_events_distinct_ids": {
+      "actual": 100000,
+      "estimated": 99799
+    },
+    "sk_stale": {
+      "exact": false,
+      "ms": 83.608277,
+      "rows": 100000
+    },
+    "st_dim": {
+      "exact": true,
+      "ms": 13.310087999999999,
+      "rows": 1000
+    },
+    "st_fact": {
+      "exact": false,
+      "ms": 95.988906,
+      "rows": 100000
+    },
+    "st_region": {
+      "exact": true,
+      "ms": 12.777283,
+      "rows": 100
+    },
+    "total": {
+      "ms": 591.244125,
+      "rows": 424220,
+      "rows_per_s": 717503.9582845749
+    }
+  },
+  "as_of_index_read": {
+    "as_of_before_change": {
+      "checksum": 1052395880,
+      "input_rows": 100,
+      "input_rows_per_s": 516657.0224022485,
+      "iterations": 100,
+      "max_ms": 0.202332,
+      "mean_ms": 0.19382750999999998,
+      "min_ms": 0.190112,
+      "p50_ms": 0.193552,
+      "p95_ms": 0.19676200000000002,
+      "p99_ms": 0.202162,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.195262,
+        0.192472,
+        0.193122,
+        0.191952,
+        0.194792,
+        0.193422,
+        0.195432
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.0027180247331288223,
+      "warmup_runs": 1032
+    },
+    "changed_rows": 1000,
+    "latest": {
+      "checksum": 1001016464,
+      "input_rows": 100,
+      "input_rows_per_s": 472384.40753547597,
+      "iterations": 100,
+      "max_ms": 0.229603,
+      "mean_ms": 0.21218089999999992,
+      "min_ms": 0.20921199999999998,
+      "p50_ms": 0.21169200000000002,
+      "p95_ms": 0.216492,
+      "p99_ms": 0.219193,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.212342,
+        0.211383,
+        0.211863,
+        0.21163200000000001,
+        0.21160199999999998,
+        0.211362,
+        0.211702
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.0024929694322233477,
+      "warmup_runs": 940
+    }
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+    "cpus": 32,
+    "os": "linux"
+  },
+  "index_build": {
+    "idx_ix_balance": {
+      "entries": 100000,
+      "ms": 2726.239925,
+      "rows_per_s": 36680.557379776474,
+      "sql": "CREATE INDEX idx_ix_balance ON ix_account (balance)",
+      "table_rows": 100000
+    },
+    "idx_ix_owner": {
+      "entries": 100000,
+      "ms": 3194.651113,
+      "rows_per_s": 31302.322683397197,
+      "sql": "CREATE INDEX idx_ix_owner ON ix_account (owner) INCLUDE (balance)",
+      "table_rows": 100000
+    }
+  },
+  "load": {
+    "rows": 424220,
+    "rows_per_s": 46655.753873884394,
+    "seconds": 9.092554825
+  },
+  "milestone": "2.4.0",
+  "path": "rust_native",
+  "schema_evolution": {
+    "alter_latency": {
+      "large": {
+        "log_bytes": 300,
+        "ms": 5.424807,
+        "table_rows": 50000
+      },
+      "small": {
+        "log_bytes": 296,
+        "ms": 8.193816,
+        "table_rows": 1000
+      }
+    },
+    "checks": {
+      "schema_versions": [
+        2,
+        2,
+        2
+      ]
+    },
+    "setup": {
+      "load_seconds": 6.538281198,
+      "rows_per_table": 50000,
+      "small_table_rows": 1000
+    },
+    "workloads": {
+      "F_virtual_default_point_read": {
+        "migrated_row": {
+          "checksum": 7920,
+          "input_rows": 1,
+          "input_rows_per_s": 510204.0816326531,
+          "iterations": 100,
+          "max_ms": 0.00203,
+          "mean_ms": 0.001963119999999999,
+          "min_ms": 0.00191,
+          "p50_ms": 0.00196,
+          "p95_ms": 0.0020099999999999996,
+          "p99_ms": 0.00203,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            0.00196,
+            0.00198,
+            0.0019700000000000004,
+            0.00196,
+            0.00194,
+            0.00196,
+            0.00194
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.0000279013548058154,
+          "warmup_runs": 101341
+        },
+        "migrated_row_currency": "EUR",
+        "old_row": {
+          "checksum": 7920,
+          "input_rows": 1,
+          "input_rows_per_s": 507614.2131979695,
+          "iterations": 100,
+          "max_ms": 0.00203,
+          "mean_ms": 0.0019767199999999995,
+          "min_ms": 0.00193,
+          "p50_ms": 0.0019700000000000004,
+          "p95_ms": 0.00202,
+          "p99_ms": 0.00202,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            0.0019700000000000004,
+            0.00198,
+            0.00198,
+            0.0019700000000000004,
+            0.0019700000000000004,
+            0.0019709999999999997,
+            0.00198
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.000021717771524721398,
+          "warmup_runs": 101260
+        },
+        "old_row_currency": "EUR"
+      },
+      "G_schema_adapted_scan": {
+        "0_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2343816.9452714995,
+          "iterations": 100,
+          "max_ms": 21.710428,
+          "mean_ms": 21.348669509999993,
+          "min_ms": 21.126441999999997,
+          "p50_ms": 21.332724000000002,
+          "p95_ms": 21.537456,
+          "p99_ms": 21.630038,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            21.280034,
+            21.341124999999998,
+            21.343874,
+            21.355684999999998,
+            21.359434,
+            21.340294999999998,
+            21.318854
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.11760411892127709,
+          "warmup_runs": 10
+        },
+        "100_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2278135.774158377,
+          "iterations": 100,
+          "max_ms": 22.619647,
+          "mean_ms": 21.95261035,
+          "min_ms": 21.554767,
+          "p50_ms": 21.94777,
+          "p95_ms": 22.301775,
+          "p99_ms": 22.520227000000002,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            22.161172,
+            21.785769,
+            22.050952,
+            22.038602,
+            21.998341,
+            21.953021,
+            21.776439
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.21906157072003185,
+          "warmup_runs": 10
+        },
+        "50_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2227468.5541581805,
+          "iterations": 100,
+          "max_ms": 23.056782000000002,
+          "mean_ms": 22.47051619000001,
+          "min_ms": 22.026811,
+          "p50_ms": 22.447006,
+          "p95_ms": 22.918441,
+          "p99_ms": 23.021382,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            22.425066,
+            22.562997000000003,
+            22.501157,
+            22.445506,
+            22.221464,
+            22.695439,
+            22.265244
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.25302977706893304,
+          "warmup_runs": 10
+        },
+        "unversioned_control": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2522484.2898417185,
+          "iterations": 100,
+          "max_ms": 20.190342,
+          "mean_ms": 19.84789223,
+          "min_ms": 19.639877,
+          "p50_ms": 19.821729,
+          "p95_ms": 20.085991,
+          "p99_ms": 20.156032,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            19.855988,
+            19.832409,
+            19.789718,
+            19.759968,
+            19.738716999999998,
+            19.937029,
+            19.947280000000003
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.12907639259491674,
+          "warmup_runs": 10
+        }
+      },
+      "H_stale_schema_epoch_reject": {
+        "accepted_same_plan": {
+          "iterations": 100,
+          "max_ms": 0.00941,
+          "mean_ms": 0.00200922,
+          "min_ms": 0.00189,
+          "p50_ms": 0.00193,
+          "p95_ms": 0.00198,
+          "p99_ms": 0.00235,
+          "refused": 0,
+          "round_medians_ms": [
+            0.00196,
+            0.00193,
+            0.00193,
+            0.00193,
+            0.0019199999999999998,
+            0.0019199999999999998,
+            0.00193
+          ],
+          "stddev_ms": 0.0007453903753067915
+        },
+        "catalog_epoch": 8,
+        "plan_epoch": 7,
+        "rejected": {
+          "iterations": 100,
+          "max_ms": 0.000059999999999999995,
+          "mean_ms": 0.00003100000000000005,
+          "min_ms": 0.000029999999999999997,
+          "p50_ms": 0.000029999999999999997,
+          "p95_ms": 0.00004,
+          "p99_ms": 0.000049999999999999996,
+          "refused": 100,
+          "round_medians_ms": [
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997
+          ],
+          "stddev_ms": 4.123105625617661e-6
+        }
+      }
+    },
+    "write_validation": {
+      "no_schema": {
+        "rows": 20000,
+        "rows_per_commit": 100,
+        "rows_per_s": 7057.993178933771,
+        "seconds": 2.833666666,
+        "slowdown_vs_no_schema": 1.0
+      },
+      "schema": {
+        "rows": 20000,
+        "rows_per_commit": 100,
+        "rows_per_s": 7584.715388947761,
+        "seconds": 2.6368820680000002,
+        "slowdown_vs_no_schema": 0.9305547824798389
+      }
+    }
+  },
+  "setup": {
+    "bench_customer": 100,
+    "bench_orders": 1000,
+    "iterations": 100,
+    "ix_account": 100000,
+    "scale": 1,
+    "warmup_ms": 200
+  },
+  "workloads": {
+    "A_hash_join_topk": {
+      "checksum": 9955,
+      "input_rows": 1100,
+      "input_rows_per_s": 2391642.2972811377,
+      "iterations": 100,
+      "max_ms": 0.478495,
+      "mean_ms": 0.45983076999999994,
+      "min_ms": 0.448585,
+      "p50_ms": 0.45993500000000004,
+      "p95_ms": 0.467825,
+      "p99_ms": 0.472975,
+      "peak_memory_bytes": 32352,
+      "round_medians_ms": [
+        0.460975,
+        0.45993500000000004,
+        0.45520499999999997,
+        0.461305,
+        0.459655,
+        0.461044,
+        0.459795
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.005533007928523147,
+      "warmup_runs": 433
+    },
+    "B_hash_join_aggregate_topk": {
+      "checksum": 54550,
+      "input_rows": 1100,
+      "input_rows_per_s": 2257405.8302636035,
+      "iterations": 100,
+      "max_ms": 0.531445,
+      "mean_ms": 0.48799936999999993,
+      "min_ms": 0.47720500000000005,
+      "p50_ms": 0.487285,
+      "p95_ms": 0.49809500000000007,
+      "p99_ms": 0.5027550000000001,
+      "peak_memory_bytes": 55975,
+      "round_medians_ms": [
+        0.48832499999999995,
+        0.482795,
+        0.487885,
+        0.48735500000000004,
+        0.48962500000000003,
+        0.48557500000000003,
+        0.49060499999999996
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.007266134929458711,
+      "warmup_runs": 408
+    },
+    "C_covering_index_eq": {
+      "checksum": 5742223708,
+      "input_rows": 10,
+      "input_rows_per_s": 542593.5973955507,
+      "iterations": 100,
+      "max_ms": 0.01889,
+      "mean_ms": 0.01842419,
+      "min_ms": 0.01815,
+      "p50_ms": 0.018430000000000002,
+      "p95_ms": 0.01859,
+      "p99_ms": 0.01867,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.018411,
+        0.018461,
+        0.01848,
+        0.018439999999999998,
+        0.01842,
+        0.01838,
+        0.018411
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.00011387025028513822,
+      "warmup_runs": 10790
+    },
+    "D_index_range_order_limit": {
+      "checksum": 1052395880,
+      "input_rows": 100,
+      "input_rows_per_s": 985697.5288562952,
+      "iterations": 100,
+      "max_ms": 0.109901,
+      "mean_ms": 0.10160795,
+      "min_ms": 0.099711,
+      "p50_ms": 0.101451,
+      "p95_ms": 0.10308099999999999,
+      "p99_ms": 0.106601,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.10200100000000001,
+        0.10183099999999999,
+        0.101161,
+        0.101381,
+        0.101471,
+        0.101061,
+        0.101471
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.0013632033404815287,
+      "warmup_runs": 1961
+    },
+    "E_seq_scan_region_eq": {
+      "checksum": 1000,
+      "input_rows": 100000,
+      "input_rows_per_s": 2874909.717053973,
+      "iterations": 100,
+      "max_ms": 37.265497,
+      "mean_ms": 34.83750964,
+      "min_ms": 34.472787999999994,
+      "p50_ms": 34.783701,
+      "p95_ms": 35.186685000000004,
+      "p99_ms": 35.702,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        34.68973999999999,
+        34.925583,
+        34.658590000000004,
+        34.790341000000005,
+        34.917853,
+        34.71056,
+        34.733109999999996
+      ],
+      "rows_out": 1,
+      "stddev_ms": 0.33584666504390165,
+      "warmup_runs": 10
+    }
+  },
+  "write_overhead": {
+    "0_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 7434.640415395455,
+      "seconds": 2.690109929,
+      "slowdown_vs_no_index": 1.0
+    },
+    "1_index": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 5623.449096672334,
+      "seconds": 3.55653615,
+      "slowdown_vs_no_index": 1.3220783699802476
+    },
+    "3_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 4412.870704640484,
+      "seconds": 4.532197143,
+      "slowdown_vs_no_index": 1.6847628024943808
+    }
+  }
+}

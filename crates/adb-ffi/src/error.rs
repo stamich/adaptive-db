@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, panic::AssertUnwindSafe};
 
-use adb_engine::{DbError, StatsError};
+use adb_engine::{DbError, SchemaError, StatsError};
 use adb_execution::ExecutionError;
 
 use crate::AdbStatus;
@@ -37,7 +37,11 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
         DbError::ChangeLogTruncated { .. } => AdbStatus::LogTruncated,
         DbError::InvalidArgument(_) | DbError::TransactionClosed => AdbStatus::InvalidArgument,
         DbError::IncompatibleFormat { .. } => AdbStatus::IncompatibleFormat,
-        DbError::IndexNotFound(_) => AdbStatus::NotFound,
+        DbError::IndexNotFound(_) | DbError::EntityNotFound(_) => AdbStatus::NotFound,
+        DbError::Schema(SchemaError::Limit(_)) => AdbStatus::ResourceLimit,
+        DbError::Schema(error) if !matches!(error, SchemaError::Corrupt(_)) => {
+            AdbStatus::InvalidArgument
+        }
         DbError::Index(error) if !error.is_corruption() => AdbStatus::InvalidArgument,
         DbError::Execution(error) => map_execution_error(error),
         DbError::Statistics(error) => map_stats_error_status(error),
@@ -72,6 +76,7 @@ pub fn map_execution_error(error: &ExecutionError) -> AdbStatus {
         | ExecutionError::Expression(_)
         | ExecutionError::InconsistentType(_) => AdbStatus::InvalidArgument,
         ExecutionError::DataSource(_) | ExecutionError::Wire(_) => AdbStatus::Internal,
+        ExecutionError::SchemaChanged { .. } => AdbStatus::SchemaChanged,
     }
 }
 

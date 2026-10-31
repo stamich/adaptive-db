@@ -1,5 +1,6 @@
 //! Records of the canonical log.
-use adb_core::{CommitTs, Row, RowId, TxId};
+use adb_core::{CommitTs, Row, RowId, SchemaEpoch, TxId};
+pub use adb_schema::CatalogEvent;
 use serde::{Deserialize, Serialize};
 
 /// One log record. The bincode encoding is the persistent log format.
@@ -53,5 +54,18 @@ pub enum WalRecord {
     Abort {
         /// Transaction.
         tx_id: TxId,
+    },
+    /// A catalog change (data format 3, Milestone 2.4.0). Schema history lives in the canonical
+    /// log, so DDL and the data commits that depend on it have one order, recovery and
+    /// `rebuild_projections` restore the schema registry like every other projection, and the
+    /// change feed shows schema changes where they happened. Appended last so the encoding of
+    /// every earlier record kind is unchanged.
+    Catalog {
+        /// Transaction.
+        tx_id: TxId,
+        /// Catalog epoch after this change.
+        epoch: SchemaEpoch,
+        /// The change.
+        event: CatalogEvent,
     },
 }

@@ -1,13 +1,78 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.3.0. Hardened patch releases preserve the functional scope of
+Milestone 2.4.0. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
 **Version numbers.** Up to 2.2.3 the patch number counted iterations of a milestone's plan
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, and Milestone 2.4 is 2.4.0.
+
+## 2.4.0 — Schema evolution
+
+Milestone 2.4 (the 2.4.0 proposal, reconciling the 2.4, 2.4.1 and 2.4.2 concepts): versioned
+schemas owned by the engine, `ALTER TABLE` without rewriting rows, virtual defaults, lazy
+migration, catalog epochs and RESTRICT dependencies. Design and adaptations: `docs/schema.md`,
+`docs/milestone-2.4.0.md`.
+
+### Breaking changes
+- **C ABI 7** and **plan wire v4**: the envelope carries `schema_epoch` and v3 documents are
+  refused; a plan of another catalog epoch fails with the new status 13 `SCHEMA_CHANGED`.
+- Rows written to a table with a schema are validated (unknown, dropped or mistyped fields, a
+  missing `NOT NULL` value or a primary-key field different from the row key fail the commit).
+- **Data format 3** and statistics format 3. A format-2 directory is upgraded in place on open
+  (nothing is rewritten); a newer format is refused.
+- The JVM no longer writes `catalog.properties`: `AdaptiveDatabase.open` imports it once into the
+  engine catalog and renames it to `catalog.properties.imported`.
+
+### Added (Rust)
+- `adb-core`: `SchemaVersion`, `SchemaEpoch`, an optional schema version in `Row` (reserved
+  field `u32::MAX` in bincode, `schema_version` in JSON, so unversioned rows keep their 2.3.0
+  encoding), `ValueType::of` / `admits`.
+- New crate `adb-schema`: `EntitySchema`, `FieldDef`, `ForeignKey`, `EntitySpec`, `NewField`,
+  `SchemaChange` (add, rename, drop), `create`, `apply`, validation of versions and chains,
+  `check_row`, limits, `RowAdapter`, `SchemaRegistry` with an adapter cache, `CatalogEvent`.
+- `adb-wal`: `WalRecord::Catalog`; committed transactions carry catalog events.
+- Engine: the schema registry as a projection (`schema/registry.meta`, checkpointed, rebuilt from
+  the log); `create_entity`, `alter_entity`, `drop_entity`, `schema_epoch`, `schema`,
+  `schema_by_name`, `schemas`, `schema_history`, `catalog_snapshot`; write normalization and
+  validation; reads adapted to the read view's epoch; indexes and `ANALYZE` over adapted rows;
+  `execute_planned`; RESTRICT checks of `DROP COLUMN`, `DROP TABLE` and `CREATE INDEX`;
+  `DbError::Schema`, `EntityNotFound`, `CorruptSchemaRegistry`.
+- Execution: `ReadView { snapshot_ts, schema_epoch }` for every data-source call;
+  `ExecutionError::SchemaChanged`.
+- CDC: `CatalogChange` (new schema versions, dropped tables) and `RowChange::schema_version`.
+- C ABI 7: `adb_create_entity_json`, `adb_alter_entity_json`, `adb_drop_entity`,
+  `adb_list_schemas_json`, `adb_schema_history_json`, `adb_current_schema_epoch`, status 13.
+- `adb-migrate` migrates format 1 directly to format 3.
+- Workload benchmark: schema-evolution section (workloads F–H, ALTER latency, write validation).
+
+### Added (JVM)
+- New module `adb-schema`: `EntitySchema`, `SchemaChange`, `Compatibility`, `SchemaHistory`,
+  `SchemaEvolutionPlanner`, `DependencyGraph` (`CatalogObjectId`), `SchemaJson`.
+- `adb-catalog`: `SchemaCatalog`, `EngineCatalog` (cached per epoch, `ensureCurrent`),
+  `SchemaBackend`, `CatalogImport`; `adb-model`: `SchemaEpoch`, `Field.default` and
+  `Field.introducedIn`.
+- SQL: `ALTER TABLE ... ADD [COLUMN] / RENAME [COLUMN] ... TO / DROP [COLUMN] ... [RESTRICT]`,
+  `DROP TABLE [RESTRICT]`, `SHOW SCHEMA t`, `DEFAULT literal`; INSERT may omit a defaulted
+  `NOT NULL` column.
+- Gateway: `AdaptiveDatabase.open` on the engine catalog, legacy import, binding at the current
+  epoch, one re-plan on `SCHEMA_CHANGED`, `SHOW SCHEMA` rows.
+- Planner: `SchemaStatistics` (statistics of columns added after `ANALYZE` derived from their
+  default) and the EXPLAIN Schema section.
+- Java binding: `NativeDatabase.createEntityJson`, `alterEntityJson`, `dropEntity`,
+  `listSchemasJson`, `schemaHistoryJson`, `currentSchemaEpoch`, `AdbStatus.SCHEMA_CHANGED`.
+- Demo tour phase 2.4.0 (`demo/sql/2.4.0-schema.sql`).
+
+### Fixed
+- `AS OF VERSION` with a negative timestamp is refused by the parser (it would have wrapped
+  around in the engine).
+
+### Hardening
+- Deterministic fuzz tests of schema definitions and changes, random evolutions, the adapter,
+  damaged catalog events and damaged catalog log frames; a concurrency test of DDL, writes and
+  scans with a reopen.
 
 ## 2.3.0 — Secondary indexes and access paths
 

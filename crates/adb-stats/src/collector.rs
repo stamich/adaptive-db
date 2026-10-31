@@ -59,7 +59,7 @@ pub fn analyze(
     let mut after = None;
     loop {
         let page = source
-            .scan_page(&range, after, PAGE_ROWS, snapshot)
+            .scan_page(&range, after, PAGE_ROWS, snapshot.into())
             .map_err(|error| StatsError::Source(error.to_string()))?;
         let Some((last, _)) = page.last() else {
             break;
@@ -266,6 +266,7 @@ impl<'a> Run<'a> {
         TableStatistics {
             format_version: STATISTICS_FORMAT_VERSION,
             indexes: Vec::new(),
+            schema_version: 0,
             entity_id: self.entity_id,
             row_count: self.rows,
             avg_row_bytes: if self.rows == 0 {

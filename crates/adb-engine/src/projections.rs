@@ -23,10 +23,11 @@ use crate::{
     committed::CommittedTx,
     index_catalog::{index_dir, remove_orphans, IndexCatalog, INDEXES_DIR},
     projection::{IndexHandle, Projection},
-    DbError,
+    schema_registry, DbError,
 };
 use adb_core::IndexId;
 use adb_index::{IndexDefinition, IndexError, IndexProjection, IndexSpec, IndexState};
+use adb_schema::SchemaRegistry;
 
 /// Current state plus history (and, since 2.3.0, the index catalog).
 pub struct Projections {
@@ -40,6 +41,8 @@ pub struct Projections {
     catalog: IndexCatalog,
     /// One projection per active index, in catalog order.
     indexes: Vec<IndexHandle>,
+    /// Entity schemas and the catalog epoch (2.4.0): the projection of the log's catalog records.
+    registry: SchemaRegistry,
 }
 
 /// Directory of the current-state projection inside a database directory.
@@ -72,7 +75,13 @@ impl Projections {
             versions: PersistentVersionStore::open(dir.join(VERSIONS_DIR), buffer_pages)?,
             catalog,
             indexes,
+            registry: schema_registry::load(dir)?,
         })
+    }
+
+    /// The schema registry.
+    pub fn registry(&self) -> &SchemaRegistry {
+        &self.registry
     }
 
     /// Restores the watermark and vacuum horizon of every index after opening: the persisted
@@ -146,6 +155,7 @@ impl Projections {
             after = Some(*last);
             for (row_id, record) in page {
                 if let Some(row) = record.value {
+                    let row = self.adapt_latest(row_id, row);
                     projection.insert_current(row_id, &row, record.commit_ts, lsn)?;
                 }
             }
@@ -197,9 +207,13 @@ impl Projections {
         &self.catalog
     }
 
-    /// The journal write that persists the index catalog (part of every checkpoint).
-    pub fn catalog_journal_write(&self) -> Result<FileWrite, DbError> {
-        self.catalog.journal_write(&self.dir)
+    /// The journal writes that persist the index catalog and the schema registry (part of every
+    /// checkpoint).
+    pub fn catalog_journal_writes(&self) -> Result<Vec<FileWrite>, DbError> {
+        Ok(vec![
+            self.catalog.journal_write(&self.dir)?,
+            schema_registry::journal_write(&self.dir, &self.registry)?,
+        ])
     }
 
     /// Latest record of a row, including tombstones.
@@ -207,9 +221,12 @@ impl Projections {
         self.current.get(row_id)
     }
 
-    /// Applies a committed transaction: history first, then the new current state, then every
-    /// index.
-    pub fn apply(&self, tx: &CommittedTx, lsn: Lsn) -> Result<(), DbError> {
+    /// Applies a committed transaction: its catalog changes first, then history, the new current
+    /// state and every index.
+    pub fn apply(&mut self, tx: &CommittedTx, lsn: Lsn) -> Result<(), DbError> {
+        for (epoch, event) in &tx.catalog {
+            self.registry.apply(*epoch, event)?;
+        }
         for (row_id, version) in &tx.before_images {
             self.versions.put_at_lsn(*row_id, version, lsn)?;
         }
@@ -227,10 +244,46 @@ impl Projections {
                 lsn,
             )?;
         }
-        for index in &self.indexes {
-            index.apply(tx, lsn)?;
+        if !self.indexes.is_empty() {
+            // Index keys are computed from rows at the latest schema version: written rows
+            // already are; before-images written under an older version are adapted, exactly
+            // as the build and every earlier maintenance step saw them.
+            let adapted = self.adapt_before_images(tx);
+            let index_tx = adapted.as_ref().unwrap_or(tx);
+            for index in &self.indexes {
+                index.apply(index_tx, lsn)?;
+            }
         }
         Ok(())
+    }
+
+    /// A copy of `tx` whose before-images are adapted to the latest schema of their entities,
+    /// or `None` when every before-image already is (the common case).
+    fn adapt_before_images(&self, tx: &CommittedTx) -> Option<CommittedTx> {
+        let stale = |row_id: &RowId, row: &Row| {
+            self.registry
+                .latest(row_id.entity_id())
+                .is_some_and(|schema| row.schema_version.effective() != schema.version)
+        };
+        let any_stale = tx
+            .before_images
+            .iter()
+            .any(|(row_id, version)| version.value.as_ref().is_some_and(|row| stale(row_id, row)));
+        if !any_stale {
+            return None;
+        }
+        let mut adapted = tx.clone();
+        for (row_id, version) in &mut adapted.before_images {
+            if let Some(row) = version.value.take() {
+                version.value = Some(self.adapt_latest(*row_id, row));
+            }
+        }
+        Some(adapted)
+    }
+
+    /// `row` of `row_id` at the latest schema of its entity (unchanged without a schema).
+    fn adapt_latest(&self, row_id: RowId, row: Row) -> Row {
+        self.registry.adapt(row_id.entity_id(), row, None)
     }
 
     /// The row as seen by a snapshot at `ts`.
@@ -376,6 +429,7 @@ impl Projections {
                     .scan(&KeyRange::entity(definition.entity_id), None, usize::MAX)?
             {
                 if let Some(row) = record.value {
+                    let row = self.adapt_latest(row_id, row);
                     expected.insert(
                         row_id,
                         (

@@ -6,6 +6,7 @@ members = [
     "crates/adb-buffer",
     "crates/adb-btree",
     "crates/adb-index",
+    "crates/adb-schema",
     "crates/adb-wal",
     "crates/adb-storage",
     "crates/adb-tx",
@@ -23,7 +24,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "2.3.0"
+version = "2.4.0"
 
 [workspace.dependencies]
 thiserror = "2"

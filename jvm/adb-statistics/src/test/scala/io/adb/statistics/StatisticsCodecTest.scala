@@ -80,6 +80,15 @@ final class StatisticsCodecTest:
       )
     do assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(bad); () }, bad)
 
+  /** Format 3 adds the schema version the rows were read through; it is required there. */
+  @Test def readsFormatThree(): Unit =
+    val v3 = document.replace("\"format_version\":1", "\"format_version\":3").stripSuffix("}") +
+      ""","indexes":[],"schema_version":4}"""
+    assertEquals(4L, StatisticsCodec.decode(v3).schemaVersion)
+    assertEquals(0L, StatisticsCodec.decode(document).schemaVersion)
+    val missing = v3.replace(",\"schema_version\":4", "")
+    assertThrows(classOf[IllegalArgumentException], () => { StatisticsCodec.decode(missing); () })
+
   /** Statistics turn stale above 20% changed rows and lose half their confidence. */
   @Test def freshnessAndConfidence(): Unit =
     val table = StatisticsCodec.decode(document)

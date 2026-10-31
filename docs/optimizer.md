@@ -1,10 +1,13 @@
-# Cost-based optimizer (Milestones 2.2.3 and 2.3.0)
+# Cost-based optimizer (Milestones 2.2.3, 2.3.0 and 2.4.0)
 
 The planner of 2.1.3 decided by rules: joins ran in SQL order, the right input was always built,
 and LIMIT over ORDER BY always became a TopK. Since 2.2.3 it decides by estimated cost, using the
 engine's statistics ([statistics.md](statistics.md)). Since 2.3.0 it also chooses how each table
 is read: through a secondary index ([indexes.md](indexes.md)) or by a sequential scan. It explains
 every decision, and EXPLAIN ANALYZE checks every estimate against what the engine measured.
+Since 2.4.0 statistics are read through the current schema: a column added after `ANALYZE` gets
+statistics derived from its default (`SchemaStatistics`), and EXPLAIN shows a **Schema** section
+with the catalog epoch the plan carries and the columns estimated that way.
 
 ```text
 SQL → parse → bind → LogicalPlanner → RuleOptimizer (pushdown, point lookups)
@@ -12,7 +15,7 @@ SQL → parse → bind → LogicalPlanner → RuleOptimizer (pushdown, point loo
     → PhysicalPlanner + CostBasedPolicy      ├─ CardinalityEstimator + CostModel
       (access paths, join strategies, order) │   over StatisticsProvider + IndexCatalog
       (or DefaultPlanningPolicy, rule mode)  ┘
-    → plan wire v3 → engine → runtime profile (node ids) → EXPLAIN ANALYZE q-error, feedback log
+    → plan wire v4 (catalog epoch) → engine → runtime profile (node ids) → EXPLAIN ANALYZE q-error, feedback log
 ```
 
 `SET optimizer = cost` (the default) or `SET optimizer = rule` selects the mode per session. Rule

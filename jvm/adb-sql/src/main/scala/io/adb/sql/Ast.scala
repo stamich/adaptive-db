@@ -10,13 +10,15 @@ sealed trait Statement derives CanEqual
   * @param nullable   false when `NOT NULL` (or `PRIMARY KEY`) was given
   * @param primaryKey true when the column is declared `PRIMARY KEY`
   * @param references `REFERENCES table(column) NOT ENFORCED` target, if given
+  * @param default    `DEFAULT literal`, if given (a literal expression; checked by the binder)
   */
 final case class ColumnDef(
     name: String,
     dataType: String,
     nullable: Boolean,
     primaryKey: Boolean,
-    references: Option[ColumnReference] = None
+    references: Option[ColumnReference] = None,
+    default: Option[SqlExpr] = None
 ) derives CanEqual
 /** Target of a foreign-key hint: `table(column)` as written. */
 final case class ColumnReference(table: String, column: String) derives CanEqual
@@ -55,6 +57,22 @@ final case class Delete(table: String, where: SqlExpr) extends Statement derives
 final case class IndexColumnDef(name: String, descending: Boolean) derives CanEqual
 /** `CREATE INDEX name ON table (column [ASC|DESC], ...) [INCLUDE (column, ...)]`. */
 final case class CreateIndex(name: String, table: String, columns: Vector[IndexColumnDef], include: Vector[String]) extends Statement derives CanEqual
+/** `ALTER TABLE table action` (Milestone 2.4.0): one schema change per statement. */
+final case class AlterTable(table: String, action: AlterAction) extends Statement derives CanEqual
+
+/** The actions of `ALTER TABLE`. */
+enum AlterAction derives CanEqual:
+  /** `ADD [COLUMN] column type [NOT NULL] [DEFAULT literal] [REFERENCES ...]`. */
+  case AddColumn(column: ColumnDef)
+  /** `RENAME [COLUMN] from TO to`. */
+  case RenameColumn(from: String, to: String)
+  /** `DROP [COLUMN] name [RESTRICT]`; RESTRICT is the only behaviour (CASCADE is refused). */
+  case DropColumn(name: String)
+
+/** `DROP TABLE name [RESTRICT]` (Milestone 2.4.0). */
+final case class DropTable(name: String) extends Statement derives CanEqual
+/** `SHOW SCHEMA table` (Milestone 2.4.0): the table's columns and its version history. */
+final case class ShowSchema(table: String) extends Statement derives CanEqual
 /** `DROP INDEX name`. */
 final case class DropIndex(name: String) extends Statement derives CanEqual
 /** `SHOW INDEXES [ON table]`. */

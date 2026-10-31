@@ -14,6 +14,9 @@ import io.adb.model.*
   * @param exact                  whether the sample held every row
   * @param columns                per-field statistics
   * @param indexes                per-index statistics (statistics format 2; empty in format 1)
+  * @param schemaVersion          schema version of the entity the rows were read through
+  *                               (statistics format 3; 0 before, and for entities without a
+  *                               schema); columns added later have no statistics
   */
 final case class TableStatistics(
     entityId: EntityId,
@@ -24,7 +27,8 @@ final case class TableStatistics(
     sampledRows: Long,
     exact: Boolean,
     columns: Map[FieldId, ColumnStatistics],
-    indexes: Map[IndexId, IndexStatistics] = Map.empty
+    indexes: Map[IndexId, IndexStatistics] = Map.empty,
+    schemaVersion: Long = 0
 ) derives CanEqual:
   /** Statistics of one field, if it was analyzed. */
   def column(field: FieldId): Option[ColumnStatistics] = columns.get(field)

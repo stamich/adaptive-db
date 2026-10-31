@@ -1,23 +1,54 @@
 //! What the executor needs from storage.
-use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId};
+use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
 use adb_index::{IndexBounds, ScanDirection};
 
 use crate::ExecutionError;
 
+/// What a read observes: the data snapshot, and (since 2.4.0) the catalog epoch whose schemas
+/// rows are read through.
+///
+/// A query pins both when it starts. Rows written under any schema version are adapted to the
+/// version of their entity that was current at `schema_epoch`, so a concurrent `ALTER TABLE`
+/// never changes what a running query sees. `None` reads through the latest schemas (internal
+/// reads such as `ANALYZE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadView {
+    /// Data snapshot (MVCC commit timestamp).
+    pub snapshot_ts: CommitTs,
+    /// Catalog epoch the schemas are pinned to; `None` for the latest.
+    pub schema_epoch: Option<SchemaEpoch>,
+}
+
+impl ReadView {
+    /// A view at `snapshot_ts` pinned to the schemas of `schema_epoch`.
+    pub fn pinned(snapshot_ts: CommitTs, schema_epoch: SchemaEpoch) -> Self {
+        Self {
+            snapshot_ts,
+            schema_epoch: Some(schema_epoch),
+        }
+    }
+}
+
+impl From<CommitTs> for ReadView {
+    /// A view at `snapshot_ts` through the latest schemas.
+    fn from(snapshot_ts: CommitTs) -> Self {
+        Self {
+            snapshot_ts,
+            schema_epoch: None,
+        }
+    }
+}
+
 /// Snapshot-consistent row access. The executor knows nothing about pages, heaps, logs or
-/// transactions; it only asks for rows visible at a snapshot.
+/// transactions; it only asks for rows visible in a [`ReadView`].
 pub trait DataSource: IndexAccess + Send + Sync {
     /// Latest visible commit (default snapshot of a query).
     fn latest_committed_ts(&self) -> CommitTs;
 
-    /// The row `row_id` as of `snapshot_ts`.
-    fn point_lookup(
-        &self,
-        row_id: RowId,
-        snapshot_ts: CommitTs,
-    ) -> Result<Option<Row>, ExecutionError>;
+    /// The row `row_id` as seen by `view`.
+    fn point_lookup(&self, row_id: RowId, view: ReadView) -> Result<Option<Row>, ExecutionError>;
 
-    /// Up to `limit` rows of `range` visible at `snapshot_ts`, in key order, with keys strictly
+    /// Up to `limit` rows of `range` visible in `view`, in key order, with keys strictly
     /// after `after`. An empty result means the range is exhausted.
     ///
     /// Scans are paged with this keyset cursor so memory stays bounded by the batch size.
@@ -26,7 +57,7 @@ pub trait DataSource: IndexAccess + Send + Sync {
         range: &KeyRange,
         after: Option<RowId>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<(RowId, Row)>, ExecutionError>;
 }
 
@@ -48,7 +79,7 @@ pub struct IndexPage {
 /// operation as unsupported.
 pub trait IndexAccess {
     /// One page of a scan of index `index`: up to `limit` entries matching `bounds` that are
-    /// visible at `snapshot_ts`, in `direction`, after the position `resume` of the previous
+    /// visible in `view`, in `direction`, after the position `resume` of the previous
     /// page. `fields` are the key and covered fields the caller reads; a field the index does
     /// not hold is an error (plans read other fields through a row fetch).
     ///
@@ -63,22 +94,22 @@ pub trait IndexAccess {
         fields: &[FieldId],
         resume: Option<&[u8]>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<IndexPage, ExecutionError> {
-        let _ = (index, bounds, direction, fields, resume, limit, snapshot_ts);
+        let _ = (index, bounds, direction, fields, resume, limit, view);
         Err(ExecutionError::DataSource(
             "this data source has no indexes".into(),
         ))
     }
 
-    /// The rows `row_ids` (in ascending order) as of `snapshot_ts`, in the same order; `None`
+    /// The rows `row_ids` (in ascending order) as seen by `view`, in the same order; `None`
     /// for a row that is not visible. Implementations visit each storage page once.
     fn fetch_rows(
         &self,
         row_ids: &[RowId],
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<Option<Row>>, ExecutionError> {
-        let _ = (row_ids, snapshot_ts);
+        let _ = (row_ids, view);
         Err(ExecutionError::DataSource(
             "this data source cannot fetch rows in batches".into(),
         ))

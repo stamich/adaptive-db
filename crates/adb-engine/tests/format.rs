@@ -3,7 +3,10 @@ mod common;
 
 use adb_core::RowId;
 use adb_engine::{
-    format::{detect, DATA_FORMAT_VERSION, FORMAT_FILE, LEGACY_DATA_FORMAT_VERSION},
+    format::{
+        detect, stamp, DATA_FORMAT_VERSION, FORMAT_FILE, LEGACY_DATA_FORMAT_VERSION,
+        UPGRADABLE_DATA_FORMAT_VERSION,
+    },
     Database, DbError,
 };
 use common::{put, value};
@@ -67,4 +70,37 @@ fn damaged_markers_are_corruption() {
     std::fs::write(dir.path().join(FORMAT_FILE), b"garbage").unwrap();
     let error = Database::open(dir.path()).err().expect("damaged marker");
     assert!(error.is_corruption(), "{error:?}");
+}
+
+/// A 2.3.0 directory (format 2) is upgraded in place on open: its rows read unchanged, and the
+/// marker moves to format 3 so a 2.3.0 engine no longer opens it.
+#[test]
+fn format_two_directories_are_upgraded_in_place() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        put(&db, RowId::from_primary_key(1, 5), 11);
+        db.close().unwrap();
+    }
+    stamp(dir.path(), UPGRADABLE_DATA_FORMAT_VERSION).unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(value(&db, RowId::from_primary_key(1, 5)), Some(11));
+    assert_eq!(
+        detect(dir.path(), &dir.path().join("wal")).unwrap(),
+        Some(DATA_FORMAT_VERSION)
+    );
+}
+
+/// A directory of a newer format than this engine knows is refused, not reinterpreted.
+#[test]
+fn newer_formats_are_refused() {
+    let dir = tempdir().unwrap();
+    Database::open(dir.path()).unwrap();
+    stamp(dir.path(), DATA_FORMAT_VERSION + 1).unwrap();
+    match Database::open(dir.path()).err() {
+        Some(DbError::IncompatibleFormat { found, .. }) => {
+            assert_eq!(found, DATA_FORMAT_VERSION + 1)
+        }
+        other => panic!("unexpected {other:?}"),
+    }
 }

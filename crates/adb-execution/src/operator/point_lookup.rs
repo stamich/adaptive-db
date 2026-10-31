@@ -54,7 +54,7 @@ impl Operator for PointLookupOperator {
 
         Ok(self
             .source
-            .point_lookup(self.row_id, context.snapshot_ts)?
+            .point_lookup(self.row_id, context.read_view())?
             .map(|row| {
                 vec![ExecRow::from_stored(
                     self.row_id,

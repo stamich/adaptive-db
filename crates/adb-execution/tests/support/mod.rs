@@ -9,7 +9,7 @@ use std::sync::{
 use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, Value};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
-    RecordBatch, ScanColumn, SlotId,
+    ReadView, RecordBatch, ScanColumn, SlotId,
 };
 use adb_index::{
     entry::{encode_included, encode_index_key, tree_key},
@@ -59,7 +59,7 @@ impl IndexAccess for MemorySource {
         fields: &[FieldId],
         resume: Option<&[u8]>,
         limit: usize,
-        _snapshot_ts: CommitTs,
+        _view: ReadView,
     ) -> Result<IndexPage, ExecutionError> {
         let fail = |message: String| ExecutionError::DataSource(message);
         let definition = self
@@ -116,7 +116,7 @@ impl IndexAccess for MemorySource {
     fn fetch_rows(
         &self,
         row_ids: &[RowId],
-        _snapshot_ts: CommitTs,
+        _view: ReadView,
     ) -> Result<Vec<Option<Row>>, ExecutionError> {
         self.fetches_served.fetch_add(1, Ordering::Relaxed);
         Ok(row_ids
@@ -138,11 +138,7 @@ impl DataSource for MemorySource {
     }
 
     /// Linear search for `row_id`.
-    fn point_lookup(
-        &self,
-        row_id: RowId,
-        _snapshot_ts: CommitTs,
-    ) -> Result<Option<Row>, ExecutionError> {
+    fn point_lookup(&self, row_id: RowId, _view: ReadView) -> Result<Option<Row>, ExecutionError> {
         Ok(self
             .rows
             .iter()
@@ -156,7 +152,7 @@ impl DataSource for MemorySource {
         range: &KeyRange,
         after: Option<RowId>,
         limit: usize,
-        _snapshot_ts: CommitTs,
+        _view: ReadView,
     ) -> Result<Vec<(RowId, Row)>, ExecutionError> {
         self.pages_served.fetch_add(1, Ordering::Relaxed);
         Ok(self

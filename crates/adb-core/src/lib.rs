@@ -12,10 +12,12 @@ pub mod value;
 pub mod version_key;
 
 pub use error::CoreError;
-pub use ids::{CommitTs, FieldId, IndexId, Lsn, PageId, RowId, TupleSlot, TxId};
+pub use ids::{
+    CommitTs, FieldId, IndexId, Lsn, PageId, RowId, SchemaEpoch, SchemaVersion, TupleSlot, TxId,
+};
 pub use key_encoding::{decode_key, encode_key, encode_value, prefix_successor, Direction};
 pub use key_range::KeyRange;
 pub use location::RowLocation;
-pub use row::Row;
-pub use value::Value;
+pub use row::{Row, SCHEMA_VERSION_FIELD};
+pub use value::{Value, ValueType};
 pub use version_key::VersionKey;

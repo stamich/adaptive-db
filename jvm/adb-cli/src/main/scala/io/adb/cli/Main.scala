@@ -1,6 +1,5 @@
 package io.adb.cli
 
-import io.adb.catalog.FileCatalog
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.{AdaptiveDatabase, PlannerFeedbackLog}
 import java.nio.file.Path
@@ -21,12 +20,12 @@ object Main:
     val nativeLib = Path.of(
       sys.env.getOrElse("ADB_NATIVE_LIBRARY", sys.props.getOrElse("adb.native.library", "../target/release/libadb_ffi.so"))
     )
-    val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
     val feedback = new PlannerFeedbackLog(dataDir.resolve("planner-feedback.jsonl"))
-    val db = new AdaptiveDatabase(catalog, native, feedbackLog = Some(feedback))
+    // The engine owns the catalog; a pre-2.4.0 catalog file is imported once.
+    val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")), feedbackLog = Some(feedback))
 
-    println("Adaptive DB 2.3.0 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.4.0 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do

@@ -7,16 +7,24 @@
 //! {"next_cursor":"8589934720",
 //!  "events":[{"tx_id":5,"commit_ts":5,"commit_lsn":"420","cursor_after":"512",
 //!             "changes":[{"entity_id":1,"primary_key":"7","kind":"update",
-//!                         "before":{"fields":{"1":{"Int64":10}}},
-//!                         "after":{"fields":{"1":{"Int64":20}}}}]}]}
+//!                         "schema_version":2,
+//!                         "before":{"fields":{"1":{"Int64":10}},"schema_version":1},
+//!                         "after":{"fields":{"1":{"Int64":20}},"schema_version":2}}]}]}
 //! ```
 //!
 //! Log positions (`u64`) and primary keys (`i64`, the SQL value) are decimal strings.
+//!
+//! Since ABI 7 every row change carries `schema_version` (0 for rows written without a schema;
+//! rows are delivered as stored), and DDL appears in `changes` too, before the row changes of
+//! its transaction: `{"entity_id":1,"kind":"schema","epoch":3,"schema":{...}}` for a new schema
+//! version (the document of `adb_schema_history_json`) and
+//! `{"entity_id":1,"kind":"drop_table","epoch":4}` for a dropped table. Consumers dispatch on
+//! `kind`; index DDL is not part of the feed.
 
 use std::slice;
 
 use adb_core::Lsn;
-use adb_engine::{ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind};
+use adb_engine::{CatalogChange, ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind};
 use serde_json::{json, Value};
 
 use crate::{
@@ -157,7 +165,7 @@ fn event_json(event: &ChangeEvent) -> Value {
         "commit_ts": event.commit_ts.0,
         "commit_lsn": event.commit_lsn.0.to_string(),
         "cursor_after": event.cursor_after.0 .0.to_string(),
-        "changes": event.changes.iter().map(|change| json!({
+        "changes": event.catalog.iter().map(catalog_json).chain(event.changes.iter().map(|change| json!({
             "entity_id": change.entity_id(),
             "primary_key": change.primary_key().to_string(),
             "kind": match change.kind {
@@ -165,8 +173,26 @@ fn event_json(event: &ChangeEvent) -> Value {
                 ChangeKind::Update => "update",
                 ChangeKind::Delete => "delete",
             },
+            "schema_version": change.schema_version.0,
             "before": change.before,
             "after": change.after,
-        })).collect::<Vec<_>>(),
+        }))).collect::<Vec<_>>(),
     })
+}
+
+/// JSON form of one catalog change (see the module documentation).
+fn catalog_json(change: &CatalogChange) -> Value {
+    match change {
+        CatalogChange::Schema { epoch, schema } => json!({
+            "entity_id": schema.entity_id,
+            "kind": "schema",
+            "epoch": epoch.0,
+            "schema": schema,
+        }),
+        CatalogChange::DropEntity { epoch, entity_id } => json!({
+            "entity_id": entity_id,
+            "kind": "drop_table",
+            "epoch": epoch.0,
+        }),
+    }
 }

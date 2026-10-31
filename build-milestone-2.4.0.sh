@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Milestone 2.3.0 validation.
+# Milestone 2.4.0 validation.
 #
 # Rust (cargo) and the Java FFM smoke test need only cargo + JDK 22. The Scala/JVM part uses the
 # Gradle wrapper in jvm/ (or a Gradle 9 on PATH) and needs access to Maven Central; it is skipped
@@ -22,10 +22,10 @@ echo "== Rust: release build, relational demo, migration tool, data-plane benchm
 cargo build --release -p adb-ffi -p adb-migrate
 cargo run --release -p adb-rust-demo
 cargo run --release -p adb-benchmark-rust -- --rows 5000 --iters 1000 --groups 100 \
-  --nested-rows 1000 --relational-iters 5 --output examples/results/2.3.0-rust-local.json
+  --nested-rows 1000 --relational-iters 5 --output examples/results/2.4.0-rust-local.json
 ./scripts/benchmark-db.sh
 
-echo "== Java FFM -> C ABI v6 -> engine smoke test (incl. ANALYZE, statistics and indexes)"
+echo "== Java FFM -> C ABI v7 -> engine smoke test (incl. ANALYZE, statistics, indexes and schemas)"
 ./examples/jvm-cdc-smoke/run.sh
 
 if [[ -x jvm/gradlew ]]; then GRADLE=(./gradlew); elif command -v gradle >/dev/null; then GRADLE=(gradle); else GRADLE=(); fi
@@ -34,10 +34,10 @@ if (( ${#GRADLE[@]} )); then
   (cd jvm && "${GRADLE[@]}" clean test)
   (cd jvm && "${GRADLE[@]}" :adb-benchmark:run --args='--iterations 1000')
   ./scripts/benchmark-ffi.sh
-  python3 scripts/check-benchmarks.py examples/results/2.3.0-database.json examples/results/2.3.0-ffi.json
+  python3 scripts/check-benchmarks.py examples/results/2.4.0-database.json examples/results/2.4.0-ffi.json
   ./demo/run-demo.sh
 else
   echo "== SKIPPED Scala/JVM tests, FFI benchmark and demo: neither jvm/gradlew nor gradle found"
 fi
 
-echo "Milestone 2.3.0 validation completed."
+echo "Milestone 2.4.0 validation completed."

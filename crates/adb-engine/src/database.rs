@@ -31,19 +31,20 @@ use std::{
 };
 
 use adb_core::encode_key;
-use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId};
+use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
-    QueryCursor,
+    QueryCursor, ReadView,
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
+use adb_schema::{CatalogEvent, EntitySchema, EntitySpec, SchemaChange, SchemaRegistry};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
     Checkpoint, CheckpointStore, Checkpointable, HistoricalVersion, IntegrityReport, StorageStats,
 };
-use adb_tx::{validate, IsolationLevel, Transaction, TransactionManager};
+use adb_tx::{validate, IsolationLevel, Mutation, Transaction, TransactionManager};
 use adb_wal::earliest_lsn;
 use parking_lot::{Mutex, RwLock};
 
@@ -58,6 +59,7 @@ use crate::{
     projection::Projection,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
+    schema_registry::registry_path,
     statistics::{modifications_path, ModificationCounters, StatisticsStore},
     DatabaseOptions, DbError,
 };
@@ -177,7 +179,8 @@ impl Database {
     ///
     /// The modification counters are recounted from the log too; statistics documents are
     /// kept (they describe a snapshot, not the store). Index projections are derived data and
-    /// are rebuilt as well; the index catalog (their definitions) is kept.
+    /// are rebuilt as well; the index catalog (their definitions) is kept. The schema registry
+    /// is rebuilt from the catalog records of the log.
     pub fn rebuild_projections(
         path: impl AsRef<Path>,
         options: DatabaseOptions,
@@ -211,6 +214,7 @@ impl Database {
             dir.join(JOURNAL_FILE),
             dir.join("checkpoint.journal.tmp"),
             modifications_path(dir),
+            registry_path(dir),
         ] {
             if path.exists() {
                 fs::remove_file(path)?;
@@ -231,8 +235,11 @@ impl Database {
         self.inner.tx_manager.lock().begin(isolation)
     }
 
-    /// Reads a row inside `tx`: its own writes first, then its snapshot. The read is recorded
-    /// for serializable validation.
+    /// Reads a row inside `tx`: its own writes first, then its snapshot (through the latest
+    /// schema, like [`Database::get_at`]). The read is recorded for serializable validation.
+    ///
+    /// Because the row comes back at the latest version, writing it back after a change stores
+    /// it at that version: this is how rows migrate lazily, one update at a time.
     pub fn get_in_tx(&self, tx: &mut Transaction, row_id: RowId) -> Result<Option<Row>, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
@@ -302,13 +309,20 @@ impl Database {
         self.get_at(row_id, self.latest_committed_ts())
     }
 
-    /// State of a row at snapshot `ts`.
+    /// State of a row at snapshot `ts`, read through the latest schema of its entity (a row
+    /// written under an older version is adapted: virtual defaults, dropped fields hidden).
+    /// Rows of entities without a schema are returned as stored; [`Database::history`] returns
+    /// stored rows.
     pub fn get_at(&self, row_id: RowId, ts: CommitTs) -> Result<Option<Row>, DbError> {
         self.inner.health.check()?;
-        Ok(self.inner.projections.read().get_at(row_id, ts)?)
+        let projections = self.inner.projections.read();
+        Ok(projections
+            .get_at(row_id, ts)?
+            .map(|row| projections.registry().adapt(row_id.entity_id(), row, None)))
     }
 
-    /// Every version of a row, oldest first; the current one has an open end.
+    /// Every stored version of a row, oldest first, as written (not adapted); the current one
+    /// has an open end.
     pub fn history(&self, row_id: RowId) -> Result<Vec<HistoricalVersion>, DbError> {
         self.inner.health.check()?;
         Ok(self.inner.projections.read().history(row_id)?)
@@ -317,6 +331,30 @@ impl Database {
     /// Latest commit visible to new snapshots.
     pub fn latest_committed_ts(&self) -> CommitTs {
         self.inner.tx_manager.lock().latest_committed_ts()
+    }
+
+    /// Runs a plan made at catalog epoch `schema_epoch` (plan wire v4) at `snapshot` (the latest
+    /// when `None`). Fails with [`ExecutionError::SchemaChanged`] before running anything when
+    /// the epoch is not the current one; otherwise the query reads through the schemas of that
+    /// epoch even if DDL commits while it runs.
+    pub fn execute_planned(
+        &self,
+        plan: PhysicalPlan,
+        schema_epoch: SchemaEpoch,
+        snapshot: Option<CommitTs>,
+    ) -> Result<QueryCursor, DbError> {
+        self.inner.health.check()?;
+        let current = self.schema_epoch();
+        if current != schema_epoch {
+            return Err(DbError::Execution(ExecutionError::SchemaChanged {
+                planned: schema_epoch.0,
+                current: current.0,
+            }));
+        }
+        let snapshot_ts = snapshot.unwrap_or_else(|| self.latest_committed_ts());
+        let mut context = ExecutionContext::new(snapshot_ts);
+        context.schema_epoch = Some(schema_epoch);
+        Ok(Executor::execute(Arc::new(self.clone()), plan, context)?)
     }
 
     /// Runs a physical plan at the latest snapshot.
@@ -331,11 +369,11 @@ impl Database {
         snapshot_ts: CommitTs,
     ) -> Result<QueryCursor, DbError> {
         self.inner.health.check()?;
-        Ok(Executor::execute(
-            Arc::new(self.clone()),
-            plan,
-            ExecutionContext::new(snapshot_ts),
-        )?)
+        // The query reads through the schemas current when it starts, whatever DDL commits
+        // while it runs.
+        let mut context = ExecutionContext::new(snapshot_ts);
+        context.schema_epoch = Some(self.schema_epoch());
+        Ok(Executor::execute(Arc::new(self.clone()), plan, context)?)
     }
 
     // ----- change data capture --------------------------------------------------------------
@@ -407,6 +445,8 @@ impl Database {
         let mut statistics = adb_stats::analyze(self, entity_id, snapshot, options)?;
         statistics.modifications_at_analyze = modifications;
         statistics.indexes = self.index_statistics(entity_id, snapshot)?;
+        // The scan read rows through the latest schema (see `DataSource::scan_page`).
+        statistics.schema_version = self.schema(entity_id).map_or(0, |schema| schema.version.0);
         self.inner.statistics.save(statistics.clone())?;
         Ok(statistics)
     }
@@ -511,6 +551,7 @@ impl Database {
         self.inner.health.check()?;
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
+        check_index_columns(self.inner.projections.read().registry(), &spec)?;
         let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
         let lsn = self.inner.log.end()?;
         let definition = self.inner.projections.write().build_index(
@@ -519,6 +560,8 @@ impl Database {
             lsn,
             self.inner.options.buffer_pages,
         )?;
+        // Plans made before the index existed must be planned again (they may now use it).
+        self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         // If the build cannot be published, the failed checkpoint poisons the instance and the
         // next open starts without the index.
         self.checkpoint_locked()?;
@@ -538,6 +581,8 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        // Plans that scan the index must be planned again.
+        self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         self.checkpoint_locked()?;
         if files.exists() {
             fs::remove_dir_all(files)?;
@@ -564,6 +609,223 @@ impl Database {
                 }
             })
             .collect()
+    }
+
+    // ----- schemas ----------------------------------------------------------------------------
+
+    /// The current catalog epoch: it moves with every change that can invalidate a plan.
+    pub fn schema_epoch(&self) -> SchemaEpoch {
+        self.inner.projections.read().registry().epoch()
+    }
+
+    /// The latest schema of the live entity `entity_id` (`None` for an entity without a
+    /// registered schema: its rows are stored as written, without validation).
+    pub fn schema(&self, entity_id: u64) -> Option<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .latest(entity_id)
+            .cloned()
+    }
+
+    /// The latest schema of the live entity named `name` (case-insensitive).
+    pub fn schema_by_name(&self, name: &str) -> Option<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .by_name(name)
+            .cloned()
+    }
+
+    /// The latest schema of every live entity, in id order.
+    pub fn schemas(&self) -> Vec<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .entities()
+            .cloned()
+            .collect()
+    }
+
+    /// The catalog epoch and the latest schema of every live entity, read under one lock so
+    /// the schemas are exactly those of that epoch (what a planner caches as its catalog).
+    pub fn catalog_snapshot(&self) -> (SchemaEpoch, Vec<Arc<EntitySchema>>) {
+        let projections = self.inner.projections.read();
+        let registry = projections.registry();
+        (registry.epoch(), registry.entities().cloned().collect())
+    }
+
+    /// Creates an entity (`CREATE TABLE`) and returns its version 1.
+    ///
+    /// The engine assigns the entity id (unless an imported catalog names one) and the field
+    /// ids, validates the definition and its foreign-key hints, and commits a catalog
+    /// transaction: the schema is durable in the log before it is visible, and every data
+    /// commit after it is validated against it.
+    pub fn create_entity(&self, spec: EntitySpec) -> Result<Arc<EntitySchema>, DbError> {
+        let entity_id = self.commit_catalog(|projections, epoch| {
+            let registry = projections.registry();
+            let entity_id = spec.entity_id.unwrap_or(registry.next_entity_id());
+            if registry.history(entity_id).is_some() {
+                return Err(DbError::InvalidArgument(format!(
+                    "entity id {entity_id} is already used"
+                )));
+            }
+            let schema = adb_schema::create(&spec, entity_id, epoch)?;
+            check_references(registry, &schema)?;
+            Ok((CatalogEvent::Schema(schema), entity_id))
+        })?;
+        Ok(self.schema(entity_id).expect("just created"))
+    }
+
+    /// Applies one `ALTER TABLE` change to the live entity `entity_id` and returns the new
+    /// version. Nothing is rewritten: rows keep the version they were written under and are
+    /// adapted when read.
+    ///
+    /// `DROP COLUMN` is RESTRICT: it is refused while the field is the primary key or a key or
+    /// covered column of an index (index keys must stay readable for every stored row).
+    pub fn alter_entity(
+        &self,
+        entity_id: u64,
+        change: &SchemaChange,
+    ) -> Result<Arc<EntitySchema>, DbError> {
+        self.commit_catalog(|projections, epoch| {
+            let registry = projections.registry();
+            let current = registry
+                .latest(entity_id)
+                .ok_or_else(|| DbError::EntityNotFound(entity_id.to_string()))?;
+            if let SchemaChange::DropField { name } = change {
+                check_drop_field(projections, current, name)?;
+            }
+            let next = adb_schema::apply(current, change, epoch)?;
+            check_references(registry, &next)?;
+            Ok((CatalogEvent::Schema(next), ()))
+        })?;
+        Ok(self.schema(entity_id).expect("just altered"))
+    }
+
+    /// Drops the live entity `entity_id` (`DROP TABLE`); returns its last version. Refused
+    /// (RESTRICT) while indexes exist on it or another live entity holds a foreign-key hint to
+    /// it. Its rows stay in storage but are no longer reachable through the catalog, and its id
+    /// is never reused.
+    pub fn drop_entity(&self, entity_id: u64) -> Result<Arc<EntitySchema>, DbError> {
+        let dropped = self
+            .schema(entity_id)
+            .ok_or_else(|| DbError::EntityNotFound(entity_id.to_string()))?;
+        self.commit_catalog(|projections, _| {
+            if projections.registry().latest(entity_id).is_none() {
+                return Err(DbError::EntityNotFound(entity_id.to_string()));
+            }
+            let indexes: Vec<String> = projections
+                .catalog()
+                .definitions()
+                .iter()
+                .filter(|definition| definition.entity_id == entity_id)
+                .map(|definition| definition.name.clone())
+                .collect();
+            if !indexes.is_empty() {
+                return Err(DbError::InvalidArgument(format!(
+                    "cannot drop table {}: indexes {} depend on it (drop them first)",
+                    dropped.name,
+                    indexes.join(", ")
+                )));
+            }
+            let referencing: Vec<String> = projections
+                .registry()
+                .entities()
+                .filter(|schema| schema.entity_id != entity_id)
+                .flat_map(|schema| {
+                    schema
+                        .active_fields()
+                        .filter(|field| field.references.is_some_and(|r| r.entity_id == entity_id))
+                        .map(|field| format!("{}.{}", schema.name, field.name))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            if !referencing.is_empty() {
+                return Err(DbError::InvalidArgument(format!(
+                    "cannot drop table {}: column {} (foreign-key hint) depends on it",
+                    dropped.name,
+                    referencing.join(", ")
+                )));
+            }
+            Ok((CatalogEvent::DropEntity { entity_id }, ()))
+        })?;
+        Ok(dropped)
+    }
+
+    /// Commits one catalog transaction: `build` sees the projections (registry and index
+    /// catalog) and the epoch the change will publish and returns the event (plus a value for the caller). The event is validated
+    /// against a copy of the registry before anything is logged, so a refused change leaves no
+    /// trace and never poisons the instance.
+    fn commit_catalog<T>(
+        &self,
+        build: impl FnOnce(&Projections, SchemaEpoch) -> Result<(CatalogEvent, T), DbError>,
+    ) -> Result<T, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.commit_catalog_locked(build)
+    }
+
+    /// Body of [`Database::commit_catalog`]; the caller holds the commit lock.
+    fn commit_catalog_locked<T>(
+        &self,
+        build: impl FnOnce(&Projections, SchemaEpoch) -> Result<(CatalogEvent, T), DbError>,
+    ) -> Result<T, DbError> {
+        self.inner.health.check()?;
+        let (epoch, event, value) = {
+            let projections = self.inner.projections.read();
+            let registry = projections.registry();
+            let epoch = SchemaEpoch(registry.epoch().0 + 1);
+            let (event, value) = build(&projections, epoch)?;
+            let mut probe = SchemaRegistry::from_state(registry.state().clone())?;
+            probe.apply(epoch, &event)?;
+            (epoch, event, value)
+        };
+        let (tx_id, snapshot_ts, commit_ts) = {
+            let mut tx_manager = self.inner.tx_manager.lock();
+            let tx = tx_manager.begin(IsolationLevel::Serializable);
+            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit_ts())
+        };
+        let committed = CommittedTx {
+            tx_id,
+            snapshot_ts,
+            commit_ts,
+            before_images: Vec::new(),
+            mutations: Vec::new(),
+            catalog: vec![(epoch, event)],
+        };
+        let end = self
+            .inner
+            .health
+            .guard(|| {
+                let appended = self.inner.log.append(&committed.to_records())?;
+                self.inner
+                    .projections
+                    .write()
+                    .apply(&committed, appended.commit_lsn)?;
+                Ok(appended.end)
+            })
+            .map_err(DbError::CommitOutcomeUnknown)?;
+        self.inner
+            .health
+            .guard(|| Ok(self.inner.log.sync_through(end)?))
+            .map_err(DbError::CommitOutcomeUnknown)?;
+        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        Ok(value)
+    }
+
+    /// Every version of entity `entity_id` (live or dropped), oldest first.
+    pub fn schema_history(&self, entity_id: u64) -> Vec<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .history(entity_id)
+            .map(|history| history.versions.clone())
+            .unwrap_or_default()
     }
 
     // ----- maintenance ----------------------------------------------------------------------
@@ -667,8 +929,26 @@ impl Database {
     /// Validates `tx` and builds what its commit will write. Caller holds the commit lock.
     fn prepare(&self, tx: &Transaction) -> Result<CommittedTx, DbError> {
         let projections = self.inner.projections.read();
+        // Rows of entities with a schema are brought to its latest version and validated: the
+        // engine, not the caller, decides what a valid row is.
+        let mut mutations = Vec::with_capacity(tx.writes().len());
+        for (row_id, mutation) in tx.writes() {
+            mutations.push((
+                *row_id,
+                match mutation {
+                    Mutation::Put(row) => {
+                        Mutation::Put(projections.registry().prepare_write(*row_id, row.clone())?)
+                    }
+                    Mutation::Delete => Mutation::Delete,
+                },
+            ));
+        }
         // Rows that cannot be indexed are refused here, before anything is logged.
-        projections.check(tx.writes().iter())?;
+        projections.check(
+            mutations
+                .iter()
+                .map(|(row_id, mutation)| (row_id, mutation)),
+        )?;
         let mut before = Vec::with_capacity(tx.writes().len());
         for row_id in tx.writes().keys() {
             before.push((*row_id, projections.current(*row_id)?));
@@ -701,11 +981,8 @@ impl Database {
                     })
                 })
                 .collect(),
-            mutations: tx
-                .writes()
-                .iter()
-                .map(|(row_id, mutation)| (*row_id, mutation.clone()))
-                .collect(),
+            mutations,
+            catalog: Vec::new(),
         })
     }
 
@@ -725,32 +1002,48 @@ impl DataSource for Database {
         Database::latest_committed_ts(self)
     }
 
-    /// Snapshot read of one row for `PointLookup`.
-    fn point_lookup(
-        &self,
-        row_id: RowId,
-        snapshot_ts: CommitTs,
-    ) -> Result<Option<Row>, ExecutionError> {
-        self.get_at(row_id, snapshot_ts)
-            .map_err(|error| ExecutionError::DataSource(error.to_string()))
+    /// Snapshot read of one row for `PointLookup`, through the schemas of the view.
+    fn point_lookup(&self, row_id: RowId, view: ReadView) -> Result<Option<Row>, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        let projections = self.inner.projections.read();
+        let row = projections
+            .get_at(row_id, view.snapshot_ts)
+            .map_err(|error| to_execution(error.into()))?;
+        Ok(row.map(|row| {
+            projections
+                .registry()
+                .adapt(row_id.entity_id(), row, view.schema_epoch)
+        }))
     }
 
-    /// Page of a range scan; merges the version index when the snapshot predates the vacuum horizon.
+    /// Page of a range scan; merges the version index when the snapshot predates the vacuum
+    /// horizon; rows are adapted to the schemas of the view.
     fn scan_page(
         &self,
         range: &KeyRange,
         after: Option<RowId>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<(RowId, Row)>, ExecutionError> {
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
-        let include_history = snapshot_ts.0 < self.inner.vacuumed_through.load(Ordering::Acquire);
-        self.inner
-            .projections
-            .read()
-            .scan_page(range, after, limit, snapshot_ts, include_history)
-            .map_err(|error| to_execution(error.into()))
+        let include_history =
+            view.snapshot_ts.0 < self.inner.vacuumed_through.load(Ordering::Acquire);
+        let projections = self.inner.projections.read();
+        let page = projections
+            .scan_page(range, after, limit, view.snapshot_ts, include_history)
+            .map_err(|error| to_execution(error.into()))?;
+        let registry = projections.registry();
+        Ok(page
+            .into_iter()
+            .map(|(row_id, row)| {
+                (
+                    row_id,
+                    registry.adapt(row_id.entity_id(), row, view.schema_epoch),
+                )
+            })
+            .collect())
     }
 }
 
@@ -765,8 +1058,9 @@ impl IndexAccess for Database {
         fields: &[FieldId],
         resume: Option<&[u8]>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<IndexPage, ExecutionError> {
+        let snapshot_ts = view.snapshot_ts;
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
         let projections = self.inner.projections.read();
@@ -842,19 +1136,27 @@ impl IndexAccess for Database {
         })
     }
 
-    /// Rows at a snapshot, one descent per leaf of the primary index.
+    /// Rows at a snapshot, one descent per leaf of the primary index, adapted to the schemas of
+    /// the view.
     fn fetch_rows(
         &self,
         row_ids: &[RowId],
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<Option<Row>>, ExecutionError> {
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
-        self.inner
-            .projections
-            .read()
-            .get_many_at(row_ids, snapshot_ts)
-            .map_err(|error| to_execution(error.into()))
+        let projections = self.inner.projections.read();
+        let rows = projections
+            .get_many_at(row_ids, view.snapshot_ts)
+            .map_err(|error| to_execution(error.into()))?;
+        let registry = projections.registry();
+        Ok(row_ids
+            .iter()
+            .zip(rows)
+            .map(|(row_id, row)| {
+                row.map(|row| registry.adapt(row_id.entity_id(), row, view.schema_epoch))
+            })
+            .collect())
     }
 }
 
@@ -864,4 +1166,102 @@ enum Position {
     Key(usize),
     /// Covered column at this position.
     Included(usize),
+}
+
+/// RESTRICT check of `DROP COLUMN name` of `schema`: refused while an index uses the field as a
+/// key or covered column. (The primary key and unknown names are refused by `adb_schema::apply`.)
+fn check_drop_field(
+    projections: &Projections,
+    schema: &EntitySchema,
+    name: &str,
+) -> Result<(), DbError> {
+    let Some(field) = schema.field(name) else {
+        return Ok(());
+    };
+    let users: Vec<String> = projections
+        .catalog()
+        .definitions()
+        .iter()
+        .filter(|definition| definition.entity_id == schema.entity_id)
+        .filter_map(|definition| {
+            if definition.columns.iter().any(|c| c.field_id == field.id) {
+                Some(format!("index {} (key column)", definition.name))
+            } else if definition.include.contains(&field.id) {
+                Some(format!("index {} (covered column)", definition.name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if users.is_empty() {
+        return Ok(());
+    }
+    Err(DbError::InvalidArgument(format!(
+        "cannot drop column {}.{}: {} depends on it (drop the index first)",
+        schema.name,
+        field.name,
+        users.join(", ")
+    )))
+}
+
+/// Checks that an index of an entity with a schema names only its live, active fields (or the
+/// system field 0). Entities without a schema are not checked: their fields are not declared.
+fn check_index_columns(registry: &SchemaRegistry, spec: &IndexSpec) -> Result<(), DbError> {
+    let Some(history) = registry.history(spec.entity_id) else {
+        return Ok(());
+    };
+    let Some(schema) = registry.latest(spec.entity_id) else {
+        let name = history.versions.last().map_or("?", |s| s.name.as_str());
+        return Err(DbError::EntityNotFound(format!(
+            "{name} (dropped; index {})",
+            spec.name
+        )));
+    };
+    let fields = spec
+        .columns
+        .iter()
+        .map(|column| column.field_id)
+        .chain(spec.include.iter().copied());
+    for field_id in fields {
+        let active = field_id == adb_schema::SYSTEM_ENTITY_FIELD
+            || schema
+                .field_by_id(field_id)
+                .is_some_and(|field| field.is_active_in(schema.version));
+        if !active {
+            return Err(DbError::InvalidArgument(format!(
+                "index {}: field {field_id} is not a column of {} (unknown or dropped)",
+                spec.name, schema.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Checks the foreign-key hints of `schema`: each names the primary key of a live entity (or of
+/// `schema` itself) with the same type.
+fn check_references(registry: &SchemaRegistry, schema: &EntitySchema) -> Result<(), DbError> {
+    for field in schema.active_fields() {
+        let Some(reference) = field.references else {
+            continue;
+        };
+        let target = if reference.entity_id == schema.entity_id {
+            Some(schema)
+        } else {
+            registry.latest(reference.entity_id).map(|t| &**t)
+        };
+        let Some(target) = target else {
+            return Err(DbError::InvalidArgument(format!(
+                "{} references unknown entity {}",
+                field.name, reference.entity_id
+            )));
+        };
+        let pk = target.primary_key_field();
+        if reference.field_id != pk.id || pk.value_type != field.value_type {
+            return Err(DbError::InvalidArgument(format!(
+                "{} must reference the primary key of {} with the same type",
+                field.name, target.name
+            )));
+        }
+    }
+    Ok(())
 }

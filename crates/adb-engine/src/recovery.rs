@@ -39,8 +39,8 @@ pub(crate) struct Recovered {
     pub modifications: ModificationCounters,
 }
 
-/// Publishes the projections' dirty pages, the index catalog, the modification counters of the
-/// database in `dir` and `checkpoint` atomically.
+/// Publishes the projections' dirty pages, the index catalog, the schema registry, the
+/// modification counters of the database in `dir` and `checkpoint` atomically.
 pub(crate) fn write_checkpoint(
     dir: &Path,
     journal: &Journal,
@@ -50,7 +50,7 @@ pub(crate) fn write_checkpoint(
     checkpoint: &Checkpoint,
 ) -> Result<(), DbError> {
     let mut writes = projections.journal_writes()?;
-    writes.push(projections.catalog_journal_write()?);
+    writes.extend(projections.catalog_journal_writes()?);
     writes.push(modifications.journal_write(dir)?);
     writes.push(store.journal_write(checkpoint)?);
     journal.commit(&writes)?;
@@ -153,6 +153,7 @@ fn tx_id_of(record: &WalRecord) -> u64 {
         | WalRecord::Put { tx_id, .. }
         | WalRecord::Delete { tx_id, .. }
         | WalRecord::Commit { tx_id, .. }
+        | WalRecord::Catalog { tx_id, .. }
         | WalRecord::Abort { tx_id } => tx_id.0,
     }
 }

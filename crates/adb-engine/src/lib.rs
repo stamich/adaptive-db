@@ -6,6 +6,8 @@
 //!   are rebuildable projections of it.
 //! * [`cdc`] — native change-data capture read directly from the log.
 //! * [`statistics`] — optimizer statistics (`ANALYZE`) and modification counters; derived data.
+//! * [`schema_registry`] — persistence of the schema registry, the projection of the catalog
+//!   records in the log (Milestone 2.4.0).
 pub mod cdc;
 pub mod committed;
 pub mod database;
@@ -20,12 +22,18 @@ pub mod options;
 pub mod projection;
 pub mod projections;
 mod recovery;
+pub mod schema_registry;
 pub mod statistics;
 
 pub use adb_index::{IndexColumn, IndexDefinition, IndexSpec, IndexState};
+pub use adb_schema::{
+    CatalogEvent, EntitySchema, EntitySpec, FieldDef, NewField, SchemaChange, SchemaError,
+};
 pub use adb_stats::{AnalyzeOptions, StatsError, TableStatistics};
 pub use adb_tx::{Conflict, IsolationLevel, Transaction};
-pub use cdc::{ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind, RowChange};
+pub use cdc::{
+    CatalogChange, ChangeBatch, ChangeCursor, ChangeEvent, ChangeFilter, ChangeKind, RowChange,
+};
 pub use database::{Database, IndexStatus, VacuumReport};
 pub use error::DbError;
 pub use migrate::{migrate, migrate_in_place, MigrationReport};

@@ -1,5 +1,7 @@
 //! `adb-migrate`: offline migration of an Adaptive DB directory from data format 1 (engines up
-//! to 2.2.3, raw primary-key bits) to data format 2 (2.3.0, order-preserving primary keys).
+//! to 2.2.3, raw primary-key bits) to the current data format 3 (2.4.0: order-preserving
+//! primary keys, rows stamped with schema versions). Directories of format 2 (2.3.0) need no
+//! migration: the engine upgrades them in place when it opens them.
 //!
 //! ```text
 //! adb-migrate SOURCE TARGET   migrate SOURCE (left unchanged) into the new directory TARGET

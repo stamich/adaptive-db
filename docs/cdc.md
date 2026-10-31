@@ -7,12 +7,22 @@ consumer receives.
 ## Model
 
 * **Event** = one committed transaction: `tx_id`, `commit_ts`, `commit_lsn` (unique, increasing),
-  `cursor_after`, and its row changes in row order.
+  `cursor_after`, its catalog changes (2.4.0) and its row changes in row order.
 * **Row change** = `row_id` (`entity_id`, `primary_key`: the SQL `BIGINT` value, decoded from the
   sign-flipped storage key of data format 2), `kind` (`insert` / `update` / `delete`),
   `before` and `after` images. Images come from the log itself (`Version` before-images and
   `Put` after-images), so no extra reads are needed. Deleting a row that did not exist produces no
-  change.
+  change. Since 2.4.0 each row change also names the `schema_version` its row was written under
+  (of `after`, or of `before` for a delete; 0 for rows without a schema). Images are delivered as
+  stored, never adapted, so a consumer reads them with the schema version they name.
+* **Catalog change** (2.4.0) = a new schema version (`CREATE` or `ALTER TABLE`, with the full
+  schema: every field with its id, type, default and lifetime) or a dropped table, with the catalog
+  epoch it was published at. It comes before the row changes of its transaction (a DDL statement is
+  usually a transaction of its own). Index DDL only moves the epoch and is not part of the feed.
+  The entity filter applies to catalog changes too. Over the C ABI they are entries of `changes`:
+  `{"entity_id":3,"kind":"schema","epoch":7,"schema":{...}}` and
+  `{"entity_id":3,"kind":"drop_table","epoch":8}`; consumers dispatch on `kind`. See
+  [schema.md](schema.md).
 * **Cursor** = a transaction boundary in the log. `ChangeCursor::BEGINNING` (0) is the start;
   `change_feed_end()` is the current durable end ("only new changes").
 
@@ -86,4 +96,5 @@ unsigned longs (`Long.parseUnsignedLong`).
 
 * Push/long-poll subscriptions (consumers poll).
 * Log retention driven by consumer offsets, and archival of old segments.
-* Schema/column names in events (the feed carries field ids; the catalog maps them).
+* Column names inside row images (images carry field ids; the `schema` entries of the feed map
+  them, so a consumer can follow every rename and drop without asking the engine).

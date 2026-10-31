@@ -1,12 +1,15 @@
-# Architecture — Milestone 2.3.0
+# Architecture — Milestone 2.4.0
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
 storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a
 cost-based planner in the JVM. 2.3.0 adds secondary indexes as a third kind of projection, an
-order-preserving key encoding (data format 2), and cost-based access paths. See
+order-preserving key encoding (data format 2), and cost-based access paths. 2.4.0 moves the
+catalog into the engine: versioned schemas are a fourth projection of the log, changed by
+`ALTER TABLE` without rewriting rows. See
 [Query path](#query-path-milestone-21),
-[Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223) and
-[Secondary indexes](#secondary-indexes-milestone-230).
+[Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223),
+[Secondary indexes](#secondary-indexes-milestone-230) and
+[Schema evolution](#schema-evolution-milestone-240).
 
 ## The one decision everything follows from
 
@@ -54,13 +57,14 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
 | `adb-buffer` | **No-steal** page cache; lazy page allocation; dirty pages leave memory only via a checkpoint. |
 | `adb-btree` | One generic `BPlusTree<K: TreeKey>` (get, floor, range scan, insert, remove, journaled persistence). `BTree` and `VersionBTree` are type aliases. |
 | `adb-storage` | Heap with free-space map, current store, version store, checkpoint record v3, integrity check. |
-| `adb-wal` | Segmented log writer, forward `WalCursor` from any record boundary. |
+| `adb-schema` | Versioned entity schemas (2.4.0): changes, validation, `RowAdapter`, `SchemaRegistry`, `CatalogEvent`. |
+| `adb-wal` | Segmented log writer, forward `WalCursor` from any record boundary; catalog records since 2.4.0. |
 | `adb-tx` | Transactions, isolation levels, OCC validation, snapshot registry. Storage-agnostic. |
 | `adb-execution` | Slot-addressed, pull-based operators: scans, filter, project, limit, hash and nested-loop joins, aggregate, sort, TopK; plan validation; query `MemoryTracker`; runtime profiles. |
-| `adb-plan-wire` | Versioned JSON plan wire format (v2): bounded, version-checked, strict decoding plus validation. |
+| `adb-plan-wire` | Versioned JSON plan wire format (v4 since 2.4.0, carrying the catalog epoch): bounded, version-checked, strict decoding plus validation. |
 | `adb-stats` | Optimizer statistics: document model, `ANALYZE` options and limits, collector (exact counts, HyperLogLog, reservoir sample, histograms, most common values). |
 | `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets, `ANALYZE`, statistics store, modification counters. |
-| `adb-ffi` | C ABI v5 (`include/adb.h`). |
+| `adb-ffi` | C ABI v7 (`include/adb.h`). |
 
 ## Write path
 
@@ -70,8 +74,10 @@ Under the **commit lock**:
    `Serializable` (default) also every row *read*. Conflicts abort with no side effects.
 2. **Allocate** a commit timestamp.
 3. **Append** the transaction to the log as one contiguous run
-   `Begin, Version* (before-images), Put/Delete*, Commit` — not yet durable.
-4. **Apply** it to the projections in memory (history first, then current state).
+   `Begin, Version* (before-images), Put/Delete*, Catalog*, Commit` — not yet durable. (Since
+   2.4.0 every `Put` of a table with a schema was first stamped, completed and validated by the
+   schema registry; a DDL statement is a transaction of `Catalog` records alone.)
+4. **Apply** it to the projections in memory (catalog first, then history, then current state).
 
 Outside the lock:
 
@@ -227,6 +233,24 @@ Since data format 2, row ids of BIGINT primary keys use it as well, so primary-k
 storage order and a sequential scan can deliver `ORDER BY id`. The JVM decides when to use an
 index. The engine checks that every scan page is served at the query snapshot. Details:
 [indexes.md](indexes.md), [optimizer.md](optimizer.md#access-paths-230).
+
+## Schema evolution (Milestone 2.4.0)
+
+```text
+ DDL ─► commit_catalog (commit lock): build event ─► apply to a copy of the registry ─► log Catalog record
+                                      ─► SchemaRegistry (projection) ─► checkpoint: schema/registry.meta
+ writes ─► prepare_write: stamp latest version, fill defaults, check ─► Put
+ reads  ─► RowAdapter(row version → version at the read view's epoch) ─► scans, lookups, indexes, ANALYZE
+ plans  ─► plan wire v4 {schema_epoch} ─► execute_planned refuses another epoch (SCHEMA_CHANGED)
+ JVM: EngineCatalog (C ABI 7, cached per epoch) ─► Binder ─► planner (SchemaStatistics) ─► gateway replans once
+```
+
+The catalog follows the same decision: schemas are catalog records in the log and the registry
+is a projection, published by the checkpoint journal and rebuilt from the log. DDL is therefore
+transactional and durable together with the rows. Rows keep the version they were written under
+and are adapted when read; nothing is rewritten by `ALTER TABLE`, which costs one log record on
+any table. A query pins the catalog epoch it starts at, so DDL committing meanwhile never changes
+the shape of its rows. Details: [schema.md](schema.md).
 
 ## Control plane
 

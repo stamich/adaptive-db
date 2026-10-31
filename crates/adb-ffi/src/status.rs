@@ -31,6 +31,8 @@ pub enum AdbStatus {
     ArithmeticOverflow = 11,
     /// The database directory uses another data format; migrate it with `adb-migrate` (ABI 6).
     IncompatibleFormat = 12,
+    /// The plan was made at another catalog epoch (plan wire v4); plan it again and retry.
+    SchemaChanged = 13,
     /// Unexpected internal failure or contained panic.
     Internal = 255,
 }

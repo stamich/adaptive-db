@@ -9,6 +9,7 @@ adb-core = { path = "../adb-core" }
 adb-execution = { path = "../adb-execution" }
 adb-index = { path = "../adb-index" }
 adb-journal = { path = "../adb-journal" }
+adb-schema = { path = "../adb-schema" }
 adb-stats = { path = "../adb-stats" }
 adb-storage = { path = "../adb-storage" }
 adb-tx = { path = "../adb-tx" }

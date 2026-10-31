@@ -1,6 +1,6 @@
 package io.adb.gateway
 
-import io.adb.catalog.{Catalog, IndexCatalog, IndexInfo}
+import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
 import io.adb.model.*
@@ -9,8 +9,10 @@ import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
 import io.adb.optimizer.cost.CostModel
 import io.adb.optimizer.join.JoinReorderRule
 import io.adb.physical.*
+import io.adb.schema.{EntitySpec, IndexDependency, NewField, SchemaHistory}
+import java.nio.file.{Files, Path, StandardCopyOption}
 import io.adb.sql.SqlParser
-import io.adb.statistics.{IndexStatistics, StatisticsCodec, StatisticsProvider}
+import io.adb.statistics.{IndexStatistics, SchemaStatistics, StatisticsCodec, StatisticsProvider}
 import java.util.Optional
 import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters.*
@@ -24,17 +26,22 @@ import scala.jdk.CollectionConverters.*
   * }}}
   *
   * DDL goes to the catalog, single-row DML to the native row API, `ANALYZE` to the engine's
-  * statistics collector, queries through planning. In the default cost mode the planner uses
+  * statistics collector, queries through planning. Since 2.4.0 the catalog is normally the
+  * engine's own ([[AdaptiveDatabase.open]]): every statement first brings the cached schemas up
+  * to the engine's catalog epoch, binds against them and plans with that epoch; a plan the
+  * engine refuses as stale (`SCHEMA_CHANGED`, DDL by another client in between) is bound and
+  * planned once more. In the default cost mode the planner uses
   * the engine's statistics (estimates, join order, build sides); `SET optimizer = rule`
   * switches to the rule-based planning of 2.1.3 (estimates are still shown by EXPLAIN).
   *
-  * @param catalog     schema registry used for binding and DDL
+  * @param catalog     schema registry used for binding and DDL (an [[io.adb.catalog.EngineCatalog]],
+  *                    or a fixed catalog for tools that manage schemas themselves)
   * @param native      open native database handle
   * @param config      cost-based optimizer configuration
   * @param feedbackLog where executed queries' estimated and actual rows are logged, if anywhere
   */
 final class AdaptiveDatabase(
-    catalog: Catalog,
+    val catalog: Catalog,
     native: NativeDatabase,
     config: OptimizerConfig = OptimizerConfig.Default,
     feedbackLog: Option[PlannerFeedbackLog] = None
@@ -63,17 +70,61 @@ final class AdaptiveDatabase(
     */
   def execute(sql: String): QueryResult =
     val ast = parser.parse(sql)
-    val bound = binder.bind(ast)
-    executeBound(bound, sql)
+    try executeOnce(ast, sql)
+    catch
+      case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
+        // The catalog changed between binding and execution (the engine checks before running,
+        // so nothing was returned yet): bind against the new schemas and plan again, once.
+        executeOnce(ast, sql)
 
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
-  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog)
+  def plan(select: BoundSelect): AdaptiveDatabase.Plans = planAt(select, currentEpoch())
+
+  /** Binds and executes one parsed statement at the current catalog epoch. */
+  private def executeOnce(ast: io.adb.sql.Statement, sql: String): QueryResult =
+    val epoch = currentEpoch()
+    executeBound(binder.bind(ast), sql, epoch)
+
+  /** The catalog epoch bound statements are planned with. It is read **before** the schema and
+    * index metadata a plan is built from: if DDL commits in between, the plan carries the older
+    * epoch and the engine refuses it instead of running it against changed tables.
+    */
+  private def currentEpoch(): Long = catalog match
+    case versioned: SchemaCatalog => versioned.ensureCurrent().value
+    case _ => native.currentSchemaEpoch()
+
+  /** Plans a bound SELECT for execution at catalog epoch `epoch`. */
+  private def planAt(select: BoundSelect, epoch: Long): AdaptiveDatabase.Plans =
+    AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog).copy(schemaEpoch = epoch)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
-  private def executeBound(statement: BoundStatement, sql: String): QueryResult = statement match
-    case BoundCreateTable(name, fields, pk, references) =>
-      val entity = catalog.createEntity(name, fields, pk, references)
+  private def executeBound(statement: BoundStatement, sql: String, epoch: Long): QueryResult = statement match
+    case BoundCreateTable(name, fields, pk, references, defaults) =>
+      val entity = catalog match
+        case versioned: SchemaCatalog =>
+          // The binder keys defaults and hints by the column name as declared.
+          versioned.createEntity(
+            EntitySpec(
+              name,
+              fields.map((column, dataType, nullable) => NewField(column, dataType, nullable, defaults.get(column), references.get(column))),
+              pk
+            )
+          )
+        case legacy =>
+          require(defaults.isEmpty, "column defaults need the engine catalog")
+          legacy.createEntity(name, fields, pk, references)
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
+
+    case BoundAlterTable(entity, change) =>
+      val altered = schemaCatalog("ALTER TABLE").alterEntity(entity.id, change)
+      QueryResult(Vector.empty, Vector.empty, Some(s"altered table ${altered.name}: ${change.sql} (schema version ${altered.version.value})"))
+
+    case BoundDropTable(entity) =>
+      schemaCatalog("DROP TABLE").dropEntity(entity.id)
+      QueryResult(Vector.empty, Vector.empty, Some(s"dropped table ${entity.name}"))
+
+    case BoundShowSchema(entity) =>
+      QueryResult(Vector("version", "epoch", "change", "columns"), AdaptiveDatabase.describe(schemaCatalog("SHOW SCHEMA").history(entity.id)))
 
     case BoundCreateIndex(name, entity, columns, include) =>
       val keys = columns.map((field, descending) =>
@@ -120,10 +171,10 @@ final class AdaptiveDatabase(
       val ts = native.delete(entity.id.value, pk)
       QueryResult(Vector.empty, Vector.empty, Some(s"DELETE 1 commitTs=$ts"))
 
-    case select: BoundSelect => run(select, plan(select), sql)._1
+    case select: BoundSelect => run(select, planAt(select, epoch), sql)._1
 
     case BoundExplain(inner: BoundSelect, analyze) =>
-      val plans = plan(inner)
+      val plans = planAt(inner, epoch)
       val analyzed =
         if analyze then
           val (result, profile) = run(inner, plans, sql)
@@ -134,6 +185,11 @@ final class AdaptiveDatabase(
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
 
+  /** The catalog as a versioned one, for statements that need schema evolution. */
+  private def schemaCatalog(statement: String): SchemaCatalog = catalog match
+    case versioned: SchemaCatalog => versioned
+    case _ => throw new IllegalStateException(s"$statement needs the engine catalog (this session uses a fixed catalog)")
+
   /** Executes a planned SELECT: sends the physical plan to the engine as JSON (optionally at an
     * `AS OF` snapshot), materializes the output columns of every batch by slot, records the
     * estimate feedback, and returns the rows together with the native runtime profile.
@@ -141,7 +197,7 @@ final class AdaptiveDatabase(
     * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
     */
   private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans, sql: String): (QueryResult, String) =
-    val json = PlanJsonEncoder.encode(plans.physical.plan)
+    val json = PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch)
     val snapshot: Optional[java.lang.Long] = select.asOfVersion match
       case Some(v) => Optional.of(java.lang.Long.valueOf(v))
       case None => Optional.empty[java.lang.Long]()
@@ -174,6 +230,36 @@ object AdaptiveDatabase:
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
 
+  /** Opens the SQL front door over an open native database with the engine's own catalog.
+    *
+    * A database written before Milestone 2.4.0 keeps its schemas in a JVM catalog file; if
+    * `legacyCatalog` exists it is imported into the engine with the same entity and field ids
+    * (see [[io.adb.catalog.CatalogImport]]) and then renamed to `<name>.imported`, so the import
+    * happens once and the engine catalog is the only one afterwards.
+    *
+    * @param native        open native database
+    * @param legacyCatalog the 2.0–2.3 `catalog.properties` of this database, if any
+    * @param config        cost-based optimizer configuration
+    * @param feedbackLog   where estimate feedback is logged, if anywhere
+    */
+  def open(
+      native: NativeDatabase,
+      legacyCatalog: Option[Path] = None,
+      config: OptimizerConfig = OptimizerConfig.Default,
+      feedbackLog: Option[PlannerFeedbackLog] = None
+  ): AdaptiveDatabase =
+    val indexes = EngineIndexCatalog(native)
+    val catalog = new EngineCatalog(new NativeSchemaBackend(native), () => indexes.indexes.map(dependency))
+    legacyCatalog.filter(Files.exists(_)).foreach { path =>
+      CatalogImport.importInto(catalog, new FileCatalog(path))
+      Files.move(path, path.resolveSibling(path.getFileName.toString + ".imported"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    }
+    new AdaptiveDatabase(catalog, native, config, feedbackLog)
+
+  /** The fields an index depends on, for RESTRICT checks of `DROP COLUMN` and `DROP TABLE`. */
+  def dependency(index: IndexInfo): IndexDependency =
+    IndexDependency(index.id, index.name, index.entity, index.columns.map(_.field), index.include)
+
   /** One `SHOW INDEXES` row: name, table, key columns (`col [DESC]`), covered columns and the
     * range of snapshots the index serves.
     */
@@ -190,6 +276,20 @@ object AdaptiveDatabase:
       java.lang.Long.valueOf(index.watermarkTs)
     )
 
+  /** `SHOW SCHEMA` rows, one per version: version, catalog epoch, the change that produced it
+    * (`CREATE TABLE` for version 1) and the columns it has.
+    */
+  def describe(history: SchemaHistory): Vector[Vector[Any]] =
+    val changes = history.changes.toMap
+    history.versions.map { schema =>
+      Vector[Any](
+        java.lang.Long.valueOf(schema.version.value),
+        java.lang.Long.valueOf(schema.epoch.value),
+        changes.get(schema.version).fold("CREATE TABLE")(_.sql),
+        schema.columnsSql
+      )
+    }
+
   /** The planning stages of one SELECT.
     *
     * @param logical    canonical plan built from the bound statement
@@ -198,6 +298,10 @@ object AdaptiveDatabase:
     * @param mode       optimizer mode used
     * @param statistics statistics status of every entity the query reads, in plan order
     * @param indexes    the indexes of those entities the planner considered (cost mode only)
+    * @param schemaEpoch catalog epoch the plan was made at (sent with the plan; the engine
+    *                    refuses it once the epoch has moved)
+    * @param schema     per table read: its schema version and the columns added after its last
+    *                   `ANALYZE`, whose estimates are derived from their defaults
     */
   final case class Plans(
       logical: LogicalPlan,
@@ -205,7 +309,9 @@ object AdaptiveDatabase:
       physical: PlannedQuery,
       mode: OptimizerMode,
       statistics: Vector[(Entity, StatisticsStatus)],
-      indexes: Vector[IndexReport] = Vector.empty
+      indexes: Vector[IndexReport] = Vector.empty,
+      schemaEpoch: Long = 0,
+      schema: Vector[(Entity, Vector[SchemaStatistics.AddedAfterAnalyze])] = Vector.empty
   )
 
   /** What EXPLAIN reports about one index of an entity the query reads.
@@ -242,7 +348,8 @@ object AdaptiveDatabase:
 
   /** Plans `select`: rule rewrites, then (cost mode) join ordering and cost-based strategies
     * including access paths over `indexes`, or (rule mode) the 2.1.3 rules without indexes;
-    * both annotate the plan with estimates.
+    * both annotate the plan with estimates. Statistics are seen through the current schema:
+    * columns added after `ANALYZE` get statistics derived from their defaults.
     */
   def plan(
       select: BoundSelect,
@@ -252,7 +359,8 @@ object AdaptiveDatabase:
       mode: OptimizerMode,
       indexes: IndexCatalog = IndexCatalog.Empty
   ): Plans =
-    val estimator = new CardinalityEstimator(statistics, catalog, config.estimation)
+    val schemaAware = SchemaStatistics.provider(statistics, catalog.entity)
+    val estimator = new CardinalityEstimator(schemaAware, catalog, config.estimation)
     val costModel = new CostModel(estimator, config)
     val logical = LogicalPlanner.plan(select)
     val rewritten = new RuleOptimizer().optimize(logical)
@@ -281,7 +389,10 @@ object AdaptiveDatabase:
       physical.copy(decisions = orderDecisions ++ physical.decisions),
       mode,
       relations.map(r => r.entity -> estimator.status(r)),
-      reports
+      reports,
+      schema = relations.map(r =>
+        r.entity -> statistics.statistics(r.entity.id).fold(Vector.empty)(s => SchemaStatistics.addedAfterAnalyze(s.table, r.entity))
+      )
     )
 
   /** EXPLAIN sections of a plan: logical, optimized and physical plans (with estimates and
@@ -298,11 +409,17 @@ object AdaptiveDatabase:
           s"- ${entity.name}: ${s.table.rowCount} rows analyzed at ts=${s.table.analyzedAtTs}, ${s.modificationsSinceAnalyze} modifications since (stale)"
     }
     val labels = plans.indexes.map(r => r.info.id -> IndexLabel(r.info.name, r.keyColumns)).toMap
+    val schemaLines = plans.schema.flatMap { (entity, added) =>
+      s"- ${entity.name}: schema version ${entity.schemaVersion.value}" +: added.map("  - " + _.display)
+    }
+    val schemaSection = Option.when(plans.schemaEpoch > 0 || plans.schema.exists(_._2.nonEmpty))(
+      s"Schema (catalog epoch ${plans.schemaEpoch}):\n" + (if schemaLines.isEmpty then "(no tables)" else schemaLines.mkString("\n"))
+    )
     Vector(
       "Logical:\n" + LogicalPlan.render(plans.logical),
       "Optimized:\n" + LogicalPlan.render(plans.optimized),
       s"Physical (optimizer=${plans.mode.toString.toLowerCase}):\n" + Explain.physical(physical.plan, physical.slotNames, physical.estimates, labels),
       "Decisions:\n" + (if physical.decisions.isEmpty then "(none)" else physical.decisions.map("- " + _.display).mkString("\n")),
       "Statistics:\n" + (if statisticsLines.isEmpty then "(no tables)" else statisticsLines.mkString("\n"))
-    ) ++ Option.when(plans.indexes.nonEmpty)("Indexes:\n" + plans.indexes.map(_.display).mkString("\n")) ++
+    ) ++ schemaSection ++ Option.when(plans.indexes.nonEmpty)("Indexes:\n" + plans.indexes.map(_.display).mkString("\n")) ++
       Option.when(physical.warnings.nonEmpty)("Warnings:\n" + physical.warnings.map("- " + _).mkString("\n"))

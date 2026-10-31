@@ -2,6 +2,7 @@ package io.adb.logical
 
 import io.adb.catalog.Catalog
 import io.adb.model.*
+import io.adb.schema.{NewField, SchemaChange}
 import io.adb.sql.*
 import io.adb.sql.SqlExpr.*
 
@@ -30,7 +31,31 @@ final class Binder(catalog: Catalog):
       val references = columns.zip(fields).collect { case (column, (_, tpe, _)) if column.references.isDefined =>
         column.name -> bindReference(name, column.name, tpe, column.references.get)
       }.toMap
-      BoundCreateTable(name, fields, primaryKeys.head.name, references)
+      val defaults = columns.zip(fields).flatMap { case (column, (_, tpe, nullable)) =>
+        column.default.flatMap(defaultFor(column.name, tpe, nullable, _)).map(column.name -> _)
+      }.toMap
+      BoundCreateTable(name, fields, primaryKeys.head.name, references, defaults)
+
+    case AlterTable(table, action) =>
+      val entity = requireEntity(table)
+      val change = action match
+        case AlterAction.AddColumn(column) =>
+          require(entity.field(column.name).isEmpty, s"${entity.name} already has a column ${column.name}")
+          val tpe = DataType.parse(column.dataType).getOrElse(throw new IllegalArgumentException(s"unsupported type ${column.dataType}"))
+          val default = column.default.flatMap(defaultFor(column.name, tpe, column.nullable, _))
+          require(
+            column.nullable || default.isDefined,
+            s"ADD COLUMN ${column.name} NOT NULL needs a DEFAULT: existing rows have no value"
+          )
+          val reference = column.references.map(bindReference(entity.name, column.name, tpe, _))
+          SchemaChange.AddField(NewField(column.name, tpe, column.nullable, default, reference))
+        case AlterAction.RenameColumn(from, to) => SchemaChange.RenameField(requireField(entity, from).name, to)
+        case AlterAction.DropColumn(column) => SchemaChange.DropField(requireField(entity, column).name)
+      BoundAlterTable(entity, change)
+
+    case DropTable(table) => BoundDropTable(requireEntity(table))
+
+    case ShowSchema(table) => BoundShowSchema(requireEntity(table))
 
     case Analyze(table) => BoundAnalyze(table.fold(catalog.entities)(name => Vector(requireEntity(name))))
 
@@ -58,8 +83,9 @@ final class Binder(catalog: Catalog):
         val field = requireField(entity, name)
         field.id -> literalFor(field, expr)
       }.toMap
+      // A NOT NULL column with a DEFAULT may be omitted: the engine fills in the default.
       entity.fields.foreach { field =>
-        if !field.nullable && !resolved.contains(field.id) then
+        if !field.nullable && field.default.isEmpty && !resolved.contains(field.id) then
           throw new IllegalArgumentException(s"missing non-null field ${field.name}")
       }
       BoundInsert(entity, resolved)
@@ -113,6 +139,24 @@ final class Binder(catalog: Catalog):
     if value == DbValue.NullValue then require(field.nullable, s"${field.name} is NOT NULL")
     else require(DbValue.dataType(value).contains(field.dataType), s"type mismatch for ${field.name}")
     value
+
+  /** The value of a `DEFAULT` literal for a column of type `dataType`: `DEFAULT NULL` means no
+    * default (allowed only for nullable columns); any other literal must have the column's type.
+    */
+  private def defaultFor(column: String, dataType: DataType, nullable: Boolean, expr: SqlExpr): Option[DbValue] =
+    val value = expr match
+      case LongLiteral(v) => DbValue.Int64Value(v)
+      case DoubleLiteral(v) => DbValue.Float64Value(v)
+      case StringLiteral(v) => DbValue.StringValue(v)
+      case BoolLiteral(v) => DbValue.BoolValue(v)
+      case NullLiteral => DbValue.NullValue
+      case _ => throw new IllegalArgumentException(s"DEFAULT of $column must be a literal: ${SqlExpr.render(expr)}")
+    if value == DbValue.NullValue then
+      require(nullable, s"$column is NOT NULL and cannot default to NULL")
+      None
+    else
+      require(DbValue.dataType(value).contains(dataType), s"DEFAULT of $column must be a ${dataType.sqlName} literal, got ${SqlExpr.render(expr)}")
+      Some(value)
 
   /** Extracts the key from a `WHERE pk = <BIGINT>` clause (either operand order; the column may
     * be qualified with the table name), the only filter UPDATE and DELETE support.

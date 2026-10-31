@@ -6,11 +6,11 @@ license.workspace = true
 description = "Versioned JSON wire format of Adaptive DB physical plans"
 
 [dependencies]
+adb-core = { path = "../adb-core" }
 adb-execution = { path = "../adb-execution" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-adb-core = { path = "../adb-core" }
 adb-index = { path = "../adb-index" }

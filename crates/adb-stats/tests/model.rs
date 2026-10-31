@@ -17,6 +17,7 @@ fn sample() -> TableStatistics {
         sampled_rows: 100,
         exact: true,
         indexes: Vec::new(),
+        schema_version: 0,
         columns: vec![
             ColumnStatistics {
                 field_id: 1,
@@ -143,5 +144,31 @@ fn format_one_documents_are_read() {
     assert!(
         invalid.validate().is_err(),
         "more distinct prefixes than entries"
+    );
+}
+
+/// Format 3 records the schema version the rows were read through; older formats cannot.
+#[test]
+fn format_three_records_the_schema_version() {
+    let mut current = sample();
+    current.schema_version = 4;
+    let json = serde_json::to_string(&current).unwrap();
+    assert!(json.contains("\"schema_version\":4"));
+    assert_eq!(
+        TableStatistics::from_json(json.as_bytes())
+            .unwrap()
+            .schema_version,
+        4
+    );
+    let mut old = current.clone();
+    old.format_version = 2;
+    let old_json = serde_json::to_string(&old).unwrap();
+    assert!(TableStatistics::from_json(old_json.as_bytes()).is_err());
+    let format_two = old_json.replace(",\"schema_version\":4", "");
+    assert_eq!(
+        TableStatistics::from_json(format_two.as_bytes())
+            .unwrap()
+            .schema_version,
+        0
     );
 }

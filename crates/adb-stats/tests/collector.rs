@@ -1,6 +1,6 @@
 //! `ANALYZE` collector: exact figures, sketches, sampling, limits and determinism.
 use adb_core::{CommitTs, KeyRange, Row, RowId, Value};
-use adb_execution::{DataSource, ExecutionError, IndexAccess};
+use adb_execution::{DataSource, ExecutionError, IndexAccess, ReadView};
 use adb_stats::{analyze, AnalyzeOptions, StatsError, TableStatistics};
 
 /// Entity analyzed by every test.
@@ -24,7 +24,7 @@ impl<F: Fn(u64) -> Row + Send + Sync> DataSource for Synthetic<F> {
     }
 
     /// Generates the row when its key belongs to the entity.
-    fn point_lookup(&self, row_id: RowId, _: CommitTs) -> Result<Option<Row>, ExecutionError> {
+    fn point_lookup(&self, row_id: RowId, _: ReadView) -> Result<Option<Row>, ExecutionError> {
         let pk = row_id.0 as u64;
         Ok(
             (KeyRange::entity(ENTITY).contains(row_id) && pk < self.rows)
@@ -38,7 +38,7 @@ impl<F: Fn(u64) -> Row + Send + Sync> DataSource for Synthetic<F> {
         range: &KeyRange,
         after: Option<RowId>,
         limit: usize,
-        _: CommitTs,
+        _: ReadView,
     ) -> Result<Vec<(RowId, Row)>, ExecutionError> {
         if *range != KeyRange::entity(ENTITY) {
             return Ok(Vec::new());

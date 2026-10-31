@@ -1,5 +1,12 @@
 /*
- * Adaptive DB native C ABI, version 6 (Milestone 2.3.0).
+ * Adaptive DB native C ABI, version 7 (Milestone 2.4.0).
+ *
+ * ABI 7 changes (vs. 6): entity schemas — adb_create_entity_json, adb_alter_entity_json,
+ * adb_drop_entity, adb_list_schemas_json, adb_schema_history_json (see docs/schema.md); writes
+ * to an entity with a schema are validated against it; plans are plan wire v4 documents
+ * ({"wire_version":4,"schema_epoch":N,...}) and a plan of another catalog epoch is refused with
+ * ADB_SCHEMA_CHANGED; adb_current_schema_epoch; statistics documents are format 3 (they record
+ * the schema version; formats 1 and 2 still read); data format 3 (format 2 upgraded on open).
  *
  * ABI 6 changes (vs. 5): secondary indexes — adb_create_index_json, adb_drop_index,
  * adb_list_indexes_json (see docs/indexes.md); plans are plan wire v3 documents
@@ -52,10 +59,11 @@ typedef enum AdbStatus {
     ADB_RESOURCE_LIMIT = 10,      /* query exceeded memory, row, fanout or comparison limits */
     ADB_ARITHMETIC_OVERFLOW = 11, /* exact computation (e.g. INT64 SUM) overflowed */
     ADB_INCOMPATIBLE_FORMAT = 12, /* data directory in another data format: run adb-migrate (ABI 6) */
+    ADB_SCHEMA_CHANGED = 13, /* plan made at another catalog epoch: plan it again (ABI 7) */
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 6
+#define ADB_ABI_VERSION 7
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -66,6 +74,10 @@ AdbStatus adb_open(const uint8_t* path_ptr, size_t path_len, AdbDatabaseHandle**
 /* Checkpoints (best effort) and always releases the handle. */
 AdbStatus adb_close(AdbDatabaseHandle* db);
 AdbStatus adb_latest_committed_ts(AdbDatabaseHandle* db, uint64_t* out_commit_ts);
+/* Current catalog epoch. Plans are plan wire v4 documents carrying the epoch they were made at
+ * ({"wire_version":4,"schema_epoch":N,"plan":{...}}); a plan of another epoch is refused before
+ * it runs (a table or index it was planned against may have changed: plan it again). */
+AdbStatus adb_current_schema_epoch(AdbDatabaseHandle* db, uint64_t* out_epoch);
 
 AdbStatus adb_execute_plan_json(
     AdbDatabaseHandle* db,
@@ -225,6 +237,55 @@ AdbStatus adb_drop_index(AdbDatabaseHandle* db, const uint8_t* name_ptr, size_t 
 
 /* Every index as a JSON buffer {"indexes":[status, ...]} in id order (status as above). */
 AdbStatus adb_list_indexes_json(AdbDatabaseHandle* db, AdbBatchHandle** out_json);
+
+/* ---- entity schemas (ABI 7) ---- */
+
+/*
+ * Creates an entity (CREATE TABLE). spec is a UTF-8 JSON object (at most 1 MiB):
+ *   {"name":"account","entity_id":3,"primary_key":"id","fields":[
+ *     {"name":"id","value_type":"Int64","nullable":false},
+ *     {"name":"balance","value_type":"Int64","nullable":false,"default":{"Int64":0}}]}
+ * entity_id is optional (the engine assigns one). Returns version 1 of the schema as a JSON
+ * buffer: {"entity_id","name","version","parent","epoch","primary_key","next_field_id",
+ * "fields":[{"id","name","value_type","nullable","default","introduced_in","dropped_in",
+ * "references"}, ...]}. Errors: ADB_INVALID_ARGUMENT (malformed or invalid definition, taken
+ * name or id), ADB_RESOURCE_LIMIT (schema limits).
+ */
+AdbStatus adb_create_entity_json(
+    AdbDatabaseHandle* db,
+    const uint8_t* spec_ptr,
+    size_t spec_len,
+    AdbBatchHandle** out_json);
+
+/*
+ * Applies one change to an entity: {"entity_id":3,"change":C} where C is
+ *   {"op":"add_field","field":{"name":..,"value_type":..,"nullable":..,"default":..}}
+ *   {"op":"rename_field","from":..,"to":..}
+ *   {"op":"drop_field","name":..}
+ * Returns the new schema version (same form as above). Existing rows are not rewritten: they
+ * are adapted on read and migrated when next written. Errors: ADB_NOT_FOUND (no such live
+ * entity), ADB_INVALID_ARGUMENT (malformed or refused change), ADB_RESOURCE_LIMIT.
+ */
+AdbStatus adb_alter_entity_json(
+    AdbDatabaseHandle* db,
+    const uint8_t* request_ptr,
+    size_t request_len,
+    AdbBatchHandle** out_json);
+
+/* Drops an entity (DROP TABLE). ADB_NOT_FOUND if it is not live; ADB_INVALID_ARGUMENT while
+ * indexes of the entity exist. Its history stays readable. */
+AdbStatus adb_drop_entity(AdbDatabaseHandle* db, uint64_t entity_id);
+
+/* The catalog as a JSON buffer {"schema_epoch":N,"entities":[schema, ...]}: the latest schema
+ * of every live entity in id order, consistent with the epoch. */
+AdbStatus adb_list_schemas_json(AdbDatabaseHandle* db, AdbBatchHandle** out_json);
+
+/* Every schema version of an entity (also a dropped one), oldest first, as a JSON buffer
+ * {"entity_id":N,"versions":[schema, ...]}. ADB_NOT_FOUND if it never had a schema. */
+AdbStatus adb_schema_history_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    AdbBatchHandle** out_json);
 
 #ifdef __cplusplus
 }

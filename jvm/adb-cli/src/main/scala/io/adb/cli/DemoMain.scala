@@ -1,19 +1,19 @@
 package io.adb.cli
 
-import io.adb.catalog.FileCatalog
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.{AdaptiveDatabase, QueryResult}
 import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 /**
- * Runs the Adaptive DB feature tour (Milestone 2.3.0).
+ * Runs the Adaptive DB feature tour (Milestone 2.4.0).
  *
  * The demo executes on one current engine while presenting features in the order in which they
  * entered the project: WAL/recovery, persistent current storage, persistent history, native
  * batch execution, the Scala SQL/control plane, relational execution (joins, aggregation,
  * sorting) with explained planning decisions and runtime profiles, statistics and cost-based
- * optimization, and finally secondary indexes as MVCC-versioned projections chosen by cost.
+ * optimization, secondary indexes as MVCC-versioned projections chosen by cost, and finally
+ * schema evolution: versioned schemas owned by the engine, changed without rewriting rows.
  */
 object DemoMain:
   /** Extracts the commit timestamp from a mutation result message. */
@@ -32,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.3.0 - chronological feature tour")
+    banner("Adaptive DB 2.4.0 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -83,6 +83,15 @@ object DemoMain:
       relationalPhase(db)
       statisticsPhase(db)
       indexPhase(db)
+      schemaPhase(db)
+    }
+
+    phase("2.4.0", "schemas survive a restart")
+    println("The native database was closed again; the schemas are replayed from the log with the rows.")
+    withDatabase(dataDir, nativeLib) { db =>
+      execute(db, "SHOW SCHEMA ledger;")
+      execute(db, "SELECT id, amount, currency FROM ledger WHERE id <= 3;")
+      println("Feature shown: the engine catalog is durable with the data; the JVM keeps no catalog file.")
     }
 
     banner("Demo completed successfully")
@@ -195,11 +204,54 @@ object DemoMain:
     execute(db, s"EXPLAIN $top;")
     println("Feature shown: after DROP INDEX the planner falls back to the sequential scan with a TopK.")
 
-  /** Opens one native database and matching persistent JVM catalog for a demo phase. */
+  /** Milestone 2.4.0: schema evolution. `ALTER TABLE` publishes a new schema version at a new
+    * catalog epoch without rewriting rows; old rows read defaults ("virtual defaults") and are
+    * migrated when written; RESTRICT protects indexed columns; stale plans are refused.
+    */
+  private def schemaPhase(db: AdaptiveDatabase): Unit =
+    phase("2.4.0", "schema evolution: ALTER TABLE, virtual defaults, lazy migration, RESTRICT, SHOW SCHEMA")
+    execute(db, "ALTER TABLE ledger ADD COLUMN currency STRING NOT NULL DEFAULT 'EUR';")
+    execute(db, "SELECT id, amount, currency FROM ledger WHERE id <= 3;")
+    println("Feature shown: the 2,000 existing rows were not rewritten; they read the column's default.")
+
+    execute(db, "EXPLAIN SELECT id FROM ledger WHERE currency = 'EUR';")
+    println("Feature shown: the Schema section names the catalog epoch the plan carries, and the estimate for the")
+    println("new column comes from its default (every analyzed row reads 'EUR') instead of a guessed selectivity.")
+
+    execute(db, "UPDATE ledger SET currency = 'PLN' WHERE id = 2;")
+    execute(db, "INSERT INTO ledger (id, account, amount, memo) VALUES (2001, 1, 9999, 'memo-2001');")
+    execute(db, "SELECT id, currency FROM ledger WHERE id = 2 OR id = 3 OR id = 2001;")
+    println("Feature shown: a written row is migrated to the latest version (lazy migration); an INSERT may omit")
+    println("a NOT NULL column that has a default.")
+
+    execute(db, "ALTER TABLE ledger RENAME COLUMN memo TO note;")
+    execute(db, "SELECT id, note FROM ledger WHERE id = 1;")
+    println("Feature shown: a rename changes only metadata; the field id and the stored values stay.")
+
+    try execute(db, "ALTER TABLE ledger DROP COLUMN account;")
+    catch case error: IllegalArgumentException => println(s"refused: ${error.getMessage}")
+    println("Feature shown: DROP COLUMN is RESTRICT; idx_ledger_account depends on the column.")
+    execute(db, "ALTER TABLE ledger DROP COLUMN note;")
+    execute(db, "SELECT * FROM ledger WHERE id = 1;")
+    println("Feature shown: a dropped column disappears from reads, but its values stay in the log for history.")
+
+    try execute(db, "INSERT INTO ledger VALUES (2002, 1, 'not a number', 'EUR');")
+    catch case error: IllegalArgumentException => println(s"refused: ${error.getMessage}")
+    execute(db, "SHOW SCHEMA ledger;")
+    println("Feature shown: every row is validated against its schema; SHOW SCHEMA lists each version, its catalog")
+    println("epoch, the change that produced it and the columns it has.")
+
+    execute(db, "CREATE TABLE scratch (id BIGINT PRIMARY KEY, v BIGINT DEFAULT 0);")
+    execute(db, "DROP TABLE scratch;")
+    println("Feature shown: DDL commits through the engine's log like data; a plan made before any of it would be")
+    println("refused with SCHEMA_CHANGED and planned again by the gateway.")
+
+  /** Opens one native database with its engine catalog for a demo phase (importing a
+    * pre-2.4.0 catalog file left by an older demo run).
+    */
   private def withDatabase(dataDir: Path, nativeLib: Path)(body: AdaptiveDatabase => Unit): Unit =
-    val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
-    try body(new AdaptiveDatabase(catalog, native))
+    try body(AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties"))))
     finally native.close()
 
   /** Executes one SQL statement and renders the resulting message or tabular rows. */
