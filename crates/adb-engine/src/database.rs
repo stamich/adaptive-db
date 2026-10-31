@@ -38,7 +38,7 @@ use adb_execution::{
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
-use adb_schema::EntitySchema;
+use adb_schema::{CatalogEvent, EntitySchema, EntitySpec, SchemaChange, SchemaRegistry};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
@@ -523,6 +523,8 @@ impl Database {
             lsn,
             self.inner.options.buffer_pages,
         )?;
+        // Plans made before the index existed must be planned again (they may now use it).
+        self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         // If the build cannot be published, the failed checkpoint poisons the instance and the
         // next open starts without the index.
         self.checkpoint_locked()?;
@@ -542,6 +544,8 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        // Plans that scan the index must be planned again.
+        self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         self.checkpoint_locked()?;
         if files.exists() {
             fs::remove_dir_all(files)?;
@@ -607,6 +611,139 @@ impl Database {
             .entities()
             .cloned()
             .collect()
+    }
+
+    /// Creates an entity (`CREATE TABLE`) and returns its version 1.
+    ///
+    /// The engine assigns the entity id (unless an imported catalog names one) and the field
+    /// ids, validates the definition and its foreign-key hints, and commits a catalog
+    /// transaction: the schema is durable in the log before it is visible, and every data
+    /// commit after it is validated against it.
+    pub fn create_entity(&self, spec: EntitySpec) -> Result<Arc<EntitySchema>, DbError> {
+        let entity_id = self.commit_catalog(|projections, epoch| {
+            let registry = projections.registry();
+            let entity_id = spec.entity_id.unwrap_or(registry.next_entity_id());
+            if registry.history(entity_id).is_some() {
+                return Err(DbError::InvalidArgument(format!(
+                    "entity id {entity_id} is already used"
+                )));
+            }
+            let schema = adb_schema::create(&spec, entity_id, epoch)?;
+            check_references(registry, &schema)?;
+            Ok((CatalogEvent::Schema(schema), entity_id))
+        })?;
+        Ok(self.schema(entity_id).expect("just created"))
+    }
+
+    /// Applies one `ALTER TABLE` change to the live entity `entity_id` and returns the new
+    /// version. Nothing is rewritten: rows keep the version they were written under and are
+    /// adapted when read.
+    pub fn alter_entity(
+        &self,
+        entity_id: u64,
+        change: &SchemaChange,
+    ) -> Result<Arc<EntitySchema>, DbError> {
+        self.commit_catalog(|projections, epoch| {
+            let registry = projections.registry();
+            let current = registry
+                .latest(entity_id)
+                .ok_or_else(|| DbError::EntityNotFound(entity_id.to_string()))?;
+            let next = adb_schema::apply(current, change, epoch)?;
+            check_references(registry, &next)?;
+            Ok((CatalogEvent::Schema(next), ()))
+        })?;
+        Ok(self.schema(entity_id).expect("just altered"))
+    }
+
+    /// Drops the live entity `entity_id` (`DROP TABLE`); returns its last version. Refused while
+    /// indexes exist on it. Its rows stay in storage but are no longer reachable through the
+    /// catalog, and its id is never reused.
+    pub fn drop_entity(&self, entity_id: u64) -> Result<Arc<EntitySchema>, DbError> {
+        let dropped = self
+            .schema(entity_id)
+            .ok_or_else(|| DbError::EntityNotFound(entity_id.to_string()))?;
+        self.commit_catalog(|projections, _| {
+            if projections.registry().latest(entity_id).is_none() {
+                return Err(DbError::EntityNotFound(entity_id.to_string()));
+            }
+            let indexes: Vec<String> = projections
+                .catalog()
+                .definitions()
+                .iter()
+                .filter(|definition| definition.entity_id == entity_id)
+                .map(|definition| definition.name.clone())
+                .collect();
+            if !indexes.is_empty() {
+                return Err(DbError::InvalidArgument(format!(
+                    "cannot drop {}: indexes {} depend on it (drop them first)",
+                    dropped.name,
+                    indexes.join(", ")
+                )));
+            }
+            Ok((CatalogEvent::DropEntity { entity_id }, ()))
+        })?;
+        Ok(dropped)
+    }
+
+    /// Commits one catalog transaction: `build` sees the projections (registry and index
+    /// catalog) and the epoch the change will publish and returns the event (plus a value for the caller). The event is validated
+    /// against a copy of the registry before anything is logged, so a refused change leaves no
+    /// trace and never poisons the instance.
+    fn commit_catalog<T>(
+        &self,
+        build: impl FnOnce(&Projections, SchemaEpoch) -> Result<(CatalogEvent, T), DbError>,
+    ) -> Result<T, DbError> {
+        self.inner.health.check()?;
+        let _commit = self.inner.commit_lock.lock();
+        self.commit_catalog_locked(build)
+    }
+
+    /// Body of [`Database::commit_catalog`]; the caller holds the commit lock.
+    fn commit_catalog_locked<T>(
+        &self,
+        build: impl FnOnce(&Projections, SchemaEpoch) -> Result<(CatalogEvent, T), DbError>,
+    ) -> Result<T, DbError> {
+        self.inner.health.check()?;
+        let (epoch, event, value) = {
+            let projections = self.inner.projections.read();
+            let registry = projections.registry();
+            let epoch = SchemaEpoch(registry.epoch().0 + 1);
+            let (event, value) = build(&projections, epoch)?;
+            let mut probe = SchemaRegistry::from_state(registry.state().clone())?;
+            probe.apply(epoch, &event)?;
+            (epoch, event, value)
+        };
+        let (tx_id, snapshot_ts, commit_ts) = {
+            let mut tx_manager = self.inner.tx_manager.lock();
+            let tx = tx_manager.begin(IsolationLevel::Serializable);
+            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit_ts())
+        };
+        let committed = CommittedTx {
+            tx_id,
+            snapshot_ts,
+            commit_ts,
+            before_images: Vec::new(),
+            mutations: Vec::new(),
+            catalog: vec![(epoch, event)],
+        };
+        let end = self
+            .inner
+            .health
+            .guard(|| {
+                let appended = self.inner.log.append(&committed.to_records())?;
+                self.inner
+                    .projections
+                    .write()
+                    .apply(&committed, appended.commit_lsn)?;
+                Ok(appended.end)
+            })
+            .map_err(DbError::CommitOutcomeUnknown)?;
+        self.inner
+            .health
+            .guard(|| Ok(self.inner.log.sync_through(end)?))
+            .map_err(DbError::CommitOutcomeUnknown)?;
+        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        Ok(value)
     }
 
     /// Every version of entity `entity_id` (live or dropped), oldest first.
@@ -919,4 +1056,33 @@ enum Position {
     Key(usize),
     /// Covered column at this position.
     Included(usize),
+}
+
+/// Checks the foreign-key hints of `schema`: each names the primary key of a live entity (or of
+/// `schema` itself) with the same type.
+fn check_references(registry: &SchemaRegistry, schema: &EntitySchema) -> Result<(), DbError> {
+    for field in schema.active_fields() {
+        let Some(reference) = field.references else {
+            continue;
+        };
+        let target = if reference.entity_id == schema.entity_id {
+            Some(schema)
+        } else {
+            registry.latest(reference.entity_id).map(|t| &**t)
+        };
+        let Some(target) = target else {
+            return Err(DbError::InvalidArgument(format!(
+                "{} references unknown entity {}",
+                field.name, reference.entity_id
+            )));
+        };
+        let pk = target.primary_key_field();
+        if reference.field_id != pk.id || pk.value_type != field.value_type {
+            return Err(DbError::InvalidArgument(format!(
+                "{} must reference the primary key of {} with the same type",
+                field.name, target.name
+            )));
+        }
+    }
+    Ok(())
 }
