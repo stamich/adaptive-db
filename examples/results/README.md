@@ -30,8 +30,12 @@ every row as 2.3.0 would.
 * **write_validation**: 20,000 inserts, 100 per commit, into a table with a schema (stamping,
   defaults, type checks) and one without.
 
-The committed 2.4.0 files were produced in a cloud container (see each report's `host`); compare
-them only with runs on the same machine. Scale-10 runs (`ADB_BENCH_SCALE=10`) are not included.
+The committed 2.4.0 files were recorded on an AMD Ryzen 9 5950X (32 threads, release build,
+JDK 22; see each report's `host`), the machine of the 2.3.0 comparison runs. Scale-10 runs
+(`ADB_BENCH_SCALE=10`) are not included. Against 2.3.0 on the same machine, the rust_native path
+is unchanged; the JVM paths, whose tables now have a schema, take about 10 µs more planning per
+query and 7–12 % more on large scans (the per-row adapter lookup, also visible in workload G:
+19.8 ms for the unversioned control, 21.3 ms with a schema and no row to adapt).
 
 ## Milestone 2.3.0 workloads
 

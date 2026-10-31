@@ -70,6 +70,9 @@
 - details: [milestone-2.4.0.md](milestone-2.4.0.md), [schema.md](schema.md)
 
 ## 2.4.x follow-ups
+- cheaper reads of rows already at the current version (resolve the adapter once per page, skip
+  identity rows) and cached schema-aware statistics during planning (measured: 7–12 % on large
+  scans, ~10 µs of planning per query on the JVM paths)
 - type changes (widening first), column splits and merges with computed adapters
 - table renames; background migration of old rows (vacuum-style)
 - `IS NULL` / `NOT NULL` predicates on columns added with defaults through indexes

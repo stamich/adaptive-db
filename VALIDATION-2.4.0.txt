@@ -38,28 +38,32 @@ Java / JVM
   scripts/benchmark-ffi.sh and demo/run-demo.sh run through the Gradle wrapper (CI runs them).
   Scale-10 runs were not repeated for 2.4.0.
 
+Benchmark results (examples/results/2.4.0-*.json)
+  Recorded by the author on an AMD Ryzen 9 5950X (32 threads, release build, JDK 22.0.2), scale 1,
+  100 iterations; scripts/check-benchmarks.py: "benchmark results agree". The runs made in the
+  validation VM were replaced by these.
+
 Schema-evolution results (scale 1, 50,000 rows per table, p50)
   G_schema_adapted_scan   0% / 50% / 100% migrated / unversioned control
-                          36.9 / 42.0 / 46.4 / 36.7 ms, identical checksums
-  F_virtual_default_point_read   old row 0.0030 ms (reads 'EUR'), migrated row 0.0029 ms
-  H_stale_schema_epoch_reject    refused in 0.00006 ms (30 of 30), accepted plan 0.0049 ms
-  ALTER TABLE ADD COLUMN         1,000 rows: 0.38 ms, 296 log bytes; 50,000 rows: 0.30 ms, 300 log bytes
-  write validation               inserts with a schema 1.04x slower than without
+                          21.3 / 22.5 / 22.0 / 19.8 ms, identical checksums
+  F_virtual_default_point_read   old row 1.97 us (reads 'EUR'), migrated row 1.96 us
+  H_stale_schema_epoch_reject    refused in 0.03 us (100 of 100), accepted plan 1.9 us
+  ALTER TABLE ADD COLUMN         1,000 rows: 296 log bytes, 8.2 ms; 50,000 rows: 300 log bytes, 5.4 ms
+  write validation               inserts with a schema 0.93x the time of inserts without
 
-Workload results (p50; identical checksums on every path)
-  scale 1                        rust_native  ffi_prepared_plan  scala_cbo_ffi_rust  checksum
-  C_covering_index_eq             0.028 ms     0.048 ms           0.444 ms           5742223708
-  D_index_range_order_limit       0.181 ms     0.430 ms           0.874 ms           1052395880
-  E_seq_scan_region_eq            67 ms        111 ms             133 ms             1000
-  A_hash_join_topk                0.72 ms      1.00 ms            2.18 ms            9955
-  B_hash_join_aggregate_topk      1.49 ms      2.26 ms            1.96 ms            54550
-  selectivity sweep (0.01% .. 50%): cost mode chose the faster plan at 5 of 6 points
-    (one point 11% slower than the faster plan)
-  max q-error with fresh statistics: 1.0 on workloads A-E
-
-  These timings come from a different and noisier VM than the 2.3.0 record, so they are not a
-  regression measurement. On this VM a direct comparison of an index scan with row fetch over a
-  table with and without a schema showed no consistent difference (run-to-run spread ±30%).
+Workload results (p50; identical checksums on every path; 2.3.0 on the same machine in brackets)
+  scale 1                        rust_native        ffi_prepared_plan  scala_cbo_ffi_rust
+  A_hash_join_topk               0.460 (0.452) ms   0.509 (0.459) ms   0.656 (0.547) ms
+  B_hash_join_aggregate_topk     0.487 (0.476) ms   0.532 (0.485) ms   0.651 (0.584) ms
+  C_covering_index_eq            0.018 (0.019) ms   0.024 (0.024) ms   0.093 (0.086) ms
+  D_index_range_order_limit      0.101 (0.101) ms   0.114 (0.111) ms   0.217 (0.203) ms
+  E_seq_scan_region_eq           34.8 (32.7) ms     48.4 (43.1) ms     48.7 (43.5) ms
+  selectivity sweep (0.01% .. 50%): cost mode chose the faster plan at every point
+    (50%: sequential scan, regret 1.10; 2.3.0: 1.04)
+  join order chain / star, cost mode: 9.1 / 42.2 ms (2.3.0: 8.3 / 37.3 ms)
+  index builds 2.7 / 3.2 s, ANALYZE 718,000 rows/s, max q-error with fresh statistics 1.0
+  The JVM paths now run on tables with a schema: about 10 us more planning per query and 7-12%
+  more on large scans (the per-row adapter lookup); the rust_native path is unchanged.
 
 Commits
   25 commits, one per task of the 2.4.0 plan (docs/milestone-2.4.0.md), each authored by

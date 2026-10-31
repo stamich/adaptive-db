@@ -40,21 +40,31 @@ and the gateway imports `catalog.properties` into the engine catalog at the firs
 the file to `catalog.properties.imported`). Directories written before 2.3.0 still need
 `cargo run --release -p adb-migrate -- /path/to/db` once.
 
-Schema-evolution workloads (`scripts/benchmark-db.sh`, scale 1: tables of 50,000 rows; 2-vCPU
-cloud VM, p50 after warm-up; expect run-to-run variation):
+Benchmarks on an AMD Ryzen 9 5950X (`scripts/benchmark-db.sh`, `scripts/benchmark-ffi.sh`, scale
+1, p50 after warm-up), compared with 2.3.0 on the same machine:
 
-| | scale 1 |
+| Schema evolution (tables of 50,000 rows) | 2.4.0 |
 |---|---|
-| G: scan + filter on a column added later + aggregate — 0 % / 50 % / 100 % of rows migrated / unversioned control | 37 / 42 / 46 / 37 ms (same result on all four) |
-| F: point lookup of an old row (default filled in) / of a migrated row | 0.0030 / 0.0029 ms |
-| H: refusing a plan of an older epoch / running it at the current epoch | 0.00006 / 0.0049 ms |
-| `ALTER TABLE ADD COLUMN` on 1,000 / 50,000 rows | 0.38 / 0.30 ms, 296 / 300 log bytes |
-| inserts into a table with a schema, relative to none | 1.04× slower |
+| G: scan + filter on a column added later + aggregate — 0 % / 50 % / 100 % of rows migrated / unversioned control | 21.3 / 22.5 / 22.0 / 19.8 ms (same result on all four) |
+| F: point lookup of an old row (default filled in) / of a migrated row | 1.97 / 1.96 µs |
+| H: refusing a plan of an older epoch / running it at the current epoch | 0.03 / 1.9 µs |
+| `ALTER TABLE ADD COLUMN` on 1,000 / 50,000 rows | 296 / 300 log bytes (8.2 / 5.4 ms, mostly the log sync) |
+| inserts into a table with a schema, relative to none | 0.93× (no measurable cost) |
 
-Adapting old rows costs nothing measurable: rows that predate a column are smaller and read its
-default from the schema. `ALTER TABLE` writes one catalog record whatever the table's size. The
-2.3.0 workloads are unchanged (the JVM benchmark now runs on the engine catalog); recorded runs
-and how to read them: [examples/results/README.md](examples/results/README.md).
+| 2.3.0 → 2.4.0 | rust_native | prepared plan over FFI | full SQL |
+|---|---|---|---|
+| A: hash join + TopK | 0.452 → 0.460 ms | 0.459 → 0.509 ms | 0.547 → 0.656 ms |
+| C: covering index equality | 0.019 → 0.018 ms | 0.024 → 0.024 ms | 0.086 → 0.093 ms |
+| D: index range + row fetch, ORDER BY ... LIMIT 100 | 0.101 → 0.101 ms | 0.111 → 0.114 ms | 0.203 → 0.217 ms |
+| E: sequential scan of 100,000 rows | 32.7 → 34.8 ms | 43.1 → 48.4 ms | 43.5 → 48.7 ms |
+
+`ALTER TABLE` writes one catalog record whatever the table's size, and old rows read their
+defaults as fast as migrated rows read stored values. The engine path is unchanged (the
+rust_native tables have no schema). The JVM paths, whose tables now have one, pay about 10 µs of
+planning per query (the epoch check and schema-aware statistics) and about 7–12 % on large scans,
+where every row passes the adapter lookup even when it is already at the current version (workload
+G: 19.8 ms without a schema, 21.3 ms with one). Both are follow-ups ([docs/roadmap.md](docs/roadmap.md)).
+Recorded runs and how to read them: [examples/results/README.md](examples/results/README.md).
 
 ## Architecture
 
