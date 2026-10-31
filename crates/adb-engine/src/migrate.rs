@@ -245,7 +245,7 @@ fn live_rows(db: &Database) -> Result<BTreeMap<u64, u64>, DbError> {
     let mut after = None;
     loop {
         let page = db
-            .scan_page(&KeyRange::all(), after, COUNT_PAGE, snapshot)
+            .scan_page(&KeyRange::all(), after, COUNT_PAGE, snapshot.into())
             .map_err(DbError::Execution)?;
         let Some((last, _)) = page.last() else {
             return Ok(counts);

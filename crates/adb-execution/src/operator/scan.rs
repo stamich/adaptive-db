@@ -65,7 +65,7 @@ impl Operator for ScanOperator {
             &self.range,
             self.after,
             context.batch_size.max(1),
-            context.snapshot_ts,
+            context.read_view(),
         )?;
         match batch.last() {
             Some((row_id, _)) => {

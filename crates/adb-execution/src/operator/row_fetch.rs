@@ -61,7 +61,7 @@ impl Operator for RowFetchOperator {
             .collect::<Result<_, _>>()?;
         ids.sort_unstable();
         ids.dedup();
-        let stored = self.source.fetch_rows(&ids, context.snapshot_ts)?;
+        let stored = self.source.fetch_rows(&ids, context.read_view())?;
         self.batches += 1;
         self.fetched += ids.len() as u64;
         for row in &mut rows {

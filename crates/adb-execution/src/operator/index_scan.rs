@@ -96,7 +96,7 @@ impl Operator for IndexScanOperator {
                 &self.fields,
                 self.resume.as_deref(),
                 wanted,
-                context.snapshot_ts,
+                context.read_view(),
             )?;
             self.examined += page.examined;
             match page.resume {

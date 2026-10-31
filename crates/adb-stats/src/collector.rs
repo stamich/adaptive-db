@@ -59,7 +59,7 @@ pub fn analyze(
     let mut after = None;
     loop {
         let page = source
-            .scan_page(&range, after, PAGE_ROWS, snapshot)
+            .scan_page(&range, after, PAGE_ROWS, snapshot.into())
             .map_err(|error| StatsError::Source(error.to_string()))?;
         let Some((last, _)) = page.last() else {
             break;

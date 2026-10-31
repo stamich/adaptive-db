@@ -79,7 +79,7 @@ fn migration_rewrites_keys_and_keeps_everything_else() {
             &KeyRange::entity(ENTITY),
             None,
             100,
-            db.latest_committed_ts(),
+            db.latest_committed_ts().into(),
         )
         .unwrap()
         .into_iter()

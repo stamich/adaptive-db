@@ -34,7 +34,7 @@ use adb_core::encode_key;
 use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
-    QueryCursor,
+    QueryCursor, ReadView,
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
@@ -345,11 +345,11 @@ impl Database {
         snapshot_ts: CommitTs,
     ) -> Result<QueryCursor, DbError> {
         self.inner.health.check()?;
-        Ok(Executor::execute(
-            Arc::new(self.clone()),
-            plan,
-            ExecutionContext::new(snapshot_ts),
-        )?)
+        // The query reads through the schemas current when it starts, whatever DDL commits
+        // while it runs.
+        let mut context = ExecutionContext::new(snapshot_ts);
+        context.schema_epoch = Some(self.schema_epoch());
+        Ok(Executor::execute(Arc::new(self.clone()), plan, context)?)
     }
 
     // ----- change data capture --------------------------------------------------------------
@@ -941,32 +941,48 @@ impl DataSource for Database {
         Database::latest_committed_ts(self)
     }
 
-    /// Snapshot read of one row for `PointLookup`.
-    fn point_lookup(
-        &self,
-        row_id: RowId,
-        snapshot_ts: CommitTs,
-    ) -> Result<Option<Row>, ExecutionError> {
-        self.get_at(row_id, snapshot_ts)
-            .map_err(|error| ExecutionError::DataSource(error.to_string()))
+    /// Snapshot read of one row for `PointLookup`, through the schemas of the view.
+    fn point_lookup(&self, row_id: RowId, view: ReadView) -> Result<Option<Row>, ExecutionError> {
+        let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
+        self.inner.health.check().map_err(to_execution)?;
+        let projections = self.inner.projections.read();
+        let row = projections
+            .get_at(row_id, view.snapshot_ts)
+            .map_err(|error| to_execution(error.into()))?;
+        Ok(row.map(|row| {
+            projections
+                .registry()
+                .adapt(row_id.entity_id(), row, view.schema_epoch)
+        }))
     }
 
-    /// Page of a range scan; merges the version index when the snapshot predates the vacuum horizon.
+    /// Page of a range scan; merges the version index when the snapshot predates the vacuum
+    /// horizon; rows are adapted to the schemas of the view.
     fn scan_page(
         &self,
         range: &KeyRange,
         after: Option<RowId>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<(RowId, Row)>, ExecutionError> {
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
-        let include_history = snapshot_ts.0 < self.inner.vacuumed_through.load(Ordering::Acquire);
-        self.inner
-            .projections
-            .read()
-            .scan_page(range, after, limit, snapshot_ts, include_history)
-            .map_err(|error| to_execution(error.into()))
+        let include_history =
+            view.snapshot_ts.0 < self.inner.vacuumed_through.load(Ordering::Acquire);
+        let projections = self.inner.projections.read();
+        let page = projections
+            .scan_page(range, after, limit, view.snapshot_ts, include_history)
+            .map_err(|error| to_execution(error.into()))?;
+        let registry = projections.registry();
+        Ok(page
+            .into_iter()
+            .map(|(row_id, row)| {
+                (
+                    row_id,
+                    registry.adapt(row_id.entity_id(), row, view.schema_epoch),
+                )
+            })
+            .collect())
     }
 }
 
@@ -981,8 +997,9 @@ impl IndexAccess for Database {
         fields: &[FieldId],
         resume: Option<&[u8]>,
         limit: usize,
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<IndexPage, ExecutionError> {
+        let snapshot_ts = view.snapshot_ts;
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
         let projections = self.inner.projections.read();
@@ -1058,19 +1075,27 @@ impl IndexAccess for Database {
         })
     }
 
-    /// Rows at a snapshot, one descent per leaf of the primary index.
+    /// Rows at a snapshot, one descent per leaf of the primary index, adapted to the schemas of
+    /// the view.
     fn fetch_rows(
         &self,
         row_ids: &[RowId],
-        snapshot_ts: CommitTs,
+        view: ReadView,
     ) -> Result<Vec<Option<Row>>, ExecutionError> {
         let to_execution = |error: DbError| ExecutionError::DataSource(error.to_string());
         self.inner.health.check().map_err(to_execution)?;
-        self.inner
-            .projections
-            .read()
-            .get_many_at(row_ids, snapshot_ts)
-            .map_err(|error| to_execution(error.into()))
+        let projections = self.inner.projections.read();
+        let rows = projections
+            .get_many_at(row_ids, view.snapshot_ts)
+            .map_err(|error| to_execution(error.into()))?;
+        let registry = projections.registry();
+        Ok(row_ids
+            .iter()
+            .zip(rows)
+            .map(|(row_id, row)| {
+                row.map(|row| registry.adapt(row_id.entity_id(), row, view.schema_epoch))
+            })
+            .collect())
     }
 }
 
