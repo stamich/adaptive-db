@@ -1,6 +1,6 @@
 package io.adb.benchmark
 
-import io.adb.catalog.{Catalog, FileCatalog, InMemoryCatalog}
+import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.AdaptiveDatabase
 import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
@@ -124,11 +124,10 @@ object BenchmarkMain:
     */
   private def benchmarkGateway(iterations: Int, dataDir: Path, nativeLib: Path): Unit =
     Files.createDirectories(dataDir)
-    val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
     try
-      val db = new AdaptiveDatabase(catalog, native)
-      if catalog.entity("account").isEmpty then
+      val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")))
+      if db.catalog.entity("account").isEmpty then
         Ddl.foreach(db.execute)
         for i <- 1 to 1000 do db.execute(s"INSERT INTO account VALUES ($i, ${i * 10L}, 'owner-${i % 50}');")
         for i <- 1 to 10000 do db.execute(s"INSERT INTO transfer VALUES ($i, ${1 + i % 1000}, ${i % 97});")

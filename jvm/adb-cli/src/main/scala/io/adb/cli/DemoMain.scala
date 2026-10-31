@@ -1,6 +1,5 @@
 package io.adb.cli
 
-import io.adb.catalog.FileCatalog
 import io.adb.ffm.NativeDatabase
 import io.adb.gateway.{AdaptiveDatabase, QueryResult}
 import java.nio.file.{Files, Path}
@@ -195,11 +194,12 @@ object DemoMain:
     execute(db, s"EXPLAIN $top;")
     println("Feature shown: after DROP INDEX the planner falls back to the sequential scan with a TopK.")
 
-  /** Opens one native database and matching persistent JVM catalog for a demo phase. */
+  /** Opens one native database with its engine catalog for a demo phase (importing a
+    * pre-2.4.0 catalog file left by an older demo run).
+    */
   private def withDatabase(dataDir: Path, nativeLib: Path)(body: AdaptiveDatabase => Unit): Unit =
-    val catalog = new FileCatalog(dataDir.resolve("catalog.properties"))
     val native = NativeDatabase.open(nativeLib, dataDir.resolve("rust"))
-    try body(new AdaptiveDatabase(catalog, native))
+    try body(AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties"))))
     finally native.close()
 
   /** Executes one SQL statement and renders the resulting message or tabular rows. */
