@@ -57,7 +57,8 @@ pub enum DbError {
     /// The directory was written in another data format (see [`crate::format`]).
     #[error(
         "database uses data format {found}, this engine reads format {expected}; \
-         migrate it with `adb-migrate <source> <target>`"
+         migrate an older directory with `adb-migrate <source> <target>`, open a newer one with a \
+         newer engine"
     )]
     IncompatibleFormat {
         /// Format of the directory.

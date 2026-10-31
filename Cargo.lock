@@ -47,7 +47,9 @@ dependencies = [
 name = "adb-core"
 version = "2.3.0"
 dependencies = [
+ "bincode",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

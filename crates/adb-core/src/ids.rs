@@ -61,6 +61,42 @@ pub struct Lsn(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct IndexId(pub u64);
 
+/// Version of one entity's schema, counted per entity from 1 (`CREATE TABLE`); every
+/// `ALTER TABLE` publishes the next one. 0 means "unversioned": a row written before schema
+/// versions existed (Milestone 2.4.0) or of an entity without a registered schema.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+pub struct SchemaVersion(pub u32);
+
+impl SchemaVersion {
+    /// The version of a new entity.
+    pub const FIRST: SchemaVersion = SchemaVersion(1);
+
+    /// Whether this is the "unversioned" marker 0.
+    pub fn is_unversioned(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// The version a row stamped with `self` is read as: unversioned rows predate every schema
+    /// change, so they count as version 1.
+    pub fn effective(self) -> SchemaVersion {
+        if self.0 == 0 {
+            Self::FIRST
+        } else {
+            self
+        }
+    }
+}
+
+/// Global, monotonic counter of catalog changes that can invalidate a plan (creating, altering
+/// or dropping a table, creating or dropping an index). A plan records the epoch it was planned
+/// at; the engine refuses it when the epoch has moved on.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+pub struct SchemaEpoch(pub u64);
+
 /// Index of a fixed-size page inside one page file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageId(pub u64);
