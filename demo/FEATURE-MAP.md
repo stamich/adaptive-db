@@ -135,3 +135,33 @@ SQL ─► IndexPredicateMatcher ─► AccessPathEnumerator ─► CostModel.ac
 | `UPDATE` then `AS OF VERSION` | the index serves the older snapshot from its versioned entries |
 | `DROP INDEX` | the plan falls back to the sequential scan and TopK |
 
+## 2.4.0 — schema evolution
+
+The last phase evolves `ledger` with `sql/2.4.0-schema.sql`. Schemas are a projection of the
+log, like the current store and the indexes: a DDL statement is a catalog transaction, so it is
+durable with the data and replayed on recovery. Rows keep the schema version they were written
+under and are adapted when read.
+
+```text
+SQL DDL ─► Binder ─► EngineCatalog ─► SchemaEvolutionPlanner + DependencyGraph (RESTRICT, messages)
+                                  │
+                                  ▼ C ABI 7: adb_alter_entity_json
+              commit_catalog ─► WAL Catalog record ─► SchemaRegistry (versions, epochs) ─► schema/registry.meta
+                                                               │
+writes ─► prepare_write: stamp latest version, fill defaults, check types ─► WAL Put
+reads  ─► RowAdapter(version of row → version of the query's epoch): hide dropped, add defaults
+plans  ─► plan wire v4 {"schema_epoch":N} ─► execute_planned: refused with SCHEMA_CHANGED if N moved
+```
+
+| Step | Shows |
+|---|---|
+| `ADD COLUMN currency ... DEFAULT 'EUR'` | a new version, no row rewritten; old rows read the default |
+| `EXPLAIN ... WHERE currency = 'EUR'` | Schema section with the plan's epoch; the estimate derived from the default |
+| `UPDATE` / `INSERT` omitting `currency` | lazy migration to version 2; defaults filled on write |
+| `RENAME COLUMN memo TO note` | metadata only: the field id and the values stay |
+| `DROP COLUMN account` | refused: `idx_ledger_account` depends on it (RESTRICT) |
+| `DROP COLUMN note`, `SELECT *` | the column disappears from reads; history keeps its values |
+| mistyped `INSERT` | refused: rows are validated against the schema |
+| `SHOW SCHEMA ledger` | every version with its epoch, change and columns |
+| close, reopen, `SHOW SCHEMA` | the catalog is replayed from the log with the rows |
+
