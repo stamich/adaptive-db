@@ -81,7 +81,7 @@ fn create_list_drop() {
 
     // A plan wire v3 index scan over the ABI: balance = 4 matches pk -2 and 2, in pk order.
     let plan = format!(
-        r#"{{"wire_version":3,"plan":{{"op":"index_scan","index_id":{},"bounds":{{"prefix":[{{"Int64":4}}]}},"columns":[{{"field_id":1,"slot":0}}]}}}}"#,
+        r#"{{"wire_version":4,"schema_epoch":1,"plan":{{"op":"index_scan","index_id":{},"bounds":{{"prefix":[{{"Int64":4}}]}},"columns":[{{"field_id":1,"slot":0}}]}}}}"#,
         created["id"]
     );
     let mut query = ptr::null_mut();
@@ -178,4 +178,41 @@ fn older_data_formats_are_reported() {
     );
     assert!(handle.is_null());
     assert!(last_error().contains("adb-migrate"));
+}
+
+/// Plan wire v4 over the ABI: the current epoch is readable, and a plan of an older epoch is
+/// refused with SCHEMA_CHANGED.
+#[test]
+fn stale_plans_are_refused_over_the_abi() {
+    let (_dir, db) = open();
+    let mut epoch = u64::MAX;
+    assert_eq!(
+        adb_ffi::adb_current_schema_epoch(db, &mut epoch),
+        AdbStatus::Ok
+    );
+    assert_eq!(epoch, 0);
+    let (status, out) = create(
+        db,
+        r#"{"name":"idx","entity_id":3,"columns":[{"field_id":2}]}"#,
+    );
+    assert_eq!(status, AdbStatus::Ok);
+    take_json(out);
+    assert_eq!(
+        adb_ffi::adb_current_schema_epoch(db, &mut epoch),
+        AdbStatus::Ok
+    );
+    assert_eq!(epoch, 1, "CREATE INDEX moves the epoch");
+    let plan = r#"{"wire_version":4,"schema_epoch":0,"plan":{"op":"entity_scan","entity_id":3,"columns":[]}}"#;
+    let mut query = ptr::null_mut();
+    assert_eq!(
+        adb_execute_plan_json(db, plan.as_ptr(), plan.len(), &mut query),
+        AdbStatus::SchemaChanged
+    );
+    assert!(query.is_null());
+    assert!(
+        last_error().contains("plan the query again"),
+        "{}",
+        last_error()
+    );
+    assert_eq!(adb_close(db), AdbStatus::Ok);
 }

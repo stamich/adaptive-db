@@ -37,7 +37,7 @@ public class CdcSmoke {
             check(db.consumerOffset("indexer").isEmpty(), "unknown consumer has no offset");
             db.commitConsumerOffset("indexer", cursor);
             check(db.vacuum() == 1, "vacuum removed the tombstone");
-            try (var q = db.execute("{\"wire_version\":3,\"plan\":{\"op\":\"entity_scan\",\"entity_id\":1,\"columns\":[{\"field_id\":1,\"slot\":0}]}}", Optional.empty())) {
+            try (var q = db.execute("{\"wire_version\":4,\"schema_epoch\":0,\"plan\":{\"op\":\"entity_scan\",\"entity_id\":1,\"columns\":[{\"field_id\":1,\"slot\":0}]}}", Optional.empty())) {
                 var batch = q.nextBatch();
                 check(batch.isPresent() && batch.get().rowCount() == 1, "entity_scan returns entity 1 only");
             }

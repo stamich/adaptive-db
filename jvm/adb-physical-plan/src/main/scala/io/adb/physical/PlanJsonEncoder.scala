@@ -5,15 +5,18 @@ import io.adb.physical.PhysicalPlan.*
 import io.adb.physical.PhysicalExpr.*
 
 /** Encodes physical plans into the JSON wire format decoded by the native engine
-  * (plan wire v3, docs/plan-wire-format.md): `{"wire_version":3,"plan":{...}}`.
+  * (plan wire v4, docs/plan-wire-format.md): `{"wire_version":4,"schema_epoch":N,"plan":{...}}`.
+  *
+  * The schema epoch is the catalog epoch the plan was made at; the engine refuses a plan whose
+  * epoch is no longer current (`AdbStatus.SCHEMA_CHANGED`), and the gateway plans it again.
   */
 object PlanJsonEncoder:
   /** Plan wire version produced by this encoder; must match the engine's `PLAN_WIRE_VERSION`. */
-  val WireVersion: Int = 3
+  val WireVersion: Int = 4
 
-  /** Encodes a plan inside the versioned envelope. */
-  def encode(plan: PhysicalPlan): String =
-    s"{\"wire_version\":$WireVersion,\"plan\":${encodeNode(plan)}}"
+  /** Encodes a plan made at catalog epoch `schemaEpoch` inside the versioned envelope. */
+  def encode(plan: PhysicalPlan, schemaEpoch: Long): String =
+    s"{\"wire_version\":$WireVersion,\"schema_epoch\":${java.lang.Long.toUnsignedString(schemaEpoch)},\"plan\":${encodeNode(plan)}}"
 
   /** Encodes one plan node (without envelope). */
   def encodeNode(plan: PhysicalPlan): String = plan match

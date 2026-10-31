@@ -363,7 +363,7 @@ object WorkloadBenchmark:
 
   /** Physical plan JSON of `sql` in the session's current mode. */
   private def preparedPlan(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): String =
-    PlanJsonEncoder.encode(db.plan(bind(catalog, sql)).physical.plan)
+    { val plans = db.plan(bind(catalog, sql)); PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch) }
 
   /** Estimated weighted cost of the plan's root. */
   private def rootCost(db: AdaptiveDatabase, catalog: FileCatalog, sql: String): Double =

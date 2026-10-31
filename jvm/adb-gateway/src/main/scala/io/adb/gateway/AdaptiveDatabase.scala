@@ -67,7 +67,11 @@ final class AdaptiveDatabase(
     executeBound(bound, sql)
 
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
-  def plan(select: BoundSelect): AdaptiveDatabase.Plans = AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog)
+  def plan(select: BoundSelect): AdaptiveDatabase.Plans =
+    // Read the epoch before the catalog and index metadata the plan is built from: if DDL
+    // commits in between, the engine sees an older epoch and refuses the plan.
+    val epoch = native.currentSchemaEpoch()
+    AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog).copy(schemaEpoch = epoch)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement, sql: String): QueryResult = statement match
@@ -141,7 +145,7 @@ final class AdaptiveDatabase(
     * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
     */
   private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans, sql: String): (QueryResult, String) =
-    val json = PlanJsonEncoder.encode(plans.physical.plan)
+    val json = PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch)
     val snapshot: Optional[java.lang.Long] = select.asOfVersion match
       case Some(v) => Optional.of(java.lang.Long.valueOf(v))
       case None => Optional.empty[java.lang.Long]()
@@ -198,6 +202,8 @@ object AdaptiveDatabase:
     * @param mode       optimizer mode used
     * @param statistics statistics status of every entity the query reads, in plan order
     * @param indexes    the indexes of those entities the planner considered (cost mode only)
+    * @param schemaEpoch catalog epoch the plan was made at (sent with the plan; the engine
+    *                    refuses it once the epoch has moved)
     */
   final case class Plans(
       logical: LogicalPlan,
@@ -205,7 +211,8 @@ object AdaptiveDatabase:
       physical: PlannedQuery,
       mode: OptimizerMode,
       statistics: Vector[(Entity, StatisticsStatus)],
-      indexes: Vector[IndexReport] = Vector.empty
+      indexes: Vector[IndexReport] = Vector.empty,
+      schemaEpoch: Long = 0
   )
 
   /** What EXPLAIN reports about one index of an entity the query reads.

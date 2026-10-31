@@ -333,6 +333,30 @@ impl Database {
         self.inner.tx_manager.lock().latest_committed_ts()
     }
 
+    /// Runs a plan made at catalog epoch `schema_epoch` (plan wire v4) at `snapshot` (the latest
+    /// when `None`). Fails with [`ExecutionError::SchemaChanged`] before running anything when
+    /// the epoch is not the current one; otherwise the query reads through the schemas of that
+    /// epoch even if DDL commits while it runs.
+    pub fn execute_planned(
+        &self,
+        plan: PhysicalPlan,
+        schema_epoch: SchemaEpoch,
+        snapshot: Option<CommitTs>,
+    ) -> Result<QueryCursor, DbError> {
+        self.inner.health.check()?;
+        let current = self.schema_epoch();
+        if current != schema_epoch {
+            return Err(DbError::Execution(ExecutionError::SchemaChanged {
+                planned: schema_epoch.0,
+                current: current.0,
+            }));
+        }
+        let snapshot_ts = snapshot.unwrap_or_else(|| self.latest_committed_ts());
+        let mut context = ExecutionContext::new(snapshot_ts);
+        context.schema_epoch = Some(schema_epoch);
+        Ok(Executor::execute(Arc::new(self.clone()), plan, context)?)
+    }
+
     /// Runs a physical plan at the latest snapshot.
     pub fn execute(&self, plan: PhysicalPlan) -> Result<QueryCursor, DbError> {
         self.execute_at(plan, self.latest_committed_ts())

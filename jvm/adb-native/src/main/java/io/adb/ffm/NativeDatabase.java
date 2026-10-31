@@ -75,6 +75,19 @@ public final class NativeDatabase implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the current catalog epoch. Every plan carries the epoch it was made at (plan wire
+     * v4); {@link #execute} fails with {@link AdbStatus#SCHEMA_CHANGED} when it moved since.
+     */
+    public synchronized long currentSchemaEpoch() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.currentSchemaEpoch, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
     /** Executes one bounded physical-plan JSON document at the latest or supplied snapshot. */
     public synchronized NativeQuery execute(String planJson, Optional<Long> snapshotTs) {
         ensureOpen();

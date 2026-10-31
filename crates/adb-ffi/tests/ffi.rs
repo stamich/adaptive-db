@@ -32,10 +32,13 @@ fn ffi_executes_point_lookup() {
         AdbStatus::Ok
     );
 
-    let plan = adb_plan_wire::encode_json(&PhysicalPlan::PointLookup {
-        row_id: RowId(1),
-        columns: Vec::new(),
-    })
+    let plan = adb_plan_wire::encode_json(
+        &PhysicalPlan::PointLookup {
+            row_id: RowId(1),
+            columns: Vec::new(),
+        },
+        adb_core::SchemaEpoch(0),
+    )
     .unwrap();
 
     let mut query = ptr::null_mut();

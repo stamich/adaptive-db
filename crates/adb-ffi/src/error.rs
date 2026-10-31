@@ -72,6 +72,7 @@ pub fn map_execution_error(error: &ExecutionError) -> AdbStatus {
         | ExecutionError::Expression(_)
         | ExecutionError::InconsistentType(_) => AdbStatus::InvalidArgument,
         ExecutionError::DataSource(_) | ExecutionError::Wire(_) => AdbStatus::Internal,
+        ExecutionError::SchemaChanged { .. } => AdbStatus::SchemaChanged,
     }
 }
 

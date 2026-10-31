@@ -68,15 +68,13 @@ fn execute_plan(
         }
 
         let plan_bytes = unsafe { slice::from_raw_parts(plan_ptr, plan_len) };
-        let (plan, _shape) = adb_plan_wire::decode_json(plan_bytes)
+        let decoded = adb_plan_wire::decode_json(plan_bytes)
             .map_err(|error| (AdbStatus::InvalidArgument, error.to_string()))?;
 
         let database = &unsafe { &*db }.database;
-        let cursor = match snapshot {
-            Some(ts) => database.execute_at(plan, ts),
-            None => database.execute(plan),
-        }
-        .map_err(map_db_error)?;
+        let cursor = database
+            .execute_planned(decoded.plan, decoded.schema_epoch, snapshot)
+            .map_err(map_db_error)?;
 
         unsafe {
             *out_query = Box::into_raw(Box::new(AdbQueryHandle {

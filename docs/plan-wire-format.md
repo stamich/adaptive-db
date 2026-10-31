@@ -1,15 +1,22 @@
-# Physical plan wire format v3
+# Physical plan wire format v4
 
 The JVM planner sends physical plans to the native engine as UTF-8 JSON through
 `adb_execute_plan_json[_at]`. Since version 2 (Milestone 2.1) the plan is wrapped in an envelope;
-version 3 (Milestone 2.3.0) adds the index operators `index_scan` and `row_fetch`:
+version 3 (Milestone 2.3.0) adds the index operators `index_scan` and `row_fetch`; version 4
+(Milestone 2.4.0) records the catalog epoch the plan was made against:
 
 ```json
-{"wire_version": 3, "plan": { ...plan node... }}
+{"wire_version": 4, "schema_epoch": 7, "plan": { ...plan node... }}
 ```
 
 Only the current version is accepted: the JVM and the engine are upgraded together, and a
-version-2 document from an older planner is reported as a version mismatch.
+version-3 document from an older planner is reported as a version mismatch.
+
+`schema_epoch` is the value of `adb_current_schema_epoch` the planner read before binding the
+query. The engine executes the plan only if no DDL committed since then (`DROP`, `ALTER` and index
+changes all advance the epoch); otherwise the call fails with status 13 `ADB_SCHEMA_CHANGED` and
+the gateway re-reads the catalog and plans once more. Rows are adapted to the schema of the
+planned epoch for the whole execution (see [schema.md](schema.md)).
 
 `adb-plan-wire::decode_json` is the only native entry point. It
 
@@ -70,7 +77,7 @@ any stored key or of another type than the column, return no rows rather than an
 GROUP BY c.city ORDER BY total DESC LIMIT 2`:
 
 ```json
-{"wire_version":3,"plan":{"op":"top_k","limit":2,
+{"wire_version":4,"schema_epoch":7,"plan":{"op":"top_k","limit":2,
   "keys":[{"slot":4,"descending":true}],
   "input":{"op":"aggregate","group_by":[3],
     "aggregates":[{"function":"sum","input":1,"output":4}],
@@ -85,6 +92,7 @@ GROUP BY c.city ORDER BY total DESC LIMIT 2`:
   operators `point_lookup`, `scan`, `entity_scan`, `filter`, `project`, `limit`.
 * v2 (2.1): envelope, slots, joins, aggregation, sorting, unknown fields rejected.
 * v3 (2.3.0): `index_scan` (bounds, direction, covered columns, limit hint) and `row_fetch`.
+* v4 (2.4.0): mandatory `schema_epoch` in the envelope; stale plans are refused.
 
 JSON remains a bootstrap protocol; `proto/` sketches the intended binary IR, which would decode
 into the same Rust `PhysicalPlan`.

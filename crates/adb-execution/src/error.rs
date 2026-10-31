@@ -39,4 +39,17 @@ pub enum ExecutionError {
     /// Query execution exceeded a configured in-memory resource boundary.
     #[error("resource limit exceeded: {0}")]
     ResourceLimit(String),
+
+    /// The plan was made at another catalog epoch (Milestone 2.4.0): a table or index it was
+    /// planned against may have changed. Safe to plan again and retry.
+    #[error(
+        "the plan was made at schema epoch {planned}, the catalog is at epoch {current}; plan \
+         the query again"
+    )]
+    SchemaChanged {
+        /// Epoch the plan was made at.
+        planned: u64,
+        /// Current epoch.
+        current: u64,
+    },
 }

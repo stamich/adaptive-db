@@ -101,7 +101,7 @@ object BenchmarkMain:
     val optimized = optimizer.optimize(logical)
     val physicalNs = time(iterations) { PhysicalPlanner.plan(optimized) }
     val physical = PhysicalPlanner.plan(optimized)
-    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan) }
+    val wireNs = time(iterations) { PlanJsonEncoder.encode(physical.plan, 0) }
     val totalNs = time(iterations) { pipeline(parser, binder, optimizer, sql) }
 
     report(s"sql_parse$suffix", iterations, parseNs)
@@ -117,7 +117,7 @@ object BenchmarkMain:
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
     val logical = LogicalPlanner.plan(bound)
     val optimized = optimizer.optimize(logical)
-    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan)
+    PlanJsonEncoder.encode(PhysicalPlanner.plan(optimized).plan, 0)
 
   /** Times end-to-end SQL execution through FFM: point lookups, a filtered scan with LIMIT,
     * and the relational query over 1,000 accounts and 10,000 transfers.

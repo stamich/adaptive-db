@@ -290,3 +290,27 @@ fn indexes_and_statistics_see_adapted_rows() {
     let status = statistics.columns.iter().find(|c| c.field_id == 4).unwrap();
     assert_eq!(status.null_count, 0, "ANALYZE reads the virtual default");
 }
+
+/// A plan made at an older catalog epoch is refused before it runs; a plan of the current
+/// epoch runs.
+#[test]
+fn plans_of_another_epoch_are_refused() {
+    let dir = tempdir().unwrap();
+    let db = database(dir.path(), 3);
+    let epoch = db.schema_epoch();
+    let plan = PhysicalPlan::EntityScan {
+        entity_id: 1,
+        columns: columns(&[1]),
+    };
+    assert!(db.execute_planned(plan.clone(), epoch, None).is_ok());
+    add_status(&db);
+    match db.execute_planned(plan.clone(), epoch, None) {
+        Err(adb_engine::DbError::Execution(adb_execution::ExecutionError::SchemaChanged {
+            planned,
+            current,
+        })) => assert_eq!((planned, current), (epoch.0, epoch.0 + 1)),
+        Err(other) => panic!("unexpected {other}"),
+        Ok(_) => panic!("a stale plan ran"),
+    }
+    assert!(db.execute_planned(plan, db.schema_epoch(), None).is_ok());
+}

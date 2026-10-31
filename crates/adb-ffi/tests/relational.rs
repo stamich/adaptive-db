@@ -117,7 +117,11 @@ fn last_error() -> String {
 #[test]
 fn join_aggregate_runs_and_reports_a_profile() {
     let (_dir, db) = database(&[1, 2, 3, 4]);
-    let query = execute(db, &adb_plan_wire::encode_json(&join_sum()).unwrap()).unwrap();
+    let query = execute(
+        db,
+        &adb_plan_wire::encode_json(&join_sum(), adb_core::SchemaEpoch(0)).unwrap(),
+    )
+    .unwrap();
 
     let mut batch = ptr::null_mut();
     assert_eq!(adb_query_next_batch(query, &mut batch), AdbStatus::Ok);
@@ -156,7 +160,11 @@ fn join_aggregate_runs_and_reports_a_profile() {
 #[test]
 fn sum_overflow_maps_to_its_own_status() {
     let (_dir, db) = database(&[i64::MAX, 1]);
-    let query = execute(db, &adb_plan_wire::encode_json(&join_sum()).unwrap()).unwrap();
+    let query = execute(
+        db,
+        &adb_plan_wire::encode_json(&join_sum(), adb_core::SchemaEpoch(0)).unwrap(),
+    )
+    .unwrap();
     let mut batch = ptr::null_mut();
     assert_eq!(
         adb_query_next_batch(query, &mut batch),
@@ -178,7 +186,7 @@ fn bare_v1_plan_is_rejected_with_a_version_message() {
     );
     assert!(last_error().contains("wire version"));
 
-    let invalid = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[1]}}"#;
+    let invalid = br#"{"wire_version":4,"schema_epoch":0,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[1]}}"#;
     assert_eq!(
         execute(db, invalid).unwrap_err(),
         AdbStatus::InvalidArgument

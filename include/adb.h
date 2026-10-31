@@ -52,6 +52,7 @@ typedef enum AdbStatus {
     ADB_RESOURCE_LIMIT = 10,      /* query exceeded memory, row, fanout or comparison limits */
     ADB_ARITHMETIC_OVERFLOW = 11, /* exact computation (e.g. INT64 SUM) overflowed */
     ADB_INCOMPATIBLE_FORMAT = 12, /* data directory in another data format: run adb-migrate (ABI 6) */
+    ADB_SCHEMA_CHANGED = 13, /* plan made at another catalog epoch: plan it again (ABI 7) */
     ADB_INTERNAL = 255
 } AdbStatus;
 
@@ -66,6 +67,10 @@ AdbStatus adb_open(const uint8_t* path_ptr, size_t path_len, AdbDatabaseHandle**
 /* Checkpoints (best effort) and always releases the handle. */
 AdbStatus adb_close(AdbDatabaseHandle* db);
 AdbStatus adb_latest_committed_ts(AdbDatabaseHandle* db, uint64_t* out_commit_ts);
+/* Current catalog epoch. Plans are plan wire v4 documents carrying the epoch they were made at
+ * ({"wire_version":4,"schema_epoch":N,"plan":{...}}); a plan of another epoch is refused before
+ * it runs (a table or index it was planned against may have changed: plan it again). */
+AdbStatus adb_current_schema_epoch(AdbDatabaseHandle* db, uint64_t* out_epoch);
 
 AdbStatus adb_execute_plan_json(
     AdbDatabaseHandle* db,

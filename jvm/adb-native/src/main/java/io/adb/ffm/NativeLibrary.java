@@ -34,6 +34,8 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle close;
     /** {@code adb_latest_committed_ts}: newest committed MVCC timestamp. */
     final MethodHandle latestCommittedTs;
+    /** {@code adb_current_schema_epoch}: the current catalog epoch (plan wire v4). */
+    final MethodHandle currentSchemaEpoch;
     /** {@code adb_execute_plan_json}: runs a JSON plan at the latest snapshot. */
     final MethodHandle execute;
     /** {@code adb_execute_plan_json_at}: runs a JSON plan at a given snapshot. */
@@ -99,6 +101,7 @@ final class NativeLibrary implements AutoCloseable {
         open = downcall("adb_open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         close = downcall("adb_close", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
         latestCommittedTs = downcall("adb_latest_committed_ts", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        currentSchemaEpoch = downcall("adb_current_schema_epoch", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         execute = downcall("adb_execute_plan_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         executeAt = downcall("adb_execute_plan_json_at", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
         queryNextBatch = downcall("adb_query_next_batch", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));

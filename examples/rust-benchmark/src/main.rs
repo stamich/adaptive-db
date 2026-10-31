@@ -277,7 +277,7 @@ fn relational(args: &Args) -> Result<serde_json::Value> {
     let start = Instant::now();
     let mut encoded = Vec::new();
     for _ in 0..args.iters {
-        encoded = adb_plan_wire::encode_json(&pipeline)?;
+        encoded = adb_plan_wire::encode_json(&pipeline, adb_core::SchemaEpoch(0))?;
     }
     let encode = per_second(args.iters as u64, start.elapsed());
     let start = Instant::now();

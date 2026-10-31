@@ -1,4 +1,5 @@
-//! Plan wire v2: envelope, version negotiation, strictness and validation.
+//! Plan wire v4: envelope with schema epoch, version negotiation, strictness and validation.
+use adb_core::SchemaEpoch;
 use adb_core::{RowId, Value};
 use adb_execution::{
     AggregateFunction, AggregateSpec, BinaryOp, Expr, JoinKey, JoinType, PhysicalPlan, ScanColumn,
@@ -67,13 +68,14 @@ fn relational_plan() -> PhysicalPlan {
 #[test]
 fn relational_plan_round_trips() {
     let plan = relational_plan();
-    let bytes = encode_json(&plan).unwrap();
+    let bytes = encode_json(&plan, SchemaEpoch(12)).unwrap();
     let text = std::str::from_utf8(&bytes).unwrap();
-    assert!(text.starts_with(r#"{"wire_version":3,"plan":{"op":"top_k""#));
-    let (decoded, shape) = decode_json(&bytes).unwrap();
-    assert_eq!(decoded, plan);
-    assert_eq!(shape.output, vec![SlotId(2), SlotId(3)]);
-    assert_eq!(shape.width, 4);
+    assert!(text.starts_with(r#"{"wire_version":4,"schema_epoch":12,"plan":{"op":"top_k""#));
+    let decoded = decode_json(&bytes).unwrap();
+    assert_eq!(decoded.plan, plan);
+    assert_eq!(decoded.schema_epoch, SchemaEpoch(12));
+    assert_eq!(decoded.shape.output, vec![SlotId(2), SlotId(3)]);
+    assert_eq!(decoded.shape.width, 4);
 }
 
 /// A bare 2.0 plan (no envelope) and a future version are rejected as version mismatches.
@@ -84,25 +86,33 @@ fn version_mismatch_is_reported_as_such() {
         Err(PlanWireError::UnsupportedVersion { found: 1 })
     );
     assert_eq!(
-        decode_json(br#"{"wire_version":4,"plan":{"op":"something_new"}}"#),
-        Err(PlanWireError::UnsupportedVersion { found: 4 })
+        decode_json(br#"{"wire_version":5,"plan":{"op":"something_new"}}"#),
+        Err(PlanWireError::UnsupportedVersion { found: 5 })
     );
     assert_eq!(
-        decode_json(br#"{"wire_version":2,"plan":{"op":"scan","columns":[]}}"#),
-        Err(PlanWireError::UnsupportedVersion { found: 2 }),
-        "a planner older than 2.3.0 is reported as a version mismatch"
+        decode_json(br#"{"wire_version":3,"plan":{"op":"scan","columns":[]}}"#),
+        Err(PlanWireError::UnsupportedVersion { found: 3 }),
+        "a planner older than 2.4.0 is reported as a version mismatch"
+    );
+    assert!(
+        matches!(
+            decode_json(br#"{"wire_version":4,"plan":{"op":"scan","columns":[]}}"#),
+            Err(PlanWireError::Malformed(_))
+        ),
+        "version 4 requires the schema epoch"
     );
 }
 
 /// Unknown fields are errors, so a producer speaking another dialect cannot be half-understood.
 #[test]
 fn unknown_fields_are_rejected() {
-    let stale = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"entity_scan","entity_id":1,"columns":[]},"fields":[1]}}"#;
+    let stale = br#"{"wire_version":4,"schema_epoch":1,"plan":{"op":"project","input":{"op":"entity_scan","entity_id":1,"columns":[]},"fields":[1]}}"#;
     assert!(matches!(
         decode_json(stale),
         Err(PlanWireError::Malformed(_))
     ));
-    let extra = br#"{"wire_version":3,"plan":{"op":"scan","columns":[]},"hint":"x"}"#;
+    let extra =
+        br#"{"wire_version":4,"schema_epoch":1,"plan":{"op":"scan","columns":[]},"hint":"x"}"#;
     assert!(matches!(
         decode_json(extra),
         Err(PlanWireError::Malformed(_))
@@ -112,7 +122,7 @@ fn unknown_fields_are_rejected() {
 /// Decoded plans are validated; encoding refuses invalid plans too.
 #[test]
 fn invalid_plans_are_rejected_both_ways() {
-    let bad = br#"{"wire_version":3,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[4]}}"#;
+    let bad = br#"{"wire_version":4,"schema_epoch":1,"plan":{"op":"project","input":{"op":"scan","columns":[]},"slots":[4]}}"#;
     assert!(matches!(decode_json(bad), Err(PlanWireError::Invalid(_))));
 
     let invalid = PhysicalPlan::Limit {
@@ -120,7 +130,7 @@ fn invalid_plans_are_rejected_both_ways() {
         limit: usize::MAX,
     };
     assert!(matches!(
-        encode_json(&invalid),
+        encode_json(&invalid, SchemaEpoch(0)),
         Err(PlanWireError::Invalid(_))
     ));
 }

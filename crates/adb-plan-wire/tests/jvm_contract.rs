@@ -11,7 +11,9 @@ use adb_plan_wire::decode_json;
 #[test]
 fn jvm_encoded_plan_decodes_and_validates() {
     let bytes = include_bytes!("fixtures/jvm-relational-plan.json");
-    let (plan, shape) = decode_json(bytes.trim_ascii_end()).expect("JVM plan must decode");
+    let decoded = decode_json(bytes.trim_ascii_end()).expect("JVM plan must decode");
+    assert_eq!(decoded.schema_epoch, adb_core::SchemaEpoch(7));
+    let (plan, shape) = (decoded.plan, decoded.shape);
 
     // SELECT c.name, SUM(o.amount) AS total: two output columns.
     assert_eq!(shape.output.len(), 2);
@@ -61,7 +63,8 @@ fn jvm_encoded_index_plan_decodes_and_validates() {
     use adb_index::{ScanDirection, ValueBound};
 
     let bytes = include_bytes!("fixtures/jvm-index-plan.json");
-    let (plan, shape) = decode_json(bytes.trim_ascii_end()).expect("JVM index plan must decode");
+    let decoded = decode_json(bytes.trim_ascii_end()).expect("JVM index plan must decode");
+    let (plan, shape) = (decoded.plan, decoded.shape);
     assert_eq!(shape.output, vec![SlotId(2), SlotId(1)]);
     let PhysicalPlan::Project { input, .. } = &plan else {
         panic!("expected a projection, got {plan:?}");

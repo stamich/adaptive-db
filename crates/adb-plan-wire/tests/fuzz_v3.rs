@@ -3,6 +3,9 @@
 //! into a plan that passed validation; the decoder never panics.
 use adb_plan_wire::{decode_json, encode_json, PlanWireError};
 
+/// Epoch every re-encoded plan carries.
+const EPOCH: adb_core::SchemaEpoch = adb_core::SchemaEpoch(7);
+
 /// The JVM's index plan fixture (index scan, filter, row fetch, project).
 const FIXTURE: &str = include_str!("fixtures/jvm-index-plan.json");
 
@@ -26,9 +29,9 @@ impl Words {
 
 /// Decodes `bytes`; a decoded plan must re-validate and re-encode (it passed validation).
 fn check(bytes: &[u8]) -> Result<(), PlanWireError> {
-    let (plan, _) = decode_json(bytes)?;
-    plan.validate().expect("decoded plans are valid");
-    encode_json(&plan).expect("decoded plans re-encode");
+    let decoded = decode_json(bytes)?;
+    decoded.plan.validate().expect("decoded plans are valid");
+    encode_json(&decoded.plan, EPOCH).expect("decoded plans re-encode");
     Ok(())
 }
 
@@ -88,8 +91,10 @@ fn token_mutations_are_rejected() {
         ("\"slot\":2}", "\"slot\":5000}"),
         ("\"slot\":0}", "\"slot\":1}"),
         ("\"op\":\"row_fetch\"", "\"op\":\"row_fetch_v4\""),
-        ("\"wire_version\":3", "\"wire_version\":4"),
-        ("\"wire_version\":3", "\"wire_version\":2"),
+        ("\"wire_version\":4", "\"wire_version\":5"),
+        ("\"wire_version\":4", "\"wire_version\":3"),
+        ("\"schema_epoch\":7", "\"schema_epoch\":-7"),
+        ("\"schema_epoch\":7,", ""),
     ];
     for (from, to) in replacements {
         assert!(fixture.contains(from), "{from}");
@@ -115,7 +120,7 @@ fn deep_nesting_is_refused() {
             r#"{"op":"limit","input":"#.repeat(depth),
             r#","limit":1}"#.repeat(depth)
         );
-        let wire = format!(r#"{{"wire_version":3,"plan":{plan}}}"#);
+        let wire = format!(r#"{{"wire_version":4,"schema_epoch":1,"plan":{plan}}}"#);
         assert!(check(wire.as_bytes()).is_err(), "depth {depth}");
     }
 }
