@@ -131,6 +131,15 @@ fn migration_refuses_wrong_inputs() {
         migrate(&dir.path().join("missing"), &dir.path().join("t2")),
         Err(DbError::InvalidArgument(_))
     ));
+    // Format 2 (2.3.0) is upgraded on open, never migrated.
+    let format_two = dir.path().join("two");
+    Database::open(&format_two).unwrap().close().unwrap();
+    adb_engine::format::stamp(&format_two, 2).unwrap();
+    let refused = migrate(&format_two, &dir.path().join("t3")).unwrap_err();
+    assert!(
+        refused.to_string().contains("upgrades in place"),
+        "{refused}"
+    );
     let source = dir.path().join("source");
     legacy_database(&source);
     std::fs::create_dir_all(dir.path().join("used")).unwrap();

@@ -1,7 +1,10 @@
-//! Offline migration of a database directory from data format 1 to 2 (see [`crate::format`]).
+//! Offline migration of a database directory from data format 1 to the current format 3 (see
+//! [`crate::format`]).
 //!
-//! Format 1 stored primary keys as raw two's-complement bits; format 2 flips their sign bit so
-//! key order is value order. The log is the source of truth, so the migration rewrites the log
+//! Format 1 stored primary keys as raw two's-complement bits; format 2 flipped their sign bit so
+//! key order is value order. Format 3 (2.4.0) reads format 2 unchanged, so this migration does
+//! the one rewrite format 1 needs and stamps the result as format 3; a format-2 directory needs
+//! no migration at all (the engine upgrades its marker on open). The log is the source of truth, so the migration rewrites the log
 //! and rebuilds every projection from it:
 //!
 //! 1. the source must be an unmarked format-1 directory (it is never modified);
@@ -10,7 +13,7 @@
 //!    consumer offsets of the change feed are copied unchanged;
 //! 3. statistics documents are copied (they describe values, not keys); the modification
 //!    counters are recounted from the log, like `Database::rebuild_projections` does;
-//! 4. the target is stamped as format 2 and opened, which replays the whole log into fresh
+//! 4. the target is stamped as format 3 and opened, which replays the whole log into fresh
 //!    projections, then checkpointed;
 //! 5. verification: the target log is read back and compared record by record with the
 //!    mapped source log, the projections pass the temporal integrity check, and the live rows
@@ -29,7 +32,9 @@ use adb_core::{KeyRange, Lsn, RowId};
 use adb_wal::{rewrite_log, WalCursor, WalRecord};
 
 use crate::{
-    format::{self, DATA_FORMAT_VERSION, LEGACY_DATA_FORMAT_VERSION},
+    format::{
+        self, DATA_FORMAT_VERSION, LEGACY_DATA_FORMAT_VERSION, UPGRADABLE_DATA_FORMAT_VERSION,
+    },
     statistics::{MODIFICATIONS_FILE, STATS_DIR},
     Database, DbError,
 };
@@ -59,10 +64,17 @@ pub struct MigrationReport {
 }
 
 /// Migrates the format-1 database in `source` into the new directory `target` (which must not
-/// exist or be empty). `source` is only read.
+/// exist or be empty), in the current data format. `source` is only read.
 pub fn migrate(source: &Path, target: &Path) -> Result<MigrationReport, DbError> {
     match format::detect(source, &source.join(WAL_DIR))? {
         Some(LEGACY_DATA_FORMAT_VERSION) => {}
+        Some(UPGRADABLE_DATA_FORMAT_VERSION) => {
+            return Err(DbError::InvalidArgument(format!(
+                "{} is in data format 2, which this engine upgrades in place when it opens it; \
+                 nothing to migrate",
+                source.display()
+            )))
+        }
         Some(found) => {
             return Err(DbError::InvalidArgument(format!(
                 "{} is already in data format {found}; nothing to migrate",
