@@ -11,11 +11,11 @@ import io.adb.sql.SqlParser
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.3.0) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.4.0) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
-  * native engine. `--workloads` runs the 2.3.0 workload benchmark instead
+  * native engine. `--workloads` runs the workload benchmark (2.3.0 workloads, engine catalog since 2.4.0) instead
   * ([[WorkloadBenchmark]]).
   */
 object BenchmarkMain:
@@ -25,7 +25,7 @@ object BenchmarkMain:
     * @param gatewayIterations iterations of the SQL-to-native gateway benchmark
     * @param dataDir           database directory for the gateway benchmark
     * @param nativeLib         path of the native library for the gateway benchmark
-    * @param workloads         run the 2.3.0 workload benchmark (needs `dataDir` and `nativeLib`)
+    * @param workloads         run the workload benchmark (needs `dataDir` and `nativeLib`)
     * @param out               where the workload benchmark writes its JSON report
     * @param scale             scale factor the workload data was prepared with
     * @param warmupMs          minimum warm-up time of each timed workload path
@@ -57,7 +57,7 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.3.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.4.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)

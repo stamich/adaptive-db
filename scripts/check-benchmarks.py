@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Checks that the 2.3.0 workload benchmark reports agree: every path of workloads A-E returns
+"""Checks that the 2.4.0 workload benchmark reports agree: every path of workloads A-E returns
 the same checksum, cost and rule mode return the same rows, fresh statistics estimate the plain
 workloads well, stale statistics are flagged and repaired by ANALYZE, every index holds one
 entry per row, an index read at an older snapshot returns the older rows, and the index and
 sequential plans of the selectivity sweep return the same rows, with cost mode choosing the
-index for the most selective range.
+index for the most selective range. The schema-evolution section (2.4.0) must return the same
+rows whatever share of rows is migrated, fill in defaults on read, refuse every stale plan and
+accept every current one, and write an ALTER record whose size does not depend on the table.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -72,6 +74,23 @@ def main(database_path: str, ffi_path: str) -> int:
                   f"join order {name}: cost and rule mode return different rows")
             check(cost["estimated_root_cost"] <= rule["estimated_root_cost"],
                   f"join order {name}: cost mode chose a plan it estimates as more expensive")
+    schema = native.get("schema_evolution")
+    check(schema is not None, "the native report has no schema_evolution section")
+    if schema is not None:
+        scans = schema["workloads"]["G_schema_adapted_scan"]
+        checksums = {name: scan["checksum"] for name, scan in scans.items()}
+        check(len(set(checksums.values())) == 1, f"adapted scans disagree: {checksums}")
+        point = schema["workloads"]["F_virtual_default_point_read"]
+        check(point["old_row_currency"] == "EUR", f"old row reads {point['old_row_currency']}, not the default")
+        check(point["old_row"]["checksum"] == point["migrated_row"]["checksum"],
+              "old and migrated rows read different values")
+        stale = schema["workloads"]["H_stale_schema_epoch_reject"]
+        check(stale["rejected"]["refused"] == stale["rejected"]["iterations"], "a stale plan was executed")
+        check(stale["accepted_same_plan"]["refused"] == 0, "a current plan was refused")
+        alter = schema["alter_latency"]
+        check(alter["large"]["log_bytes"] <= alter["small"]["log_bytes"] + 64,
+              f"ALTER of the large table logged {alter['large']['log_bytes']} bytes, the small one {alter['small']['log_bytes']}")
+        check(all(v == 2 for v in schema["checks"]["schema_versions"]), "the sc_account tables are not at version 2")
     estimation = ffi["estimation"]
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")

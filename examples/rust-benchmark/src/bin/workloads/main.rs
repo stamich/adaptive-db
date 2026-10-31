@@ -1,4 +1,4 @@
-//! Milestone 2.3.0 workload benchmark.
+//! Milestone 2.4.0 workload benchmark.
 //!
 //! Two modes:
 //!
@@ -8,7 +8,8 @@
 //!   in Rust, without SQL, planning or FFI. Comparing its timings with the JVM's
 //!   `ffi_prepared_plan` and `scala_cbo_ffi_rust` paths isolates the cost of the boundary and
 //!   of planning. It also measures the write overhead of 0, 1 and 3 indexes and an index read
-//!   at an older (`AS OF`) snapshot.
+//!   at an older (`AS OF`) snapshot. Since 2.4.0 it also runs the schema-evolution workloads
+//!   F–H, ALTER latency and write validation ([`schema`]) on a database of their own.
 //! * **Prepare** (`--prepare DIR`): loads the dataset into `DIR` and prepares the stale-statistics
 //!   table, for the JVM benchmark to open. Loading through SQL would cost one commit per row.
 //!
@@ -18,6 +19,7 @@
 //! ```
 
 mod dataset;
+mod schema;
 
 use std::{
     env,
@@ -565,7 +567,7 @@ fn main() -> Result<()> {
     // Changes balances: runs after every other measurement of ix_account.
     let as_of = as_of_read(&db, balance_index, args.scale, settings)?;
     let report = json!({
-        "milestone": "2.3.0",
+        "milestone": "2.4.0",
         "path": "rust_native",
         "host": {
             "os": env::consts::OS,
@@ -588,6 +590,7 @@ fn main() -> Result<()> {
         "workloads": workloads,
         "as_of_index_read": as_of,
         "write_overhead": write_overhead()?,
+        "schema_evolution": schema::report(args.scale, args.iters, args.warmup)?,
     });
     let text = serde_json::to_string_pretty(&report)?;
     println!("{text}");

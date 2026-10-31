@@ -15,7 +15,8 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.3.0 workload benchmark over the native engine.
+/** Milestone 2.4.0 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
+  * the tables are created in the engine catalog, so every row read goes through its schema).
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
   * data; `scripts/benchmark-ffi.sh` runs it); this benchmark creates the matching catalog in the
@@ -166,7 +167,7 @@ object WorkloadBenchmark:
         points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
       }
       val report = obj(
-        "milestone" -> str("2.3.0"),
+        "milestone" -> str("2.4.0"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),

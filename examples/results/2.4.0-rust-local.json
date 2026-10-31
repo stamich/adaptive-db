@@ -1,0 +1,79 @@
+{
+  "cdc_read": {
+    "events": 150,
+    "ms": 21
+  },
+  "churn_heap_pages": {
+    "after": 1,
+    "before": 1
+  },
+  "commit_single_row": {
+    "n_threads_ops_s": 11316.50344826591,
+    "one_thread_ops_s": 3907.3069188901004
+  },
+  "entity_scan": {
+    "ms": 2.6010389999999997,
+    "rows": 5000
+  },
+  "full_scan_filter": {
+    "ms": 8.417905,
+    "rows": 15000
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpus": 2,
+    "os": "linux"
+  },
+  "iters": 1000,
+  "load": {
+    "ms": 181,
+    "rows": 15000,
+    "rows_s": 82541.57755455025
+  },
+  "milestone": "2.4.0",
+  "plan_json_parse_ops_s": 1275323.1349993304,
+  "point_lookup": {
+    "ops_s": 596263.4554302011,
+    "p50_ns": 1484,
+    "p95_ns": 2055,
+    "p99_ns": 3208
+  },
+  "recovery_ms": 53,
+  "relational": {
+    "aggregate_sum_group_by": {
+      "ms": 2.5659402,
+      "rows_out": 100
+    },
+    "hash_join": {
+      "ms": 3.8805794,
+      "rows_out": 5000
+    },
+    "join_aggregate_top_k": {
+      "ms": 3.7667645999999997,
+      "rows_out": 10
+    },
+    "nested_loop_join": {
+      "ms": 10.2838082,
+      "rows_out": 1000
+    },
+    "plan_wire_decode_validate_ops_s": 138674.61734472777,
+    "plan_wire_encode_ops_s": 390464.5434766651,
+    "setup": {
+      "fact_rows": 5000,
+      "groups": 100,
+      "iters": 5,
+      "nested_rows": 1000
+    },
+    "sort": {
+      "ms": 3.3204042,
+      "rows_out": 5000
+    },
+    "top_k": {
+      "ms": 2.45127,
+      "rows_out": 10
+    }
+  },
+  "rows": 5000,
+  "threads": 8
+}

@@ -4,6 +4,35 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+## Milestone 2.4.0 schema evolution
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.4.0-database.json, 2.4.0-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.4.0-database.json examples/results/2.4.0-ffi.json
+```
+
+The workloads A–E and the JVM sections are unchanged, but the JVM benchmark now creates its
+tables in the engine catalog (every row is read through its schema). The Rust report gains a
+`schema_evolution` section, measured on a database of its own: four `sc_account` tables of
+50,000 rows × scale (`id`, `balance`, `owner`), three loaded at schema version 1 and then given
+`ADD COLUMN currency STRING NOT NULL DEFAULT 'EUR'` with 0 %, 50 % and 100 % of their rows
+rewritten (migrated to version 2), and an unversioned control table that stores `currency` in
+every row as 2.3.0 would.
+
+* **F_virtual_default_point_read**: a point lookup of a row that predates `currency` (the
+  default is filled in on read) and of a migrated row; both must read `EUR`.
+* **G_schema_adapted_scan**: `COUNT(*), SUM(balance) WHERE currency = 'EUR'` over the three
+  mixes and the control table; all four return the same checksum.
+* **H_stale_schema_epoch_reject**: `execute_planned` of a point lookup planned one epoch ago
+  (every call is refused) and of the same plan at the current epoch.
+* **alter_latency**: `ADD COLUMN` on a 1,000-row and a 50,000 × scale-row table; the log bytes
+  are the size of one catalog record either way, because no row is rewritten.
+* **write_validation**: 20,000 inserts, 100 per commit, into a table with a schema (stamping,
+  defaults, type checks) and one without.
+
+The committed 2.4.0 files were produced in a cloud container (see each report's `host`); compare
+them only with runs on the same machine. Scale-10 runs (`ADB_BENCH_SCALE=10`) are not included.
+
 ## Milestone 2.3.0 workloads
 
 ```bash
