@@ -52,7 +52,7 @@ jobs:
         run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.4.0-database.json" "$RUNNER_TEMP/2.4.0-ffi.json"
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results-sf${{ inputs.scale }}
           path: ${{ runner.temp }}/2.4.0-*.json
