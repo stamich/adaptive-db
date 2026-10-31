@@ -23,10 +23,11 @@ use crate::{
     committed::CommittedTx,
     index_catalog::{index_dir, remove_orphans, IndexCatalog, INDEXES_DIR},
     projection::{IndexHandle, Projection},
-    DbError,
+    schema_registry, DbError,
 };
 use adb_core::IndexId;
 use adb_index::{IndexDefinition, IndexError, IndexProjection, IndexSpec, IndexState};
+use adb_schema::SchemaRegistry;
 
 /// Current state plus history (and, since 2.3.0, the index catalog).
 pub struct Projections {
@@ -40,6 +41,8 @@ pub struct Projections {
     catalog: IndexCatalog,
     /// One projection per active index, in catalog order.
     indexes: Vec<IndexHandle>,
+    /// Entity schemas and the catalog epoch (2.4.0): the projection of the log's catalog records.
+    registry: SchemaRegistry,
 }
 
 /// Directory of the current-state projection inside a database directory.
@@ -72,7 +75,13 @@ impl Projections {
             versions: PersistentVersionStore::open(dir.join(VERSIONS_DIR), buffer_pages)?,
             catalog,
             indexes,
+            registry: schema_registry::load(dir)?,
         })
+    }
+
+    /// The schema registry.
+    pub fn registry(&self) -> &SchemaRegistry {
+        &self.registry
     }
 
     /// Restores the watermark and vacuum horizon of every index after opening: the persisted
@@ -197,9 +206,13 @@ impl Projections {
         &self.catalog
     }
 
-    /// The journal write that persists the index catalog (part of every checkpoint).
-    pub fn catalog_journal_write(&self) -> Result<FileWrite, DbError> {
-        self.catalog.journal_write(&self.dir)
+    /// The journal writes that persist the index catalog and the schema registry (part of every
+    /// checkpoint).
+    pub fn catalog_journal_writes(&self) -> Result<Vec<FileWrite>, DbError> {
+        Ok(vec![
+            self.catalog.journal_write(&self.dir)?,
+            schema_registry::journal_write(&self.dir, &self.registry)?,
+        ])
     }
 
     /// Latest record of a row, including tombstones.
@@ -207,9 +220,12 @@ impl Projections {
         self.current.get(row_id)
     }
 
-    /// Applies a committed transaction: history first, then the new current state, then every
-    /// index.
-    pub fn apply(&self, tx: &CommittedTx, lsn: Lsn) -> Result<(), DbError> {
+    /// Applies a committed transaction: its catalog changes first, then history, the new current
+    /// state and every index.
+    pub fn apply(&mut self, tx: &CommittedTx, lsn: Lsn) -> Result<(), DbError> {
+        for (epoch, event) in &tx.catalog {
+            self.registry.apply(*epoch, event)?;
+        }
         for (row_id, version) in &tx.before_images {
             self.versions.put_at_lsn(*row_id, version, lsn)?;
         }

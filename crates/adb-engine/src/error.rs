@@ -3,6 +3,7 @@ use adb_core::Lsn;
 use adb_execution::ExecutionError;
 use adb_index::IndexError;
 use adb_journal::JournalError;
+use adb_schema::SchemaError;
 use adb_stats::StatsError;
 use adb_storage::StorageError;
 use adb_tx::Conflict;
@@ -78,6 +79,15 @@ pub enum DbError {
     /// The index catalog (`indexes/catalog.meta`) failed validation.
     #[error("corrupt index catalog: {0}")]
     CorruptIndexCatalog(String),
+    /// A schema change or a row was refused by the schema rules (see [`adb_schema`]).
+    #[error("{0}")]
+    Schema(#[from] SchemaError),
+    /// No live entity has the given name or id.
+    #[error("table {0} does not exist")]
+    EntityNotFound(String),
+    /// The schema registry (`schema/registry.meta`) failed validation.
+    #[error("corrupt schema registry: {0}")]
+    CorruptSchemaRegistry(String),
 }
 
 impl DbError {
@@ -88,7 +98,10 @@ impl DbError {
             DbError::Wal(WalError::Corrupt(_) | WalError::Serialization(_)) => true,
             DbError::Journal(JournalError::Corrupt(_)) => true,
             DbError::Storage(error) => error.is_corruption(),
-            DbError::CorruptFormatMarker(_) | DbError::CorruptIndexCatalog(_) => true,
+            DbError::CorruptFormatMarker(_)
+            | DbError::CorruptIndexCatalog(_)
+            | DbError::CorruptSchemaRegistry(_) => true,
+            DbError::Schema(SchemaError::Corrupt(_)) => true,
             DbError::Index(error) => error.is_corruption(),
             _ => false,
         }

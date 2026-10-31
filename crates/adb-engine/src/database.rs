@@ -31,13 +31,14 @@ use std::{
 };
 
 use adb_core::encode_key;
-use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId};
+use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
     QueryCursor,
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
+use adb_schema::EntitySchema;
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
 use adb_storage::{
@@ -58,6 +59,7 @@ use crate::{
     projection::Projection,
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
+    schema_registry::registry_path,
     statistics::{modifications_path, ModificationCounters, StatisticsStore},
     DatabaseOptions, DbError,
 };
@@ -177,7 +179,8 @@ impl Database {
     ///
     /// The modification counters are recounted from the log too; statistics documents are
     /// kept (they describe a snapshot, not the store). Index projections are derived data and
-    /// are rebuilt as well; the index catalog (their definitions) is kept.
+    /// are rebuilt as well; the index catalog (their definitions) is kept. The schema registry
+    /// is rebuilt from the catalog records of the log.
     pub fn rebuild_projections(
         path: impl AsRef<Path>,
         options: DatabaseOptions,
@@ -211,6 +214,7 @@ impl Database {
             dir.join(JOURNAL_FILE),
             dir.join("checkpoint.journal.tmp"),
             modifications_path(dir),
+            registry_path(dir),
         ] {
             if path.exists() {
                 fs::remove_file(path)?;
@@ -564,6 +568,56 @@ impl Database {
                 }
             })
             .collect()
+    }
+
+    // ----- schemas ----------------------------------------------------------------------------
+
+    /// The current catalog epoch: it moves with every change that can invalidate a plan.
+    pub fn schema_epoch(&self) -> SchemaEpoch {
+        self.inner.projections.read().registry().epoch()
+    }
+
+    /// The latest schema of the live entity `entity_id` (`None` for an entity without a
+    /// registered schema: its rows are stored as written, without validation).
+    pub fn schema(&self, entity_id: u64) -> Option<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .latest(entity_id)
+            .cloned()
+    }
+
+    /// The latest schema of the live entity named `name` (case-insensitive).
+    pub fn schema_by_name(&self, name: &str) -> Option<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .by_name(name)
+            .cloned()
+    }
+
+    /// The latest schema of every live entity, in id order.
+    pub fn schemas(&self) -> Vec<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .entities()
+            .cloned()
+            .collect()
+    }
+
+    /// Every version of entity `entity_id` (live or dropped), oldest first.
+    pub fn schema_history(&self, entity_id: u64) -> Vec<Arc<EntitySchema>> {
+        self.inner
+            .projections
+            .read()
+            .registry()
+            .history(entity_id)
+            .map(|history| history.versions.clone())
+            .unwrap_or_default()
     }
 
     // ----- maintenance ----------------------------------------------------------------------

@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 adb-core = { path = "../adb-core" }
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 thiserror.workspace = true
 
 [dev-dependencies]

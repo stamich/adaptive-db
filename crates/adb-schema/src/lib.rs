@@ -9,6 +9,8 @@
 //! * [`change`] — [`EntitySpec`] (`CREATE TABLE`) and [`SchemaChange`] (`ALTER TABLE`), applied
 //!   with [`create`] and [`apply`];
 //! * [`validate`] — the rules of one version and of a chain of versions;
+//! * [`registry`] — [`SchemaRegistry`], every entity's history and the catalog epoch, built
+//!   from the [`CatalogEvent`]s of the log;
 //! * [`limits`] — size bounds;
 //! * [`error`] — [`SchemaError`].
 //!
@@ -20,9 +22,11 @@ pub mod change;
 pub mod error;
 pub mod limits;
 pub mod model;
+pub mod registry;
 pub mod validate;
 
 pub use adapter::RowAdapter;
 pub use change::{apply, create, EntitySpec, NewField, SchemaChange};
 pub use error::SchemaError;
 pub use model::{EntitySchema, FieldDef, ForeignKey, SYSTEM_ENTITY_FIELD};
+pub use registry::{CatalogEvent, EntityHistory, RegistryState, SchemaRegistry};

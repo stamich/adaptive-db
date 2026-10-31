@@ -1,6 +1,6 @@
 //! Records of the canonical log.
 use adb_core::{CommitTs, Row, RowId, SchemaEpoch, TxId};
-use adb_schema::EntitySchema;
+pub use adb_schema::CatalogEvent;
 use serde::{Deserialize, Serialize};
 
 /// One log record. The bincode encoding is the persistent log format.
@@ -68,21 +68,4 @@ pub enum WalRecord {
         /// The change.
         event: CatalogEvent,
     },
-}
-
-/// What a [`WalRecord::Catalog`] record changes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum CatalogEvent {
-    /// A new version of an entity's schema: version 1 for `CREATE TABLE`, the next version for
-    /// `ALTER TABLE`.
-    Schema(EntitySchema),
-    /// `DROP TABLE`: the entity leaves the catalog (its id is never reused; its rows are no longer
-    /// readable through SQL).
-    DropEntity {
-        /// The dropped entity.
-        entity_id: u64,
-    },
-    /// The epoch moved without a schema change (`CREATE INDEX`, `DROP INDEX`): plans made before
-    /// must be planned again.
-    Epoch,
 }
