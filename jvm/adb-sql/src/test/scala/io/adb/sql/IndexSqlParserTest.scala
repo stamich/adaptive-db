@@ -34,7 +34,7 @@ final class IndexSqlParserTest:
         "CREATE INDEX i ON t (c) INCLUDE ()",
         "CREATE INDEX i ON t (c DESC ASC)",
         "DROP INDEX",
-        "DROP TABLE t",
+        "DROP TABLE",
         "SHOW TABLES",
         "CREATE INDEX i ON t (" + (1 to 17).map(n => s"c$n").mkString(", ") + ")"
       )

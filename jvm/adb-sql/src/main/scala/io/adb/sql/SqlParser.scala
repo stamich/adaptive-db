@@ -6,8 +6,9 @@ import io.adb.sql.SqlBinaryOp.*
 /** Hand-written recursive-descent parser for the Adaptive DB SQL subset.
   *
   * Statements: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, EXPLAIN [ANALYZE], since 2.2.3
-  * ANALYZE [table] and SET name = value, and since 2.3.0 CREATE INDEX, DROP INDEX and
-  * SHOW INDEXES [ON table]. A column may declare a foreign-key hint
+  * ANALYZE [table] and SET name = value, since 2.3.0 CREATE INDEX, DROP INDEX and
+  * SHOW INDEXES [ON table], and since 2.4.0 ALTER TABLE (ADD, RENAME and DROP COLUMN), DROP TABLE,
+  * SHOW SCHEMA table and column defaults (`DEFAULT literal`). A column may declare a foreign-key hint
   * `REFERENCES table(column) NOT ENFORCED` (the engine never checks it). Since 2.1 a
   * SELECT may join tables (INNER / LEFT / CROSS), alias them, qualify columns, aggregate with
   * COUNT / SUM / MIN / MAX / AVG, GROUP BY and ORDER BY:
@@ -83,7 +84,8 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       else if acceptWord("DELETE") then parseDelete()
       else if acceptWord("ANALYZE") then parseAnalyze()
       else if acceptWord("SET") then parseSet()
-      else if acceptWord("DROP") then { expectWord("INDEX"); DropIndex(expectIdentifier()) }
+      else if acceptWord("ALTER") then parseAlter()
+      else if acceptWord("DROP") then parseDrop()
       else if acceptWord("SHOW") then parseShow()
       else throw error(s"expected statement, got $current")
 
@@ -105,10 +107,53 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       case other => throw error(s"expected a value for $name, got $other")
     SetOption(name, value)
 
-  /** Parses the rest of `SHOW INDEXES [ON table]` (`SHOW INDEX` is accepted too). */
+  /** Parses the rest of `SHOW INDEXES [ON table]` (`SHOW INDEX` is accepted too) or
+    * `SHOW SCHEMA table`.
+    */
   private def parseShow(): Statement =
-    if !acceptWord("INDEXES") then expectWord("INDEX")
-    ShowIndexes(if acceptWord("ON") then Some(expectIdentifier()) else None)
+    if acceptWord("SCHEMA") then ShowSchema(expectIdentifier())
+    else
+      if !acceptWord("INDEXES") then expectWord("INDEX")
+      ShowIndexes(if acceptWord("ON") then Some(expectIdentifier()) else None)
+
+  /** Parses the rest of `DROP INDEX name` or `DROP TABLE name [RESTRICT]`. */
+  private def parseDrop(): Statement =
+    if acceptWord("TABLE") then
+      val name = expectIdentifier()
+      restrictOnly()
+      DropTable(name)
+    else
+      expectWord("INDEX")
+      DropIndex(expectIdentifier())
+
+  /** Parses the rest of `ALTER TABLE table ADD | RENAME | DROP [COLUMN] ...`. */
+  private def parseAlter(): Statement =
+    expectWord("TABLE")
+    val table = expectIdentifier()
+    val action =
+      if acceptWord("ADD") then
+        acceptWord("COLUMN")
+        val column = parseColumnDef()
+        if column.primaryKey then throw error("ALTER TABLE cannot add a PRIMARY KEY column")
+        AlterAction.AddColumn(column)
+      else if acceptWord("RENAME") then
+        if acceptWord("TO") then throw error("renaming tables is not supported; rename columns with RENAME COLUMN a TO b")
+        acceptWord("COLUMN")
+        val from = expectIdentifier()
+        expectWord("TO")
+        AlterAction.RenameColumn(from, expectIdentifier())
+      else if acceptWord("DROP") then
+        acceptWord("COLUMN")
+        val name = expectIdentifier()
+        restrictOnly()
+        AlterAction.DropColumn(name)
+      else throw error(s"expected ADD, RENAME or DROP after ALTER TABLE $table")
+    AlterTable(table, action)
+
+  /** Accepts an optional `RESTRICT`; `CASCADE` is refused because nothing is dropped implicitly. */
+  private def restrictOnly(): Unit =
+    if !acceptWord("RESTRICT") && acceptWord("CASCADE") then
+      throw error("CASCADE is not supported: drop dependent indexes first (RESTRICT is the only behaviour)")
 
   /** Parses the rest of `CREATE INDEX name ON table (column [ASC|DESC], ...)
     * [INCLUDE (column, ...)]`.
@@ -147,31 +192,45 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
       expectWord("TABLE")
       parseCreateTable()
 
-  /** Parses the rest of `CREATE TABLE name (column type [NOT NULL] [PRIMARY KEY]
-    * [REFERENCES table(column) NOT ENFORCED], ...)`.
-    */
+  /** Parses the rest of `CREATE TABLE name (column-definition, ...)`. */
   private def parseCreateTable(): Statement =
     val name = expectIdentifier()
     expectSymbol("(")
     val columns = Vector.newBuilder[ColumnDef]
     var done = false
     while !done do
-      val columnName = expectIdentifier()
-      val dataType = expectIdentifier()
-      var nullable = true
-      var primaryKey = false
-      var references = Option.empty[ColumnReference]
-      var modifiers = true
-      while modifiers do
-        if acceptWord("NOT") then { expectWord("NULL"); nullable = false }
-        else if acceptWord("PRIMARY") then { expectWord("KEY"); primaryKey = true; nullable = false }
-        else if acceptWord("REFERENCES") then
-          if references.isDefined then throw error(s"$columnName has more than one REFERENCES clause")
-          references = Some(parseReference())
-        else modifiers = false
-      columns += ColumnDef(columnName, dataType, nullable, primaryKey, references)
+      columns += parseColumnDef()
       if acceptSymbol(",") then () else { expectSymbol(")"); done = true }
     CreateTable(name, columns.result())
+
+  /** Parses `column type` followed by any of `NOT NULL`, `NULL`, `PRIMARY KEY`,
+    * `DEFAULT literal` and `REFERENCES table(column) NOT ENFORCED`, each at most once.
+    */
+  private def parseColumnDef(): ColumnDef =
+    val columnName = expectIdentifier()
+    val dataType = expectIdentifier()
+    var nullable = true
+    var primaryKey = false
+    var references = Option.empty[ColumnReference]
+    var default = Option.empty[SqlExpr]
+    var modifiers = true
+    while modifiers do
+      if acceptWord("NOT") then { expectWord("NULL"); nullable = false }
+      else if acceptWord("NULL") then ()
+      else if acceptWord("PRIMARY") then { expectWord("KEY"); primaryKey = true; nullable = false }
+      else if acceptWord("DEFAULT") then
+        if default.isDefined then throw error(s"$columnName has more than one DEFAULT")
+        default = Some(parseLiteral(columnName))
+      else if acceptWord("REFERENCES") then
+        if references.isDefined then throw error(s"$columnName has more than one REFERENCES clause")
+        references = Some(parseReference())
+      else modifiers = false
+    ColumnDef(columnName, dataType, nullable, primaryKey, references, default)
+
+  /** Parses the literal of a `DEFAULT` clause (number, string, TRUE, FALSE or NULL). */
+  private def parseLiteral(column: String): SqlExpr = parsePrimary() match
+    case literal @ (_: LongLiteral | _: DoubleLiteral | _: StringLiteral | _: BoolLiteral | NullLiteral) => literal
+    case other => throw error(s"DEFAULT of $column must be a literal, got ${SqlExpr.render(other)}")
 
   /** Parses `table(column) NOT ENFORCED` after `REFERENCES`. Foreign keys are optimizer hints
     * only, so the clause must say so explicitly.

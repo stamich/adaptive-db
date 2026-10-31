@@ -1,18 +1,26 @@
 package io.adb.logical
 
 import io.adb.model.*
+import io.adb.schema.SchemaChange
 
 /** A statement whose names are resolved against the catalog and whose expressions are type-checked. */
 sealed trait BoundStatement derives CanEqual
-/** `CREATE TABLE`: entity name, `(column, type, nullable)` definitions, primary-key column name
-  * and the foreign-key hints by column name.
+/** `CREATE TABLE`: entity name, `(column, type, nullable)` definitions, primary-key column name,
+  * the foreign-key hints and (since 2.4.0) the column defaults, both by column name.
   */
 final case class BoundCreateTable(
     name: String,
     fields: Vector[(String, DataType, Boolean)],
     primaryKey: String,
-    references: Map[String, ForeignKeyRef] = Map.empty
+    references: Map[String, ForeignKeyRef] = Map.empty,
+    defaults: Map[String, DbValue] = Map.empty
 ) extends BoundStatement
+/** `ALTER TABLE` (2.4.0): one change of `entity`, already resolved to the engine's form. */
+final case class BoundAlterTable(entity: Entity, change: SchemaChange) extends BoundStatement
+/** `DROP TABLE` (2.4.0). */
+final case class BoundDropTable(entity: Entity) extends BoundStatement
+/** `SHOW SCHEMA` (2.4.0): columns and version history of `entity`. */
+final case class BoundShowSchema(entity: Entity) extends BoundStatement
 /** `ANALYZE`: the entities to analyze (one, or every entity of the catalog). */
 final case class BoundAnalyze(entities: Vector[Entity]) extends BoundStatement
 /** `CREATE INDEX`: key columns (field and descending flag) and covered fields of `entity`. */

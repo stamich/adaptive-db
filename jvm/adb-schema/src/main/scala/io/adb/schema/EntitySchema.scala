@@ -71,6 +71,17 @@ final case class EntitySchema(
   def primaryKeyField: FieldDefinition =
     fieldById(primaryKey).getOrElse(throw new IllegalStateException(s"entity $name has no primary key field"))
 
+  /** The active columns as SQL column definitions, e.g.
+    * `id BIGINT NOT NULL PRIMARY KEY, currency STRING NOT NULL DEFAULT 'EUR'` (`SHOW SCHEMA`).
+    */
+  def columnsSql: String =
+    activeFields.map { field =>
+      val notNull = if field.nullable then "" else " NOT NULL"
+      val pk = if field.id == primaryKey then " PRIMARY KEY" else ""
+      val default = field.default.fold("")(value => s" DEFAULT ${SchemaJson.sqlLiteral(value)}")
+      s"${field.name} ${field.dataType.sqlName}$notNull$pk$default"
+    }.mkString(", ")
+
   /** The binder's view of this version: active fields only, with their defaults and lifetimes. */
   def toEntity: Entity =
     Entity(

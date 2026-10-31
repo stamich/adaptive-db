@@ -23,6 +23,10 @@ final class SchemaJsonTest:
     assertEquals(Some(DbValue.StringValue("EUR")), entity.field("currency").flatMap(_.default))
     assertEquals(SchemaVersion(2), entity.field("currency").get.introducedIn)
     assertEquals(SchemaVersion(3), entity.schemaVersion)
+    assertEquals(
+      "id BIGINT NOT NULL PRIMARY KEY, balance BIGINT NOT NULL DEFAULT 0, currency STRING NOT NULL DEFAULT 'EUR'",
+      SchemaFixtures.V3.columnsSql
+    )
 
   /** Requests use the engine's member names, types and value forms. */
   @Test def encodesRequests(): Unit =

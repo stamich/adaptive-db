@@ -1,6 +1,6 @@
 package io.adb.gateway
 
-import io.adb.catalog.{Catalog, IndexCatalog, IndexInfo}
+import io.adb.catalog.{Catalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
 import io.adb.model.*
@@ -9,6 +9,7 @@ import io.adb.optimizer.cardinality.{CardinalityEstimator, StatisticsStatus}
 import io.adb.optimizer.cost.CostModel
 import io.adb.optimizer.join.JoinReorderRule
 import io.adb.physical.*
+import io.adb.schema.{EntitySpec, NewField, SchemaHistory}
 import io.adb.sql.SqlParser
 import io.adb.statistics.{IndexStatistics, StatisticsCodec, StatisticsProvider}
 import java.util.Optional
@@ -75,9 +76,32 @@ final class AdaptiveDatabase(
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement, sql: String): QueryResult = statement match
-    case BoundCreateTable(name, fields, pk, references) =>
-      val entity = catalog.createEntity(name, fields, pk, references)
+    case BoundCreateTable(name, fields, pk, references, defaults) =>
+      val entity = catalog match
+        case versioned: SchemaCatalog =>
+          // The binder keys defaults and hints by the column name as declared.
+          versioned.createEntity(
+            EntitySpec(
+              name,
+              fields.map((column, dataType, nullable) => NewField(column, dataType, nullable, defaults.get(column), references.get(column))),
+              pk
+            )
+          )
+        case legacy =>
+          require(defaults.isEmpty, "column defaults need the engine catalog")
+          legacy.createEntity(name, fields, pk, references)
       QueryResult(Vector.empty, Vector.empty, Some(s"created table ${entity.name} entityId=${entity.id.value}"))
+
+    case BoundAlterTable(entity, change) =>
+      val altered = schemaCatalog("ALTER TABLE").alterEntity(entity.id, change)
+      QueryResult(Vector.empty, Vector.empty, Some(s"altered table ${altered.name}: ${change.sql} (schema version ${altered.version.value})"))
+
+    case BoundDropTable(entity) =>
+      schemaCatalog("DROP TABLE").dropEntity(entity.id)
+      QueryResult(Vector.empty, Vector.empty, Some(s"dropped table ${entity.name}"))
+
+    case BoundShowSchema(entity) =>
+      QueryResult(Vector("version", "epoch", "change", "columns"), AdaptiveDatabase.describe(schemaCatalog("SHOW SCHEMA").history(entity.id)))
 
     case BoundCreateIndex(name, entity, columns, include) =>
       val keys = columns.map((field, descending) =>
@@ -138,6 +162,11 @@ final class AdaptiveDatabase(
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
 
+  /** The catalog as a versioned one, for statements that need schema evolution. */
+  private def schemaCatalog(statement: String): SchemaCatalog = catalog match
+    case versioned: SchemaCatalog => versioned
+    case _ => throw new IllegalStateException(s"$statement needs the engine catalog (this session uses a fixed catalog)")
+
   /** Executes a planned SELECT: sends the physical plan to the engine as JSON (optionally at an
     * `AS OF` snapshot), materializes the output columns of every batch by slot, records the
     * estimate feedback, and returns the rows together with the native runtime profile.
@@ -193,6 +222,20 @@ object AdaptiveDatabase:
       java.lang.Long.valueOf(index.usableFromTs),
       java.lang.Long.valueOf(index.watermarkTs)
     )
+
+  /** `SHOW SCHEMA` rows, one per version: version, catalog epoch, the change that produced it
+    * (`CREATE TABLE` for version 1) and the columns it has.
+    */
+  def describe(history: SchemaHistory): Vector[Vector[Any]] =
+    val changes = history.changes.toMap
+    history.versions.map { schema =>
+      Vector[Any](
+        java.lang.Long.valueOf(schema.version.value),
+        java.lang.Long.valueOf(schema.epoch.value),
+        changes.get(schema.version).fold("CREATE TABLE")(_.sql),
+        schema.columnsSql
+      )
+    }
 
   /** The planning stages of one SELECT.
     *
