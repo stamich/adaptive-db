@@ -2,8 +2,8 @@ package io.adb.statistics
 
 import io.adb.model.*
 
-/** Decodes the engine's statistics document (`adb_statistics_json`, format versions 1 and 2;
-  * version 2 adds index statistics).
+/** Decodes the engine's statistics document (`adb_statistics_json`, format versions 1 to 3;
+  * version 2 adds index statistics, version 3 the schema version the rows were read through).
   *
   * The decoder is strict: a missing or mistyped field, an unknown format version or an
   * inconsistent count fails with `IllegalArgumentException`, so a planner never runs on a
@@ -11,7 +11,7 @@ import io.adb.model.*
   */
 object StatisticsCodec:
   /** Newest document format this decoder understands. */
-  val FormatVersion: Long = 2
+  val FormatVersion: Long = 3
   /** Oldest document format this decoder understands. */
   val MinFormatVersion: Long = 1
 
@@ -39,7 +39,8 @@ object StatisticsCodec:
       sampledRows = long(root, "sampled_rows"),
       exact = bool(root, "exact"),
       columns = columns.map(c => c.fieldId -> c).toMap,
-      indexes = indexes.map(i => i.indexId -> i).toMap
+      indexes = indexes.map(i => i.indexId -> i).toMap,
+      schemaVersion = if version < 3 then 0L else long(root, "schema_version")
     )
 
   /** Decodes one index and checks its counts. */

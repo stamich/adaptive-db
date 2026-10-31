@@ -266,7 +266,10 @@ fn analyze_describes_indexes() {
     // Some history: ended entries are stored but not counted as visible.
     put(&db, RowId::from_primary_key(ENTITY, 0), 99);
     let statistics = db.analyze(ENTITY, &AnalyzeOptions::default()).unwrap();
-    assert_eq!(statistics.format_version, 2);
+    assert_eq!(
+        statistics.format_version,
+        adb_stats::STATISTICS_FORMAT_VERSION
+    );
     assert_eq!(statistics.indexes.len(), 2);
     let first = &statistics.indexes[0];
     assert_eq!(first.index_id, ordered.id.0);

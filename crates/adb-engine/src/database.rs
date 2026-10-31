@@ -421,6 +421,8 @@ impl Database {
         let mut statistics = adb_stats::analyze(self, entity_id, snapshot, options)?;
         statistics.modifications_at_analyze = modifications;
         statistics.indexes = self.index_statistics(entity_id, snapshot)?;
+        // The scan read rows through the latest schema (see `DataSource::scan_page`).
+        statistics.schema_version = self.schema(entity_id).map_or(0, |schema| schema.version.0);
         self.inner.statistics.save(statistics.clone())?;
         Ok(statistics)
     }

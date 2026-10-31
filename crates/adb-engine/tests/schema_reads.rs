@@ -232,3 +232,61 @@ fn running_queries_keep_their_schema() {
     let after = run(&db, plan, None, 1);
     assert!(after.iter().all(|row| row[0] == Value::Null));
 }
+
+/// An index on a column added with a default holds the default for rows that predate it,
+/// stays equal to its table through updates of those rows, and ANALYZE records the version.
+#[test]
+fn indexes_and_statistics_see_adapted_rows() {
+    let dir = tempdir().unwrap();
+    let db = database(dir.path(), 10);
+    add_status(&db);
+    db.create_index(IndexSpec {
+        name: "idx_status".into(),
+        entity_id: 1,
+        columns: vec![IndexColumn {
+            field_id: 4,
+            direction: Direction::Asc,
+        }],
+        include: vec![],
+    })
+    .unwrap();
+    let active = |db: &Database| {
+        run(
+            db,
+            PhysicalPlan::IndexScan {
+                index_id: 0,
+                bounds: IndexBounds {
+                    prefix: vec![Value::String("ACTIVE".into())],
+                    ..IndexBounds::all()
+                },
+                direction: ScanDirection::Forward,
+                columns: vec![],
+                limit: None,
+            },
+            None,
+            0,
+        )
+        .len()
+    };
+    assert_eq!(
+        active(&db),
+        10,
+        "old rows are indexed under their virtual default"
+    );
+    // Updating an old row ends its entry (computed from the adapted before-image).
+    let key = RowId::from_primary_key(1, 3);
+    let mut tx = db.begin();
+    let mut row = db.get_in_tx(&mut tx, key).unwrap().unwrap();
+    row.fields.insert(4, Value::String("CLOSED".into()));
+    tx.put(key, row);
+    db.commit(tx).unwrap();
+    assert_eq!(active(&db), 9);
+    assert!(db.verify().unwrap().is_ok());
+    drop(db);
+    let db = Database::open(dir.path()).unwrap();
+    assert!(db.verify().unwrap().is_ok());
+    let statistics = db.analyze(1, &Default::default()).unwrap();
+    assert_eq!(statistics.schema_version, 2);
+    let status = statistics.columns.iter().find(|c| c.field_id == 4).unwrap();
+    assert_eq!(status.null_count, 0, "ANALYZE reads the virtual default");
+}

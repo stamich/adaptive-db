@@ -7,7 +7,7 @@ use crate::StatsError;
 /// Version of the statistics documents this engine writes; bumped on incompatible changes.
 /// 1 = 2.2.3 (tables and columns); 2 = 2.3.0 (adds `indexes`). Version 1 documents are still
 /// read (they have no index statistics).
-pub const STATISTICS_FORMAT_VERSION: u32 = 2;
+pub const STATISTICS_FORMAT_VERSION: u32 = 3;
 /// Oldest statistics document version still read.
 pub const MIN_STATISTICS_FORMAT_VERSION: u32 = 1;
 /// Most indexes one statistics document may describe.
@@ -45,6 +45,11 @@ pub struct TableStatistics {
     /// One entry per index of the entity, ordered by index id (format 2; empty in format 1).
     #[serde(default)]
     pub indexes: Vec<IndexStatistics>,
+    /// Schema version of the entity the rows were read through (format 3, Milestone 2.4.0;
+    /// 0 for an entity without a schema and for older documents). A column added after this
+    /// version has no statistics.
+    #[serde(default)]
+    pub schema_version: u32,
 }
 
 /// Statistics of one secondary index, collected by the same `ANALYZE` run as its table.
@@ -173,6 +178,9 @@ impl TableStatistics {
         }
         if self.format_version < 2 && !self.indexes.is_empty() {
             return fail("format 1 documents have no index statistics".into());
+        }
+        if self.format_version < 3 && self.schema_version != 0 {
+            return fail("documents before format 3 carry no schema version".into());
         }
         if self.indexes.len() > MAX_INDEXES {
             return fail(format!("more than {MAX_INDEXES} indexes"));
