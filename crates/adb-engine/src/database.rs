@@ -551,6 +551,7 @@ impl Database {
         self.inner.health.check()?;
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
+        check_index_columns(self.inner.projections.read().registry(), &spec)?;
         let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
         let lsn = self.inner.log.end()?;
         let definition = self.inner.projections.write().build_index(
@@ -682,6 +683,9 @@ impl Database {
     /// Applies one `ALTER TABLE` change to the live entity `entity_id` and returns the new
     /// version. Nothing is rewritten: rows keep the version they were written under and are
     /// adapted when read.
+    ///
+    /// `DROP COLUMN` is RESTRICT: it is refused while the field is the primary key or a key or
+    /// covered column of an index (index keys must stay readable for every stored row).
     pub fn alter_entity(
         &self,
         entity_id: u64,
@@ -692,6 +696,9 @@ impl Database {
             let current = registry
                 .latest(entity_id)
                 .ok_or_else(|| DbError::EntityNotFound(entity_id.to_string()))?;
+            if let SchemaChange::DropField { name } = change {
+                check_drop_field(projections, current, name)?;
+            }
             let next = adb_schema::apply(current, change, epoch)?;
             check_references(registry, &next)?;
             Ok((CatalogEvent::Schema(next), ()))
@@ -699,9 +706,10 @@ impl Database {
         Ok(self.schema(entity_id).expect("just altered"))
     }
 
-    /// Drops the live entity `entity_id` (`DROP TABLE`); returns its last version. Refused while
-    /// indexes exist on it. Its rows stay in storage but are no longer reachable through the
-    /// catalog, and its id is never reused.
+    /// Drops the live entity `entity_id` (`DROP TABLE`); returns its last version. Refused
+    /// (RESTRICT) while indexes exist on it or another live entity holds a foreign-key hint to
+    /// it. Its rows stay in storage but are no longer reachable through the catalog, and its id
+    /// is never reused.
     pub fn drop_entity(&self, entity_id: u64) -> Result<Arc<EntitySchema>, DbError> {
         let dropped = self
             .schema(entity_id)
@@ -719,9 +727,28 @@ impl Database {
                 .collect();
             if !indexes.is_empty() {
                 return Err(DbError::InvalidArgument(format!(
-                    "cannot drop {}: indexes {} depend on it (drop them first)",
+                    "cannot drop table {}: indexes {} depend on it (drop them first)",
                     dropped.name,
                     indexes.join(", ")
+                )));
+            }
+            let referencing: Vec<String> = projections
+                .registry()
+                .entities()
+                .filter(|schema| schema.entity_id != entity_id)
+                .flat_map(|schema| {
+                    schema
+                        .active_fields()
+                        .filter(|field| field.references.is_some_and(|r| r.entity_id == entity_id))
+                        .map(|field| format!("{}.{}", schema.name, field.name))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            if !referencing.is_empty() {
+                return Err(DbError::InvalidArgument(format!(
+                    "cannot drop table {}: column {} (foreign-key hint) depends on it",
+                    dropped.name,
+                    referencing.join(", ")
                 )));
             }
             Ok((CatalogEvent::DropEntity { entity_id }, ()))
@@ -1139,6 +1166,75 @@ enum Position {
     Key(usize),
     /// Covered column at this position.
     Included(usize),
+}
+
+/// RESTRICT check of `DROP COLUMN name` of `schema`: refused while an index uses the field as a
+/// key or covered column. (The primary key and unknown names are refused by `adb_schema::apply`.)
+fn check_drop_field(
+    projections: &Projections,
+    schema: &EntitySchema,
+    name: &str,
+) -> Result<(), DbError> {
+    let Some(field) = schema.field(name) else {
+        return Ok(());
+    };
+    let users: Vec<String> = projections
+        .catalog()
+        .definitions()
+        .iter()
+        .filter(|definition| definition.entity_id == schema.entity_id)
+        .filter_map(|definition| {
+            if definition.columns.iter().any(|c| c.field_id == field.id) {
+                Some(format!("index {} (key column)", definition.name))
+            } else if definition.include.contains(&field.id) {
+                Some(format!("index {} (covered column)", definition.name))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if users.is_empty() {
+        return Ok(());
+    }
+    Err(DbError::InvalidArgument(format!(
+        "cannot drop column {}.{}: {} depends on it (drop the index first)",
+        schema.name,
+        field.name,
+        users.join(", ")
+    )))
+}
+
+/// Checks that an index of an entity with a schema names only its live, active fields (or the
+/// system field 0). Entities without a schema are not checked: their fields are not declared.
+fn check_index_columns(registry: &SchemaRegistry, spec: &IndexSpec) -> Result<(), DbError> {
+    let Some(history) = registry.history(spec.entity_id) else {
+        return Ok(());
+    };
+    let Some(schema) = registry.latest(spec.entity_id) else {
+        let name = history.versions.last().map_or("?", |s| s.name.as_str());
+        return Err(DbError::EntityNotFound(format!(
+            "{name} (dropped; index {})",
+            spec.name
+        )));
+    };
+    let fields = spec
+        .columns
+        .iter()
+        .map(|column| column.field_id)
+        .chain(spec.include.iter().copied());
+    for field_id in fields {
+        let active = field_id == adb_schema::SYSTEM_ENTITY_FIELD
+            || schema
+                .field_by_id(field_id)
+                .is_some_and(|field| field.is_active_in(schema.version));
+        if !active {
+            return Err(DbError::InvalidArgument(format!(
+                "index {}: field {field_id} is not a column of {} (unknown or dropped)",
+                spec.name, schema.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Checks the foreign-key hints of `schema`: each names the primary key of a live entity (or of
