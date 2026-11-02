@@ -13,6 +13,7 @@ pub mod checkpoint;
 pub mod error;
 pub mod model;
 pub mod registry;
+pub mod wait;
 
 pub use checkpoint::{
     CheckpointEntry, ProjectionCheckpoint, ProjectionCheckpointStore, CHECKPOINT_FILE,
@@ -23,3 +24,4 @@ pub use model::{
     ProjectionState, MAX_PROJECTION_NAME_BYTES,
 };
 pub use registry::ProjectionRegistry;
+pub use wait::{WaitOutcome, MAX_WAIT};
