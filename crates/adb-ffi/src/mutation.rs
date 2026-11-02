@@ -25,12 +25,37 @@ pub extern "C" fn adb_insert_row_json(
     row_len: usize,
     out_commit_ts: *mut u64,
 ) -> AdbStatus {
+    adb_insert_row_commit_json(
+        db,
+        entity_id,
+        primary_key,
+        row_ptr,
+        row_len,
+        out_commit_ts,
+        std::ptr::null_mut(),
+    )
+}
+
+/// Like [`adb_insert_row_json`] and also writes the commit's position in the global commit
+/// order (`out_commit_seq`, ABI 8), the number a session token carries. `out_commit_seq` may be
+/// null when the caller does not need it.
+#[no_mangle]
+pub extern "C" fn adb_insert_row_commit_json(
+    db: *mut AdbDatabaseHandle,
+    entity_id: u64,
+    primary_key: u64,
+    row_ptr: *const u8,
+    row_len: usize,
+    out_commit_ts: *mut u64,
+    out_commit_seq: *mut u64,
+) -> AdbStatus {
     ffi_guard(|| {
         init_out(out_commit_ts, 0)?;
+        init_optional(out_commit_seq, 0);
         let database = database(db)?;
         let row: Row = parse(bytes(row_ptr, row_len, MAX_MUTATION_JSON_BYTES)?)?;
         let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
-        commit_with(database, out_commit_ts, |tx| {
+        commit_with(database, out_commit_ts, out_commit_seq, |tx| {
             if database
                 .get_in_tx(tx, row_id)
                 .map_err(map_db_error)?
@@ -54,8 +79,31 @@ pub extern "C" fn adb_update_fields_json(
     assignments_len: usize,
     out_commit_ts: *mut u64,
 ) -> AdbStatus {
+    adb_update_fields_commit_json(
+        db,
+        entity_id,
+        primary_key,
+        assignments_ptr,
+        assignments_len,
+        out_commit_ts,
+        std::ptr::null_mut(),
+    )
+}
+
+/// Like [`adb_update_fields_json`] and also writes the commit sequence number (ABI 8).
+#[no_mangle]
+pub extern "C" fn adb_update_fields_commit_json(
+    db: *mut AdbDatabaseHandle,
+    entity_id: u64,
+    primary_key: u64,
+    assignments_ptr: *const u8,
+    assignments_len: usize,
+    out_commit_ts: *mut u64,
+    out_commit_seq: *mut u64,
+) -> AdbStatus {
     ffi_guard(|| {
         init_out(out_commit_ts, 0)?;
+        init_optional(out_commit_seq, 0);
         let database = database(db)?;
         let assignments: BTreeMap<FieldId, Value> = parse(bytes(
             assignments_ptr,
@@ -63,7 +111,7 @@ pub extern "C" fn adb_update_fields_json(
             MAX_MUTATION_JSON_BYTES,
         )?)?;
         let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
-        commit_with(database, out_commit_ts, |tx| {
+        commit_with(database, out_commit_ts, out_commit_seq, |tx| {
             let Some(mut row) = database.get_in_tx(tx, row_id).map_err(map_db_error)? else {
                 return Err((AdbStatus::NotFound, "row not found".into()));
             };
@@ -82,11 +130,30 @@ pub extern "C" fn adb_delete_row(
     primary_key: u64,
     out_commit_ts: *mut u64,
 ) -> AdbStatus {
+    adb_delete_row_commit(
+        db,
+        entity_id,
+        primary_key,
+        out_commit_ts,
+        std::ptr::null_mut(),
+    )
+}
+
+/// Like [`adb_delete_row`] and also writes the commit sequence number (ABI 8).
+#[no_mangle]
+pub extern "C" fn adb_delete_row_commit(
+    db: *mut AdbDatabaseHandle,
+    entity_id: u64,
+    primary_key: u64,
+    out_commit_ts: *mut u64,
+    out_commit_seq: *mut u64,
+) -> AdbStatus {
     ffi_guard(|| {
         init_out(out_commit_ts, 0)?;
+        init_optional(out_commit_seq, 0);
         let database = database(db)?;
         let row_id = RowId::from_primary_key(entity_id, primary_key as i64);
-        commit_with(database, out_commit_ts, |tx| {
+        commit_with(database, out_commit_ts, out_commit_seq, |tx| {
             if database
                 .get_in_tx(tx, row_id)
                 .map_err(map_db_error)?
@@ -100,16 +167,27 @@ pub extern "C" fn adb_delete_row(
     })
 }
 
-/// Runs `body` in a fresh transaction and commits it, writing the commit timestamp.
+/// Writes `value` to an optional output slot (a null slot is skipped).
+fn init_optional(out: *mut u64, value: u64) {
+    if !out.is_null() {
+        // SAFETY: non-null, caller-owned, properly aligned output slot (documented contract).
+        unsafe { out.write(value) };
+    }
+}
+
+/// Runs `body` in a fresh transaction and commits it, writing the commit timestamp and, when
+/// the caller asked for it, the commit sequence number.
 fn commit_with(
     database: &Database,
     out_commit_ts: *mut u64,
+    out_commit_seq: *mut u64,
     body: impl FnOnce(&mut adb_engine::Transaction) -> Result<(), FfiError>,
 ) -> Result<AdbStatus, FfiError> {
     let mut tx = database.begin();
     body(&mut tx)?;
-    let commit_ts = database.commit(tx).map_err(map_db_error)?.commit_ts;
-    init_out(out_commit_ts, commit_ts.0)?;
+    let result = database.commit(tx).map_err(map_db_error)?;
+    init_out(out_commit_ts, result.commit_ts.0)?;
+    init_optional(out_commit_seq, result.commit_seq.0);
     Ok(AdbStatus::Ok)
 }
 

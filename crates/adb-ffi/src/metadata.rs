@@ -1,6 +1,11 @@
 //! Read-only C ABI metadata functions.
 
-use crate::{error::ffi_guard, handle::AdbDatabaseHandle, AdbStatus};
+use crate::{
+    args::{database, init_out},
+    error::ffi_guard,
+    handle::AdbDatabaseHandle,
+    AdbStatus,
+};
 
 /// Returns the latest committed MVCC timestamp known by the database.
 #[no_mangle]
@@ -21,6 +26,21 @@ pub extern "C" fn adb_latest_committed_ts(
         }
         let ts = unsafe { &*db }.database.latest_committed_ts();
         unsafe { *out_commit_ts = ts.0 };
+        Ok(AdbStatus::Ok)
+    })
+}
+
+/// Returns the newest published commit sequence number (0 before the first commit): the position
+/// in the global commit order that session tokens refer to (ABI 8).
+#[no_mangle]
+pub extern "C" fn adb_latest_commit_seq(
+    db: *mut AdbDatabaseHandle,
+    out_commit_seq: *mut u64,
+) -> AdbStatus {
+    ffi_guard(|| {
+        init_out(out_commit_seq, 0)?;
+        let seq = database(db)?.latest_commit_seq();
+        init_out(out_commit_seq, seq.0)?;
         Ok(AdbStatus::Ok)
     })
 }

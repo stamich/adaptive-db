@@ -1,5 +1,11 @@
 /*
- * Adaptive DB native C ABI, version 7 (Milestone 2.4.0).
+ * Adaptive DB native C ABI, version 8 (Milestone 2.5.0).
+ *
+ * ABI 8 changes (vs. 7): commit sequence numbers — every commit (data and DDL) takes the next
+ * number of one global order, adb_latest_commit_seq reads the newest published one and the
+ * *_commit mutations return the number of their commit (a session token, see
+ * docs/consistency.md); data format 4 (format 2 and 3 upgraded on open). The change-log cursor
+ * and projection functions of this ABI follow in their own sections. Plan wire stays v4.
  *
  * ABI 7 changes (vs. 6): entity schemas — adb_create_entity_json, adb_alter_entity_json,
  * adb_drop_entity, adb_list_schemas_json, adb_schema_history_json (see docs/schema.md); writes
@@ -63,7 +69,7 @@ typedef enum AdbStatus {
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 7
+#define ADB_ABI_VERSION 8
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -74,6 +80,8 @@ AdbStatus adb_open(const uint8_t* path_ptr, size_t path_len, AdbDatabaseHandle**
 /* Checkpoints (best effort) and always releases the handle. */
 AdbStatus adb_close(AdbDatabaseHandle* db);
 AdbStatus adb_latest_committed_ts(AdbDatabaseHandle* db, uint64_t* out_commit_ts);
+/* Newest published commit sequence number (0 before the first commit). (ABI 8) */
+AdbStatus adb_latest_commit_seq(AdbDatabaseHandle* db, uint64_t* out_commit_seq);
 /* Current catalog epoch. Plans are plan wire v4 documents carrying the epoch they were made at
  * ({"wire_version":4,"schema_epoch":N,"plan":{...}}); a plan of another epoch is refused before
  * it runs (a table or index it was planned against may have changed: plan it again). */
@@ -129,6 +137,33 @@ AdbStatus adb_delete_row(
     uint64_t entity_id,
     uint64_t primary_key,
     uint64_t* out_commit_ts);
+
+/* Like the three functions above, and also writing the commit's position in the global commit
+ * order to out_commit_seq (may be NULL). (ABI 8) */
+AdbStatus adb_insert_row_commit_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    const uint8_t* row_ptr,
+    size_t row_len,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
+
+AdbStatus adb_update_fields_commit_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    const uint8_t* assignments_ptr,
+    size_t assignments_len,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
+
+AdbStatus adb_delete_row_commit(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
 
 /* ---- maintenance (ABI 3) ---- */
 
