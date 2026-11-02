@@ -50,6 +50,7 @@ dependencies = [
  "adb-core",
  "bincode",
  "crc32fast",
+ "parking_lot",
  "serde",
  "tempfile",
  "thiserror",

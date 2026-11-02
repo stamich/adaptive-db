@@ -16,4 +16,26 @@ pub enum ChangeLogError {
     /// Bytes could not be decoded into an envelope.
     #[error("malformed change envelope: {0}")]
     Malformed(String),
+    /// A file operation failed.
+    #[error("change log I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// A segment holds damage that is not a torn tail: data after the damage, a wrong header or
+    /// out-of-order sequence numbers. The log is not guessed at; the caller rebuilds it.
+    #[error("change log segment {segment} is corrupt at offset {offset}: {reason}")]
+    Corrupt {
+        /// File name of the damaged segment.
+        segment: String,
+        /// Byte offset of the damaged frame.
+        offset: u64,
+        /// What is wrong.
+        reason: String,
+    },
+    /// An append would not advance the log: the sequence number is not above the head.
+    #[error("commit sequence {got} does not follow the change log head {head}")]
+    Regression {
+        /// Current head.
+        head: u64,
+        /// Offered sequence number.
+        got: u64,
+    },
 }

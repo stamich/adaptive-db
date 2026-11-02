@@ -8,9 +8,12 @@
 //! This crate is storage-engine agnostic: it knows rows and schema markers, not transactions
 //! managers or indexes.
 pub mod error;
+pub mod log;
 pub mod model;
+pub(crate) mod segment;
 
 pub use error::ChangeLogError;
+pub use log::{ChangeLog, DEFAULT_SEGMENT_BYTES};
 pub use model::{
     decode_envelope, encode_envelope, ChangeEnvelope, ChangePayload, RowChange, SchemaChangeMarker,
     MAX_ENVELOPE_BYTES,
