@@ -47,9 +47,11 @@ object ConsistencyReport:
                 def text(key: String): String = c.get(key) match
                   case Some(v: String) => v
                   case other => throw new IllegalArgumentException(s"commit member $key must be a string, got $other")
-                val count = c.get("changes") match
+                // A data commit lists its row changes under "rows", a schema commit its markers
+                // under "changes".
+                val count = c.get("rows").orElse(c.get("changes")) match
                   case Some(changes: Vector[?]) => changes.size
-                  case other => throw new IllegalArgumentException(s"commit member changes must be an array, got $other")
+                  case other => throw new IllegalArgumentException(s"commit needs a rows or changes array, got $other")
                 Vector[Any](text("commit_seq"), text("commit_ts"), text("schema_epoch"), text("kind"), count)
               case other => throw new IllegalArgumentException(s"commit must be an object, got $other")
             }

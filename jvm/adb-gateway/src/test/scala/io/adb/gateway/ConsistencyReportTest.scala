@@ -47,7 +47,7 @@ final class ConsistencyReportTest:
   /** A change-cursor batch becomes one row per commit. */
   @Test def changeRows(): Unit =
     val json = """{"first_commit_seq":"5","last_commit_seq":"6","bytes":412,"commits":[
-      |{"commit_seq":"5","commit_ts":"5","schema_epoch":"2","tx_id":"9","kind":"data","changes":[{"kind":"put"},{"kind":"put"}]},
+      |{"commit_seq":"5","commit_ts":"5","schema_epoch":"2","tx_id":"9","kind":"data","rows":[{"kind":"insert"},{"kind":"update"}]},
       |{"commit_seq":"6","commit_ts":"6","schema_epoch":"3","tx_id":"10","kind":"schema","changes":[{"kind":"schema"}]}]}""".stripMargin
     assertEquals(Vector(Vector[Any]("5", "5", "2", "data", 2), Vector[Any]("6", "6", "3", "schema", 1)), ConsistencyReport.changeRows(json))
     assertEquals(Vector.empty, ConsistencyReport.changeRows("""{"commits":[]}"""))

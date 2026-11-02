@@ -162,10 +162,8 @@ final class AdaptiveDatabase(
     var allowed = decisions.filter(d => SemanticFreshnessPlanner.isUsable(d.resolution))
     var plans = planAt(select, epoch, IndexCatalog.of(allowed.map(_.index)*))
     val used = io.adb.physical.PhysicalPlan.preorder(plans.physical.plan).collect { case scan: io.adb.physical.PhysicalPlan.IndexScan => scan.indexId }.toSet
-    val timedOut = allowed.filter(d => used.contains(d.index.id)).filter { d =>
-      (d.projection, d.resolution) match
-        case (Some(info), FreshnessResolution.WaitUntil(seq, _)) => !backend.awaitProjection(info.id, seq, context.maxWaitMillis)
-        case _ => false
+    val timedOut = SemanticFreshnessPlanner.waitsFor(allowed, used).collect {
+      case (decision, projectionId, seq) if !backend.awaitProjection(projectionId, seq, context.maxWaitMillis) => decision
     }
     if timedOut.nonEmpty then
       allowed = allowed.filterNot(d => timedOut.exists(_.index.id == d.index.id))

@@ -2,6 +2,7 @@ package io.adb.optimizer.access
 
 import io.adb.catalog.IndexInfo
 import io.adb.consistency.*
+import io.adb.model.IndexId
 
 /** An access path together with the freshness decision for the projection behind it.
   *
@@ -81,6 +82,19 @@ object SemanticFreshnessPlanner:
     */
   def usable(annotated: Vector[FreshAccessPath]): Vector[FreshAccessPath] =
     annotated.filter(path => isUsable(path.resolution))
+
+  /** The waits the indexes in `used` need before the plan can run: for each such index whose
+    * decision is `WaitUntil`, its projection id and the commit to wait for.
+    *
+    * @param allowed the decisions of the indexes the plan was made with
+    * @param used    ids of the indexes the plan reads
+    */
+  def waitsFor(allowed: Vector[IndexDecision], used: Set[IndexId]): Vector[(IndexDecision, Long, Long)] =
+    allowed.filter(d => used.contains(d.index.id)).flatMap { d =>
+      (d.projection, d.resolution) match
+        case (Some(info), FreshnessResolution.WaitUntil(seq, _)) => Some((d, info.id, seq))
+        case _ => None
+    }
 
   /** The projections a chosen path must wait for before it runs, as (projection id, commit). */
   def waits(chosen: FreshAccessPath): Option[(Long, Long)] =
