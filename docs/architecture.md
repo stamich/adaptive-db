@@ -1,15 +1,17 @@
-# Architecture — Milestone 2.4.0
+# Architecture — Milestone 2.5.0
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
 storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a
 cost-based planner in the JVM. 2.3.0 adds secondary indexes as a third kind of projection, an
 order-preserving key encoding (data format 2), and cost-based access paths. 2.4.0 moves the
 catalog into the engine: versioned schemas are a fourth projection of the log, changed by
-`ALTER TABLE` without rewriting rows. See
-[Query path](#query-path-milestone-21),
+`ALTER TABLE` without rewriting rows. 2.5.0 adds a global commit order, a change log derived from
+the canonical log, a registry of projections with their freshness, and session-level consistency.
+See [Query path](#query-path-milestone-21),
 [Statistics and cost-based planning](#statistics-and-cost-based-planning-milestone-223),
 [Secondary indexes](#secondary-indexes-milestone-230) and
-[Schema evolution](#schema-evolution-milestone-240).
+[Schema evolution](#schema-evolution-milestone-240) and
+[Commit order, change log and consistency](#commit-order-change-log-and-consistency-milestone-250).
 
 ## The one decision everything follows from
 
@@ -58,13 +60,15 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
 | `adb-btree` | One generic `BPlusTree<K: TreeKey>` (get, floor, range scan, insert, remove, journaled persistence). `BTree` and `VersionBTree` are type aliases. |
 | `adb-storage` | Heap with free-space map, current store, version store, checkpoint record v3, integrity check. |
 | `adb-schema` | Versioned entity schemas (2.4.0): changes, validation, `RowAdapter`, `SchemaRegistry`, `CatalogEvent`. |
+| `adb-change-log` | Change log (2.5.0): envelopes, CRC-framed segments, idempotent append, cursors, retention. |
+| `adb-projection-runtime` | Projection registry (2.5.0): descriptors, states, frontiers, lag, rate, `wait_until`, durable checkpoints. |
 | `adb-wal` | Segmented log writer, forward `WalCursor` from any record boundary; catalog records since 2.4.0. |
 | `adb-tx` | Transactions, isolation levels, OCC validation, snapshot registry. Storage-agnostic. |
 | `adb-execution` | Slot-addressed, pull-based operators: scans, filter, project, limit, hash and nested-loop joins, aggregate, sort, TopK; plan validation; query `MemoryTracker`; runtime profiles. |
 | `adb-plan-wire` | Versioned JSON plan wire format (v4 since 2.4.0, carrying the catalog epoch): bounded, version-checked, strict decoding plus validation. |
 | `adb-stats` | Optimizer statistics: document model, `ANALYZE` options and limits, collector (exact counts, HyperLogLog, reservoir sample, histograms, most common values). |
 | `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets, `ANALYZE`, statistics store, modification counters. |
-| `adb-ffi` | C ABI v7 (`include/adb.h`). |
+| `adb-ffi` | C ABI v8 (`include/adb.h`). |
 
 ## Write path
 
@@ -251,6 +255,23 @@ transactional and durable together with the rows. Rows keep the version they wer
 and are adapted when read; nothing is rewritten by `ALTER TABLE`, which costs one log record on
 any table. A query pins the catalog epoch it starts at, so DDL committing meanwhile never changes
 the shape of its rows. Details: [schema.md](schema.md).
+
+## Commit order, change log and consistency (Milestone 2.5.0)
+
+```text
+ commit ─► CommitCoordinator: commit_ts + commit_seq ─► WAL CommitV2 ─► change-log envelope ─► publish commit_seq
+ open   ─► compare change log with the WAL: truncate surplus, rebuild the missing tail
+ consumers ─► ChangeCursor(after) ─► batches ─► feed_projection ─► registry frontier ─► wait_until
+ JVM: AdaptiveSession(token, level) ─► SemanticReadContext ─► FreshnessResolver per index ─► planner ─► (wait | fallback)
+```
+
+The log is still the single source of truth. The change log is derived data: appended before the
+commit number is published, fsynced at checkpoints and close, rebuilt from the WAL when missing
+or damaged. Projections report a state, a frontier and a lag; the current rows and the indexes
+are synchronous (frontier = head). A session remembers the number of its last commit; a read is
+served from a projection only when the consistency level says the projection is fresh enough, and
+otherwise waits for it briefly or reads the canonical rows. Details: [change-log.md](change-log.md),
+[consistency.md](consistency.md).
 
 ## Control plane
 

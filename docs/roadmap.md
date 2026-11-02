@@ -77,6 +77,27 @@
 - table renames; background migration of old rows (vacuum-style)
 - `IS NULL` / `NOT NULL` predicates on columns added with defaults through indexes
 
+## 2.5.0 — semantic consistency and the change log (done)
+- one commit order (`CommitSeq`) for data and catalog commits; data format 4
+- a durable change log derived from the canonical log, with cursors and retention
+- a projection registry with states, frontiers, lag, consumption rate and `wait_until`
+- session tokens, `SET SESSION CONSISTENCY` (strong, read your writes, bounded, eventual) and a
+  freshness-aware planner; EXPLAIN read context; shell `\session`, `\projections`, `\changes`
+- C ABI 8, Java bindings, benchmarks I–O
+- details: [milestone-2.5.0.md](milestone-2.5.0.md), [consistency.md](consistency.md),
+  [change-log.md](change-log.md)
+
+## 2.5.x follow-ups
+- a `commit_seq` filter on `adb_read_changes_json` and consumer offsets expressed as commit numbers
+- persisting a session token across restarts for services that need it (today a token is carried by
+  the client)
+- a JVM microbenchmark of the freshness decision (its cost per planned query)
+
+## 2.6 — asynchronous projections (next)
+- asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0
+- `DELTA_REPAIR`, delta caches and coalesced row deltas for projections that lag
+- read leases; adaptive plan families and a plan cache that key on projection freshness
+
 ## 3.x — distribution
 - 3.0 replicated single partition
 - 3.1 LogicalPartition + RoutingTable + TopologyEpoch

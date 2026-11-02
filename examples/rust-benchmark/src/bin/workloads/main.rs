@@ -569,7 +569,7 @@ fn main() -> Result<()> {
     // Changes balances: runs after every other measurement of ix_account.
     let as_of = as_of_read(&db, balance_index, args.scale, settings)?;
     let report = json!({
-        "milestone": "2.4.0",
+        "milestone": "2.5.0",
         "path": "rust_native",
         "host": {
             "os": env::consts::OS,

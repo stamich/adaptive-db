@@ -1,0 +1,59 @@
+{
+  "milestone": "2.5.0",
+  "base": "2.4.0",
+  "engineVersion": "2.5.0",
+  "nativeAbi": 8,
+  "scope": "semantic-consistency-and-change-log",
+  "sourceOfTruth": "canonical-log",
+  "derivedData": ["projections", "secondary-indexes", "schema-registry", "optimizer-statistics", "modification-counters", "change-log", "projection-registry"],
+  "versioning": "from 2.3.0 the minor number is the milestone and the patch number is for fixes",
+  "newEngineFeatures": [
+    "commit-sequence-numbers-one-order-for-data-and-ddl",
+    "commit-result-with-timestamp-and-sequence",
+    "wal-commit-record-with-sequence-and-epoch",
+    "change-log-envelopes-in-crc-framed-segments",
+    "change-log-appended-before-publish-fsynced-lazily",
+    "change-log-rebuilt-from-the-wal-at-open",
+    "change-log-cursors-with-commit-and-byte-budgets",
+    "change-log-retention-by-consumers-size-age-lag",
+    "projection-registry-with-state-frontier-lag-rate",
+    "projection-wait-until",
+    "projection-checkpoints",
+    "synchronous-projections-for-current-rows-and-indexes",
+    "asynchronous-consumer-projections-fed-from-the-change-log",
+    "commit-seq-in-cdc-events",
+    "data-format-4-upgrade-in-place"
+  ],
+  "newControlPlaneFeatures": [
+    "adb-consistency-jvm-module",
+    "session-consistency-token",
+    "read-consistency-strong-read-your-writes-bounded-eventual",
+    "freshness-resolver",
+    "semantic-freshness-planner",
+    "adaptive-session-in-the-gateway",
+    "set-session-consistency-sql",
+    "explain-read-context-section",
+    "shell-session-projections-changes",
+    "java-ffm-commit-results-cursors-projections"
+  ],
+  "deferred": {
+    "asynchronousIndexMaintenance": "2.6",
+    "deltaRepair": "2.6",
+    "deltaCacheAndCoalescedRowDelta": "2.6",
+    "readLease": "2.6",
+    "columnarGraphSearchVectorProjections": "later",
+    "adaptivePlanFamiliesAndPlanCache": "2.6+",
+    "referenceMachineBenchmarkResults": "recorded after merge on the Ryzen 9 5950X"
+  },
+  "formats": {
+    "data": "4 (format.meta; formats 2 and 3 are upgraded in place on open, format 1 needs adb-migrate)",
+    "wal": "new CommitV2 record carrying commit_seq and schema_epoch (appended variant; earlier records unchanged, legacy commits are numbered by timestamp)",
+    "changeLog": "ADBCLOG1 segments, frames of length, CRC-32 and bincode envelope; 64 MiB envelope cap",
+    "projectionCheckpoint": "projections.meta, atomic replace, CRC-protected",
+    "checkpoint": "3 (unchanged)",
+    "statistics": "3 (unchanged)",
+    "planWire": "4 (unchanged)",
+    "batch": "2 (unchanged)",
+    "cdc": "events carry commit_seq"
+  }
+}

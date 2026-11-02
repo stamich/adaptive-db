@@ -165,3 +165,12 @@ plans  ─► plan wire v4 {"schema_epoch":N} ─► execute_planned: refused wi
 | `SHOW SCHEMA ledger` | every version with its epoch, change and columns |
 | close, reopen, `SHOW SCHEMA` | the catalog is replayed from the log with the rows |
 
+## 2.5.0 — commit order, session consistency and the change log
+
+The last phase runs after the second reopen, with `sql/2.5.0-consistency.sql`. Every commit has a
+position in one order (`commitSeq`), shared by data and DDL commits; the change log lists those
+commits and projections follow it. A session remembers the position of its last write (its token)
+and `SET SESSION CONSISTENCY` chooses how fresh a read must be. The phase shows the token moving
+with an `INSERT`, the read through the index, EXPLAIN's Read context, an independent second
+session, the four levels, the projection listing and the change-log listing. See
+[../docs/consistency.md](../docs/consistency.md) and [../docs/change-log.md](../docs/change-log.md).
