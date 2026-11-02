@@ -97,6 +97,53 @@ impl SchemaVersion {
 )]
 pub struct SchemaEpoch(pub u64);
 
+/// Logical position of a commit in the global order of committed transactions.
+///
+/// Data commits and catalog commits (DDL) share one sequence, starting at 1; 0 means "before
+/// the first commit". It is the coordinate of the change log, of session tokens and of
+/// projection frontiers. The four counters of the engine have separate jobs and are never
+/// merged: [`Lsn`] is the physical position in the log, [`CommitTs`] the MVCC timestamp,
+/// [`SchemaEpoch`] the catalog generation and `CommitSeq` the logical commit order.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+pub struct CommitSeq(pub u64);
+
+impl CommitSeq {
+    /// Position before the first commit.
+    pub const ZERO: CommitSeq = CommitSeq(0);
+
+    /// The next position in the sequence.
+    pub fn next(self) -> CommitSeq {
+        CommitSeq(self.0 + 1)
+    }
+}
+
+/// What a successful commit hands back: its MVCC timestamp and its logical sequence number.
+///
+/// A client keeps the sequence number as a session token to read its own writes later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CommitResult {
+    /// MVCC timestamp the commit's rows carry.
+    pub commit_ts: CommitTs,
+    /// Position of the commit in the global commit order.
+    pub commit_seq: CommitSeq,
+}
+
+/// Identifier of a registered projection (a derived representation of the log such as the
+/// current rows, a secondary index or, later, a column store); unique for the lifetime of a
+/// database and never reused. Names are labels; this number is the identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ProjectionId(pub u64);
+
+/// Generation of the projection registry's structure: it moves when a projection is
+/// registered, dropped or rebuilt, but not when a projection merely advances. A plan that
+/// pinned an epoch can tell that the set of projections it chose from has changed.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+pub struct ProjectionEpoch(pub u64);
+
 /// Index of a fixed-size page inside one page file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PageId(pub u64);
@@ -110,7 +157,37 @@ pub type FieldId = u32;
 /// Unit tests of the identifier helpers.
 #[cfg(test)]
 mod tests {
-    use super::RowId;
+    use super::{CommitResult, CommitSeq, CommitTs, ProjectionEpoch, ProjectionId, RowId};
+
+    /// Sequence numbers are ordered, start at zero and step by one.
+    #[test]
+    fn commit_seq_orders_and_steps() {
+        assert_eq!(CommitSeq::default(), CommitSeq::ZERO);
+        assert!(CommitSeq(1) < CommitSeq(2));
+        assert_eq!(CommitSeq::ZERO.next(), CommitSeq(1));
+    }
+
+    /// A commit result keeps its two coordinates apart and survives serialization.
+    #[test]
+    fn commit_result_round_trips() {
+        let result = CommitResult {
+            commit_ts: CommitTs(9),
+            commit_seq: CommitSeq(4),
+        };
+        let bytes = bincode::serialize(&result).unwrap();
+        assert_eq!(
+            bincode::deserialize::<CommitResult>(&bytes).unwrap(),
+            result
+        );
+        assert_ne!(result.commit_ts.0, result.commit_seq.0);
+    }
+
+    /// Projection identity is the number, and epochs start at zero.
+    #[test]
+    fn projection_ids_compare_by_number() {
+        assert!(ProjectionId(1) < ProjectionId(2));
+        assert_eq!(ProjectionEpoch::default(), ProjectionEpoch(0));
+    }
 
     /// Composing and splitting a row id is lossless and preserves entity order.
     #[test]
