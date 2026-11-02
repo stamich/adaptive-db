@@ -1,0 +1,20 @@
+{
+  "milestone": "2.5.1",
+  "base": "2.5.0",
+  "engineVersion": "2.5.1",
+  "nativeAbi": 8,
+  "scope": "plan-cache",
+  "changesEngine": false,
+  "versioning": "numbered 2.5.1 at the owner's request; the usual rule keeps patch numbers for fixes",
+  "newGatewayFeatures": [
+    "token-keyed-statement-key",
+    "byte-bounded-sharded-lru",
+    "second-sighting-admission",
+    "validation-by-schema-epoch-and-statistics-generations",
+    "set-plan-cache",
+    "explain-plan-cache-line",
+    "shell-cache-command"
+  ],
+  "notCached": ["as-of", "plans-over-asynchronous-projections", "explain"],
+  "docs": "docs/plan-cache.md"
+}

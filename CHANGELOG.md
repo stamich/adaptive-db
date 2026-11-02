@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.0. Hardened patch releases preserve the functional scope of
+Milestone 2.5.1. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,26 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.1 — Plan cache
+
+The SQL gateway reuses the physical plan of a repeated `SELECT`. JVM only: C ABI 8, plan wire v4
+and data format 4 are unchanged. Design, limits and measurements: `docs/plan-cache.md`.
+
+### Added
+- New module `adb-plan-cache`: token-stream `StatementKey`, a weight-bounded sharded LRU,
+  second-sighting admission, and `PlanCache` with entries stamped by the schema epoch and the
+  statistics generations of the tables read (read before planning, checked on every hit).
+- Gateway: hit path that skips parse, bind and plan; `SET plan_cache = on | off`;
+  `planCacheStats`, `showPlanCache`, `clearPlanCache`; a `Plan cache:` line in EXPLAIN; shell
+  `\cache [clear]`. AS OF and plans over asynchronous projections are not cached.
+- `examples/jvm-plan-cache-smoke/run.sh` (against the real engine); plan cache section in the JVM
+  benchmark.
+
+### Notes
+- Version number: our rule says a patch number is for fixes only, and the roadmap placed a plan
+  cache under 2.6+. It was numbered 2.5.1 at the owner's request.
+- Result files keep their `2.5.0-` names: the engine and the workloads are unchanged.
 
 ## 2.5.0 — Semantic consistency and the change log
 

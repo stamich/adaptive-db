@@ -93,10 +93,16 @@
   the client)
 - a JVM microbenchmark of the freshness decision (its cost per planned query)
 
+## 2.5.1 — plan cache (done)
+- token-keyed, byte-bounded cache of physical plans validated by schema epoch and statistics
+  generations; second-sighting admission; `SET plan_cache`, EXPLAIN line, `\cache`
+- follow-ups: literal parameterisation, trimming the per-SELECT index/projection metadata fetch
+  that the cache-off path pays
+
 ## 2.6 — asynchronous projections (next)
 - asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0
 - `DELTA_REPAIR`, delta caches and coalesced row deltas for projections that lag
-- read leases; adaptive plan families and a plan cache that key on projection freshness
+- read leases; adaptive plan families, and plan-cache entries keyed on projection freshness (2.5.1 caches only plans that do not depend on it)
 
 ## 3.x — distribution
 - 3.0 replicated single partition

@@ -233,7 +233,8 @@ crates and Gradle dependencies.
 Requirements: Rust (stable) and JDK 22+. The Scala/JVM part uses the Gradle wrapper in `jvm/` and
 needs access to Maven Central. The Java FFM → Rust path is also checked without Gradle by
 `examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
-checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`.
+checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
+and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`.
 
 ## Repository layout
 
@@ -246,7 +247,7 @@ jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engi
                CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC and consistency smoke tests, results
+examples/      Rust demo and benchmark, JVM CDC, consistency and plan-cache smoke tests, results
 demo/          feature tour through the JVM CLI
 docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap

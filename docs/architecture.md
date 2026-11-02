@@ -278,3 +278,10 @@ otherwise waits for it briefly or reads the canonical rows. Details: [change-log
 The JVM (Scala parser/binder/planner, Java FFM) keeps its role: everything up to the physical plan.
 Since 2.0.3 a table scan is planned as `EntityScan` instead of `Filter(Scan, _entity_id = N)`; since
 2.1 it carries a field-to-slot mapping of the referenced columns only.
+
+## Plan cache (Milestone 2.5.1)
+
+The gateway keeps the encoded physical plan of repeated `SELECT`s (module `adb-plan-cache`), keyed
+by the statement's token stream and the optimizer mode and validated on every hit against the
+engine's schema epoch and the statistics generations of the tables read. Nothing below the gateway
+changes. See [plan-cache.md](plan-cache.md).
