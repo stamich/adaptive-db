@@ -20,7 +20,7 @@
 
 use std::{collections::BTreeSet, path::Path};
 
-use adb_core::{CommitTs, Lsn, Row, RowId, SchemaEpoch, SchemaVersion, TxId};
+use adb_core::{CommitSeq, CommitTs, Lsn, Row, RowId, SchemaEpoch, SchemaVersion, TxId};
 use adb_schema::{CatalogEvent, EntitySchema};
 use adb_wal::{WalCursor, WalError};
 
@@ -128,6 +128,10 @@ pub struct ChangeEvent {
     pub tx_id: TxId,
     /// Commit timestamp (the snapshot at which the changes became visible).
     pub commit_ts: CommitTs,
+    /// Position of the commit in the global commit order. The same number identifies the
+    /// commit in the change log and in session tokens, so a consumer of this feed can tell
+    /// how far it has caught up relative to any other.
+    pub commit_seq: CommitSeq,
     /// Position of the commit record; a unique, monotonically increasing event id.
     pub commit_lsn: Lsn,
     /// Cursor that resumes right after this event (for per-event acknowledgement).
@@ -278,6 +282,7 @@ fn to_event(logged: LoggedTx, filter: &ChangeFilter) -> Option<ChangeEvent> {
     (!changes.is_empty() || !catalog.is_empty()).then_some(ChangeEvent {
         tx_id: tx.tx_id,
         commit_ts: tx.commit_ts,
+        commit_seq: tx.commit_seq,
         commit_lsn,
         cursor_after: ChangeCursor(end),
         catalog,
