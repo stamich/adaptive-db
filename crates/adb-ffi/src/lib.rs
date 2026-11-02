@@ -19,6 +19,7 @@ pub mod index;
 pub mod maintenance;
 pub mod metadata;
 pub mod mutation;
+pub mod projection;
 pub mod query;
 pub mod schema;
 pub mod statistics;
@@ -41,6 +42,10 @@ pub use metadata::{adb_current_schema_epoch, adb_latest_commit_seq, adb_latest_c
 pub use mutation::{
     adb_delete_row, adb_delete_row_commit, adb_insert_row_commit_json, adb_insert_row_json,
     adb_update_fields_commit_json, adb_update_fields_json,
+};
+pub use projection::{
+    adb_projection_advance, adb_projection_get_json, adb_projection_list_json,
+    adb_projection_register_json, adb_projection_set_state, adb_projection_wait_until,
 };
 pub use query::{
     adb_execute_plan_json, adb_execute_plan_json_at, adb_query_cancel, adb_query_close,

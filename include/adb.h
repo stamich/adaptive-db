@@ -235,6 +235,43 @@ AdbStatus adb_change_cursor_next_batch(
 AdbStatus adb_change_cursor_position(AdbChangeCursorHandle* cursor, uint64_t* out_commit_seq);
 AdbStatus adb_change_cursor_close(AdbChangeCursorHandle* cursor);
 
+/* ---- projections (ABI 8) ---- */
+
+/* The engine registers its own projections (__current_row and one per index, synchronous). An
+ * external consumer of the change log registers an asynchronous projection, reports how far it
+ * has consumed and is waited for by readers. Documents are JSON in an AdbBatchHandle; see
+ * docs/consistency.md. */
+
+/* Registers (or finds, by name) an asynchronous projection from {"name":"..","entity_id":N}
+ * (entity_id optional) and writes its id. It starts in the building state at commit 0. */
+AdbStatus adb_projection_register_json(
+    AdbDatabaseHandle* db,
+    const uint8_t* request_ptr,
+    size_t request_len,
+    uint64_t* out_projection_id);
+
+/* Every projection (state, frontier, lag) as a JSON array ordered by id; one as an object
+ * (ADB_NOT_FOUND when unknown). */
+AdbStatus adb_projection_list_json(AdbDatabaseHandle* db, AdbBatchHandle** out_json);
+AdbStatus adb_projection_get_json(
+    AdbDatabaseHandle* db, uint64_t projection_id, AdbBatchHandle** out_json);
+
+/* The consumer has applied the change log through commit_seq: moves its frontier forward (never
+ * back, never beyond the newest published commit). Only asynchronous projections. */
+AdbStatus adb_projection_advance(AdbDatabaseHandle* db, uint64_t projection_id, uint64_t commit_seq);
+
+/* state: 0 building (restarts from commit 0), 1 ready, 2 needs rebuild, 3 failed. */
+AdbStatus adb_projection_set_state(AdbDatabaseHandle* db, uint64_t projection_id, uint32_t state);
+
+/* Blocks until the projection is ready and has consumed commit_seq, at most timeout_ms (<= 60000).
+ * *out_outcome: 0 reached, 1 timed out, 2 not readable (failed / needs rebuild), 3 unknown. */
+AdbStatus adb_projection_wait_until(
+    AdbDatabaseHandle* db,
+    uint64_t projection_id,
+    uint64_t commit_seq,
+    uint32_t timeout_ms,
+    uint32_t* out_outcome);
+
 /* ---- optimizer statistics (ABI 5) ---- */
 
 /*

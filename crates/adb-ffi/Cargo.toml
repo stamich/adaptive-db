@@ -13,6 +13,7 @@ adb-storage = { path = "../adb-storage" }
 adb-wal = { path = "../adb-wal" }
 adb-core = { path = "../adb-core" }
 adb-engine = { path = "../adb-engine" }
+adb-projection-runtime = { path = "../adb-projection-runtime" }
 adb-execution = { path = "../adb-execution" }
 adb-plan-wire = { path = "../adb-plan-wire" }
 serde.workspace = true
