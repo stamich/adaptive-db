@@ -31,7 +31,7 @@ use std::{
 };
 
 use adb_core::encode_key;
-use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
+use adb_core::{CommitResult, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
     QueryCursor, ReadView,
@@ -150,7 +150,11 @@ impl Database {
         let recovered = recover(dir, &wal_dir, &options, &journal, &checkpoints)?;
         let log = LogWriter::open(&wal_dir, options.log_segment_bytes)?;
         let mut tx_manager = TransactionManager::default();
-        tx_manager.advance_after_recovery(recovered.last_tx_id, recovered.last_commit_ts.0);
+        tx_manager.advance_after_recovery(
+            recovered.last_tx_id,
+            recovered.last_commit_ts,
+            recovered.last_commit_seq,
+        );
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -251,8 +255,11 @@ impl Database {
         self.get_at(row_id, tx.snapshot_ts())
     }
 
-    /// Validates and commits `tx`; returns its commit timestamp once it is durable.
-    pub fn commit(&self, mut tx: Transaction) -> Result<CommitTs, DbError> {
+    /// Validates and commits `tx`; returns its commit identity once it is durable: the MVCC
+    /// timestamp and the position in the global commit order (the session token of the client).
+    /// A read-only transaction commits nothing: it reports its snapshot and the head at that
+    /// moment.
+    pub fn commit(&self, mut tx: Transaction) -> Result<CommitResult, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
         }
@@ -260,14 +267,20 @@ impl Database {
         self.inner.health.check()?;
         if tx.is_read_only() {
             // A read-only transaction observed one consistent snapshot: nothing to validate.
-            return Ok(tx.snapshot_ts());
+            return Ok(CommitResult {
+                commit_ts: tx.snapshot_ts(),
+                commit_seq: self.inner.tx_manager.lock().latest_commit_seq(),
+            });
         }
 
-        let (commit_ts, end) = {
+        let (commit, end) = {
             let _commit = self.inner.commit_lock.lock();
             self.inner.health.check()?;
             let committed = self.prepare(&tx)?;
-            let commit_ts = committed.commit_ts;
+            let commit = CommitResult {
+                commit_ts: committed.commit_ts,
+                commit_seq: committed.commit_seq,
+            };
             let end = self
                 .inner
                 .health
@@ -281,16 +294,16 @@ impl Database {
                     Ok(appended.end)
                 })
                 .map_err(DbError::CommitOutcomeUnknown)?;
-            (commit_ts, end)
+            (commit, end)
         };
 
         self.inner
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        self.inner.tx_manager.lock().publish_commit(commit);
         self.checkpoint_if_needed();
-        Ok(commit_ts)
+        Ok(commit)
     }
 
     /// Abandons `tx`. (Dropping it has the same effect.)
@@ -552,7 +565,8 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         check_index_columns(self.inner.projections.read().registry(), &spec)?;
-        let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
+        let created = self.inner.tx_manager.lock().last_allocated_commit();
+        let created_at = created.commit_ts;
         let lsn = self.inner.log.end()?;
         let definition = self.inner.projections.write().build_index(
             spec,
@@ -567,7 +581,7 @@ impl Database {
         self.checkpoint_locked()?;
         // Every commit up to `created_at` is applied and, after the checkpoint's log sync,
         // durable: it may be published, so a query planned right now can use the index.
-        self.inner.tx_manager.lock().publish_commit(created_at);
+        self.inner.tx_manager.lock().publish_commit(created);
         Ok(definition)
     }
 
@@ -784,15 +798,16 @@ impl Database {
             probe.apply(epoch, &event)?;
             (epoch, event, value)
         };
-        let (tx_id, snapshot_ts, commit_ts) = {
+        let (tx_id, snapshot_ts, commit) = {
             let mut tx_manager = self.inner.tx_manager.lock();
             let tx = tx_manager.begin(IsolationLevel::Serializable);
-            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit_ts())
+            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit())
         };
         let committed = CommittedTx {
             tx_id,
             snapshot_ts,
-            commit_ts,
+            commit_ts: commit.commit_ts,
+            commit_seq: commit.commit_seq,
             before_images: Vec::new(),
             mutations: Vec::new(),
             catalog: vec![(epoch, event)],
@@ -813,7 +828,7 @@ impl Database {
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        self.inner.tx_manager.lock().publish_commit(commit);
         Ok(value)
     }
 
@@ -849,7 +864,7 @@ impl Database {
                     let tx_manager = self.inner.tx_manager.lock();
                     Checkpoint {
                         replay_from: end,
-                        last_commit_ts: tx_manager.last_allocated_commit_ts(),
+                        last_commit_ts: tx_manager.last_allocated_commit().commit_ts,
                         last_tx_id: tx_manager.last_tx_id(),
                         vacuumed_through: CommitTs(
                             self.inner.vacuumed_through.load(Ordering::Acquire),
@@ -961,11 +976,13 @@ impl Database {
         })?;
         outcome.map_err(DbError::TransactionConflict)?;
 
-        let commit_ts = self.inner.tx_manager.lock().allocate_commit_ts();
+        let commit = self.inner.tx_manager.lock().allocate_commit();
+        let commit_ts = commit.commit_ts;
         Ok(CommittedTx {
             tx_id: tx.id(),
             snapshot_ts: tx.snapshot_ts(),
             commit_ts,
+            commit_seq: commit.commit_seq,
             before_images: before
                 .into_iter()
                 .filter_map(|(row_id, record)| {

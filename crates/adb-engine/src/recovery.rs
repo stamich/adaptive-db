@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use adb_core::{CommitTs, Lsn};
+use adb_core::{CommitSeq, CommitTs, Lsn};
 use adb_journal::Journal;
 use adb_storage::{Checkpoint, CheckpointStore, Checkpointable};
 use adb_wal::{earliest_lsn, WalCursor, WalRecord};
@@ -31,6 +31,8 @@ pub(crate) struct Recovered {
     pub projections: Projections,
     /// Highest commit timestamp found.
     pub last_commit_ts: CommitTs,
+    /// Highest commit sequence number found.
+    pub last_commit_seq: CommitSeq,
     /// Highest transaction id found (committed or not).
     pub last_tx_id: u64,
     /// Vacuum horizon restored from the checkpoint.
@@ -81,6 +83,7 @@ pub(crate) fn recover(
     let mut state = Recovered {
         projections,
         last_commit_ts: checkpoint.last_commit_ts,
+        last_commit_seq: CommitSeq(checkpoint.last_commit_ts.0),
         last_tx_id: checkpoint.last_tx_id,
         vacuumed_through: checkpoint.vacuumed_through,
         modifications: ModificationCounters::load(dir)?,
@@ -103,6 +106,7 @@ pub(crate) fn recover(
         state.projections.apply(&logged.tx, logged.commit_lsn)?;
         state.modifications.record(&logged.tx);
         state.last_commit_ts = state.last_commit_ts.max(logged.tx.commit_ts);
+        state.last_commit_seq = state.last_commit_seq.max(logged.tx.commit_seq);
         replayed = true;
 
         if state.projections.dirty_pages() > options.checkpoint_dirty_pages

@@ -1,24 +1,21 @@
 //! Allocation of transaction ids and commit timestamps.
 use std::sync::Arc;
 
-use adb_core::{CommitTs, TxId};
+use adb_core::{CommitResult, CommitSeq, CommitTs, TxId};
 
-use crate::{IsolationLevel, SnapshotRegistry, Transaction};
+use crate::{CommitCoordinator, IsolationLevel, SnapshotRegistry, Transaction};
 
-/// Hands out ids/timestamps and tracks the latest *visible* commit.
+/// Hands out transaction ids and tracks live snapshots; commit identities come from its
+/// [`CommitCoordinator`].
 ///
-/// A commit timestamp is allocated under the commit lock but published (made visible to new
-/// snapshots) only after its log records are durable. Group commit can finish commits out of
-/// allocation order; publication is therefore a monotonic maximum, which is safe because a
-/// durable later commit implies every earlier appended commit is durable too.
+/// A commit identity is allocated under the commit lock but published (made visible to new
+/// snapshots) only after its log records are durable.
 #[derive(Debug)]
 pub struct TransactionManager {
     /// Next transaction id to hand out.
     next_tx_id: u64,
-    /// Next commit timestamp to hand out.
-    next_commit_ts: u64,
-    /// Latest commit visible to new snapshots.
-    last_committed_ts: u64,
+    /// Allocation and publication of commit timestamps and sequence numbers.
+    coordinator: CommitCoordinator,
     /// Snapshots of live transactions.
     snapshots: Arc<SnapshotRegistry>,
 }
@@ -28,8 +25,7 @@ impl Default for TransactionManager {
     fn default() -> Self {
         Self {
             next_tx_id: 1,
-            next_commit_ts: 1,
-            last_committed_ts: 0,
+            coordinator: CommitCoordinator::default(),
             snapshots: Arc::new(SnapshotRegistry::default()),
         }
     }
@@ -44,26 +40,29 @@ impl TransactionManager {
         Transaction::new(id, snapshot, isolation, self.snapshots.register(snapshot))
     }
 
-    /// Reserves the next commit timestamp (not yet visible).
-    pub fn allocate_commit_ts(&mut self) -> CommitTs {
-        let ts = CommitTs(self.next_commit_ts);
-        self.next_commit_ts += 1;
-        ts
+    /// Reserves the next commit identity (not yet visible).
+    pub fn allocate_commit(&mut self) -> CommitResult {
+        self.coordinator.allocate()
     }
 
-    /// Makes commits up to `commit_ts` visible to new snapshots.
-    pub fn publish_commit(&mut self, commit_ts: CommitTs) {
-        self.last_committed_ts = self.last_committed_ts.max(commit_ts.0);
+    /// Makes commits up to `commit` visible to new snapshots and to the canonical head.
+    pub fn publish_commit(&mut self, commit: CommitResult) {
+        self.coordinator.publish(commit);
     }
 
-    /// Highest commit timestamp handed out so far (visible or not).
-    pub fn last_allocated_commit_ts(&self) -> CommitTs {
-        CommitTs(self.next_commit_ts - 1)
+    /// Identity of the most recent commit handed out so far (visible or not).
+    pub fn last_allocated_commit(&self) -> CommitResult {
+        self.coordinator.last_allocated()
     }
 
     /// Latest visible commit.
     pub fn latest_committed_ts(&self) -> CommitTs {
-        CommitTs(self.last_committed_ts)
+        self.coordinator.published_ts()
+    }
+
+    /// Latest published commit sequence number: the canonical head.
+    pub fn latest_commit_seq(&self) -> CommitSeq {
+        self.coordinator.published_seq()
     }
 
     /// Oldest snapshot still held by a live transaction, or the latest commit if none.
@@ -74,10 +73,15 @@ impl TransactionManager {
     }
 
     /// Continues numbering after the state found by recovery.
-    pub fn advance_after_recovery(&mut self, max_tx_id: u64, max_commit_ts: u64) {
+    pub fn advance_after_recovery(
+        &mut self,
+        max_tx_id: u64,
+        max_commit_ts: CommitTs,
+        max_commit_seq: CommitSeq,
+    ) {
         self.next_tx_id = self.next_tx_id.max(max_tx_id.saturating_add(1));
-        self.next_commit_ts = self.next_commit_ts.max(max_commit_ts.saturating_add(1));
-        self.last_committed_ts = self.last_committed_ts.max(max_commit_ts);
+        self.coordinator
+            .advance_after_recovery(max_commit_ts, max_commit_seq);
     }
 
     /// Highest transaction id handed out so far.
@@ -107,20 +111,21 @@ mod tests {
     #[test]
     fn publication_is_monotonic_under_out_of_order_completion() {
         let mut manager = TransactionManager::default();
-        let first = manager.allocate_commit_ts();
-        let second = manager.allocate_commit_ts();
+        let first = manager.allocate_commit();
+        let second = manager.allocate_commit();
         manager.publish_commit(second);
         manager.publish_commit(first);
-        assert_eq!(manager.latest_committed_ts(), second);
+        assert_eq!(manager.latest_committed_ts(), second.commit_ts);
+        assert_eq!(manager.latest_commit_seq(), second.commit_seq);
     }
 
     /// Dropping a transaction releases its snapshot from the horizon.
     #[test]
     fn dropped_transactions_release_their_snapshot() {
         let mut manager = TransactionManager::default();
-        manager.publish_commit(CommitTs(4));
+        manager.advance_after_recovery(0, CommitTs(4), CommitSeq(4));
         let tx = manager.begin(IsolationLevel::Serializable);
-        manager.publish_commit(CommitTs(9));
+        manager.advance_after_recovery(0, CommitTs(9), CommitSeq(9));
         assert_eq!(manager.oldest_active_snapshot(), CommitTs(4));
         drop(tx);
         assert_eq!(manager.oldest_active_snapshot(), CommitTs(9));

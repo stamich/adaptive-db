@@ -31,13 +31,13 @@ fn historical_versions_are_queryable() {
     let db = Database::open(dir.path()).unwrap();
     let mut a = db.begin();
     a.put(RowId(1), row_with_i64(100));
-    let t1 = db.commit(a).unwrap();
+    let t1 = db.commit(a).unwrap().commit_ts;
     let mut b = db.begin();
     b.put(RowId(1), row_with_i64(200));
-    let t2 = db.commit(b).unwrap();
+    let t2 = db.commit(b).unwrap().commit_ts;
     let mut c = db.begin();
     c.put(RowId(1), row_with_i64(300));
-    let t3 = db.commit(c).unwrap();
+    let t3 = db.commit(c).unwrap().commit_ts;
     assert_eq!(read_i64(&db.get_at(RowId(1), t1).unwrap().unwrap()), 100);
     assert_eq!(read_i64(&db.get_at(RowId(1), t2).unwrap().unwrap()), 200);
     assert_eq!(read_i64(&db.get_at(RowId(1), t3).unwrap().unwrap()), 300);

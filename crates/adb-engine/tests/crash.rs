@@ -145,12 +145,12 @@ fn failure_inside_commit_poisons_until_reopen() {
         let db = Database::open_with(dir.path(), options).unwrap();
         put(&db, RowId(1), 1);
         fs::create_dir_all(&obstacle).unwrap(); // the next rotation cannot create its file
-        let mut last = Ok(adb_core::CommitTs(0));
+        let mut last: Result<(), adb_engine::DbError> = Ok(());
         let mut i = 2;
         while last.is_ok() {
             let mut tx = db.begin();
             tx.put(RowId(i), common::row_with_i64(i as i64));
-            last = db.commit(tx);
+            last = db.commit(tx).map(|_| ());
             i += 1;
         }
         committed = i - 2;

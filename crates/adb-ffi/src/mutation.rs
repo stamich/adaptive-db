@@ -108,7 +108,7 @@ fn commit_with(
 ) -> Result<AdbStatus, FfiError> {
     let mut tx = database.begin();
     body(&mut tx)?;
-    let commit_ts = database.commit(tx).map_err(map_db_error)?;
+    let commit_ts = database.commit(tx).map_err(map_db_error)?.commit_ts;
     init_out(out_commit_ts, commit_ts.0)?;
     Ok(AdbStatus::Ok)
 }

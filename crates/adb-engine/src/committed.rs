@@ -4,7 +4,7 @@
 //! recovery and change-data capture turn log records back into [`CommittedTx`] values
 //! ([`TxAssembler`]). Both directions live here so the log format has exactly one owner.
 
-use adb_core::{CommitTs, Lsn, RowId, SchemaEpoch, TxId};
+use adb_core::{CommitSeq, CommitTs, Lsn, RowId, SchemaEpoch, TxId};
 use adb_storage::HistoricalVersion;
 use adb_tx::Mutation;
 use adb_wal::{CatalogEvent, LogEntry, WalError, WalRecord};
@@ -18,6 +18,9 @@ pub struct CommittedTx {
     pub snapshot_ts: CommitTs,
     /// Commit timestamp.
     pub commit_ts: CommitTs,
+    /// Position in the global commit order (logs written before sequence numbers existed are
+    /// numbered by commit timestamp, see [`TxAssembler`]).
+    pub commit_seq: CommitSeq,
     /// Before-images of overwritten rows (closed at `commit_ts`).
     pub before_images: Vec<(RowId, HistoricalVersion)>,
     /// New row states in row order.
@@ -128,6 +131,7 @@ impl TxAssembler {
                     tx_id,
                     snapshot_ts,
                     commit_ts: CommitTs(0),
+                    commit_seq: CommitSeq(0),
                     before_images: Vec::new(),
                     mutations: Vec::new(),
                     catalog: Vec::new(),
@@ -196,6 +200,10 @@ impl TxAssembler {
                 }
                 let mut tx = self.open.take().expect("checked by open_for");
                 tx.commit_ts = commit_ts;
+                // Logs of Milestones before 2.5.0 carry no sequence numbers; their commits are
+                // numbered by timestamp, which is unique and increasing. New commits continue
+                // above the highest of them.
+                tx.commit_seq = CommitSeq(commit_ts.0);
                 Ok(Some(LoggedTx {
                     tx,
                     commit_lsn: lsn,
@@ -252,6 +260,7 @@ mod tests {
             tx_id: TxId(id),
             snapshot_ts: CommitTs(1),
             commit_ts: CommitTs(2),
+            commit_seq: CommitSeq(2),
             before_images: vec![(
                 RowId(1),
                 HistoricalVersion {

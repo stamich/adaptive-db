@@ -19,15 +19,15 @@ fn persistent_history_survives_restart() {
 
         let mut tx = db.begin();
         tx.put(RowId(1), row_with_i64(100));
-        ts1 = db.commit(tx).unwrap();
+        ts1 = db.commit(tx).unwrap().commit_ts;
 
         let mut tx = db.begin();
         tx.put(RowId(1), row_with_i64(200));
-        ts2 = db.commit(tx).unwrap();
+        ts2 = db.commit(tx).unwrap().commit_ts;
 
         let mut tx = db.begin();
         tx.put(RowId(1), row_with_i64(300));
-        ts3 = db.commit(tx).unwrap();
+        ts3 = db.commit(tx).unwrap().commit_ts;
     }
 
     {
@@ -39,7 +39,7 @@ fn persistent_history_survives_restart() {
 
         let mut tx = db.begin();
         tx.put(RowId(1), row_with_i64(400));
-        ts4 = db.commit(tx).unwrap();
+        ts4 = db.commit(tx).unwrap().commit_ts;
     }
 
     {
@@ -66,11 +66,11 @@ fn delete_is_temporal() {
 
     let mut tx = db.begin();
     tx.put(RowId(10), row_with_i64(100));
-    let created = db.commit(tx).unwrap();
+    let created = db.commit(tx).unwrap().commit_ts;
 
     let mut tx = db.begin();
     tx.delete(RowId(10));
-    let deleted = db.commit(tx).unwrap();
+    let deleted = db.commit(tx).unwrap().commit_ts;
 
     assert_eq!(
         read_i64(&db.get_at(RowId(10), created).unwrap().unwrap()),

@@ -21,14 +21,14 @@ pub fn read_i64(row: &Row) -> i64 {
 pub fn put(db: &Database, row_id: RowId, value: i64) -> CommitTs {
     let mut tx = db.begin();
     tx.put(row_id, row_with_i64(value));
-    db.commit(tx).unwrap()
+    db.commit(tx).unwrap().commit_ts
 }
 
 /// Commits one delete in its own transaction.
 pub fn delete(db: &Database, row_id: RowId) -> CommitTs {
     let mut tx = db.begin();
     tx.delete(row_id);
-    db.commit(tx).unwrap()
+    db.commit(tx).unwrap().commit_ts
 }
 
 /// Field-1 values of the latest committed state of `row_id`.

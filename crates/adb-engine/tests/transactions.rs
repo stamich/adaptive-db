@@ -110,7 +110,7 @@ fn read_only_transactions_commit_at_their_snapshot() {
     let mut reader = db.begin();
     db.get_in_tx(&mut reader, RowId(1)).unwrap();
     common::put(&db, RowId(1), 2);
-    assert_eq!(db.commit(reader).unwrap(), ts);
+    assert_eq!(db.commit(reader).unwrap().commit_ts, ts);
 }
 
 /// Uncommitted writes are invisible to other transactions and to plain reads.
