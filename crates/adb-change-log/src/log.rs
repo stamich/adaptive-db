@@ -204,6 +204,19 @@ impl ChangeLog {
         after: CommitSeq,
         max_commits: usize,
     ) -> Result<Vec<ChangeEnvelope>, ChangeLogError> {
+        Ok(self.read_budgeted(after, max_commits, u64::MAX)?.0)
+    }
+
+    /// Like [`ChangeLog::read_after`] but also stops once the encoded size of the returned
+    /// envelopes reaches `max_bytes`. At least one envelope is returned when one is available,
+    /// so a single oversized commit cannot stall a consumer. The second value is the number of
+    /// encoded bytes returned.
+    pub(crate) fn read_budgeted(
+        &self,
+        after: CommitSeq,
+        max_commits: usize,
+        max_bytes: u64,
+    ) -> Result<(Vec<ChangeEnvelope>, u64), ChangeLogError> {
         let snapshot: Vec<SegmentMeta> = {
             let state = self.state.lock();
             state
@@ -214,13 +227,21 @@ impl ChangeLog {
                 .collect()
         };
         let mut out = Vec::new();
+        let mut bytes = 0u64;
         for segment in snapshot {
-            if out.len() >= max_commits {
+            if out.len() >= max_commits || (!out.is_empty() && bytes >= max_bytes) {
                 break;
             }
-            read_segment(&segment, after, max_commits, &mut out)?;
+            read_segment(
+                &segment,
+                after,
+                max_commits,
+                max_bytes,
+                &mut out,
+                &mut bytes,
+            )?;
         }
-        Ok(out)
+        Ok((out, bytes))
     }
 }
 
@@ -305,18 +326,22 @@ fn read_segment(
     segment: &SegmentMeta,
     after: CommitSeq,
     max_commits: usize,
+    max_bytes: u64,
     out: &mut Vec<ChangeEnvelope>,
+    bytes: &mut u64,
 ) -> Result<(), ChangeLogError> {
     let mut file = File::open(&segment.path)?;
     file.seek(SeekFrom::Start(HEADER_LEN))?;
     let mut reader = BufReader::new(file);
     let mut offset = HEADER_LEN;
-    while offset < segment.len && out.len() < max_commits {
+    while offset < segment.len && out.len() < max_commits && (out.is_empty() || *bytes < max_bytes)
+    {
         match read_frame(&mut reader, offset, segment.len)? {
             FrameRead::Frame(payload) => {
                 offset += FRAME_HEADER_LEN + payload.len() as u64;
                 let seq = payload_seq(&payload).unwrap_or(CommitSeq::ZERO);
                 if seq > after {
+                    *bytes += payload.len() as u64;
                     out.push(decode_envelope(&payload)?);
                 }
             }

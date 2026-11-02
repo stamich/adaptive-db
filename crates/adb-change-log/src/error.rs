@@ -45,4 +45,15 @@ pub enum ChangeLogError {
         /// The contested sequence number.
         seq: u64,
     },
+    /// The commits a consumer asked for were pruned. It must resynchronise from a snapshot or
+    /// rebuild; silently skipping them would lose changes.
+    #[error(
+        "commit sequence {requested} was pruned from the change log (earliest stored: {earliest})"
+    )]
+    Truncated {
+        /// First sequence number the consumer needs.
+        requested: u64,
+        /// Oldest sequence number still stored.
+        earliest: u64,
+    },
 }

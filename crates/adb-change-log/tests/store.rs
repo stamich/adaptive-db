@@ -219,3 +219,77 @@ fn gap_below_head_is_a_regression() {
         Err(ChangeLogError::Regression { head: 5, got: 3 })
     ));
 }
+
+/// A cursor delivers everything exactly once, in order, across batches and segments.
+#[test]
+fn cursor_streams_in_batches() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 300).unwrap();
+    for seq in 1..=25 {
+        log.append(&envelope(seq, 40)).unwrap();
+    }
+    let mut cursor = log.cursor(CommitSeq(0)).unwrap();
+    let mut seen = Vec::new();
+    while let Some(batch) = cursor.next_batch(4, u64::MAX).unwrap() {
+        assert!(batch.commits.len() <= 4);
+        assert_eq!(batch.first_commit_seq, batch.commits[0].commit_seq);
+        assert_eq!(
+            batch.last_commit_seq,
+            batch.commits.last().unwrap().commit_seq
+        );
+        seen.extend(seqs(&batch.commits));
+    }
+    assert_eq!(seen, (1..=25).collect::<Vec<_>>());
+    assert_eq!(cursor.position(), CommitSeq(25));
+    // New commits are picked up by the same cursor.
+    log.append(&envelope(26, 40)).unwrap();
+    let batch = cursor.next_batch(10, u64::MAX).unwrap().unwrap();
+    assert_eq!(seqs(&batch.commits), [26]);
+    assert!(cursor.next_batch(10, u64::MAX).unwrap().is_none());
+}
+
+/// The byte budget limits a batch but never starves it: one oversized commit is still delivered.
+#[test]
+fn cursor_respects_the_byte_budget() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 1 << 20).unwrap();
+    for seq in 1..=6 {
+        log.append(&envelope(seq, 1000)).unwrap();
+    }
+    let mut cursor = log.cursor(CommitSeq(0)).unwrap();
+    let first = cursor.next_batch(100, 1).unwrap().unwrap();
+    assert_eq!(
+        first.commits.len(),
+        1,
+        "a tiny budget still yields one commit"
+    );
+    let second = cursor.next_batch(100, 2500).unwrap().unwrap();
+    assert!(second.commits.len() >= 2 && second.commits.len() <= 3);
+    assert!(second.bytes >= 2000);
+    assert_eq!(second.first_commit_seq, CommitSeq(2));
+}
+
+/// A cursor starting inside the log skips earlier commits; one starting before the oldest stored
+/// commit is refused (only an empty log accepts any position).
+#[test]
+fn cursor_start_positions() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 1 << 20).unwrap();
+    assert!(log.cursor(CommitSeq(0)).is_ok());
+    for seq in 3..=6 {
+        log.append(&envelope(seq, 4)).unwrap();
+    }
+    let mut mid = log.cursor(CommitSeq(4)).unwrap();
+    assert_eq!(
+        seqs(&mid.next_batch(10, u64::MAX).unwrap().unwrap().commits),
+        [5, 6]
+    );
+    assert!(log.cursor(CommitSeq(2)).is_ok());
+    assert!(matches!(
+        log.cursor(CommitSeq(1)),
+        Err(ChangeLogError::Truncated {
+            requested: 2,
+            earliest: 3
+        })
+    ));
+}

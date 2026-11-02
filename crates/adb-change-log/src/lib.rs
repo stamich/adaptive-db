@@ -7,11 +7,13 @@
 //!
 //! This crate is storage-engine agnostic: it knows rows and schema markers, not transactions
 //! managers or indexes.
+pub mod cursor;
 pub mod error;
 pub mod log;
 pub mod model;
 pub(crate) mod segment;
 
+pub use cursor::{ChangeBatch, ChangeCursor};
 pub use error::ChangeLogError;
 pub use log::{AppendOutcome, ChangeLog, DEFAULT_SEGMENT_BYTES};
 pub use model::{
