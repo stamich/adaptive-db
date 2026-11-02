@@ -4,7 +4,7 @@
 //! recovery and change-data capture turn log records back into [`CommittedTx`] values
 //! ([`TxAssembler`]). Both directions live here so the log format has exactly one owner.
 
-use adb_core::{CommitSeq, CommitTs, Lsn, RowId, SchemaEpoch, TxId};
+use adb_core::{CommitSeq, CommitTs, Lsn, Row, RowId, SchemaEpoch, TxId};
 use adb_storage::HistoricalVersion;
 use adb_tx::Mutation;
 use adb_wal::{CatalogEvent, LogEntry, WalError, WalRecord};
@@ -34,6 +34,27 @@ pub struct CommittedTx {
 }
 
 impl CommittedTx {
+    /// Before and after image of every row the commit changed, in row order.
+    ///
+    /// The before image is the version the commit closed (`None` for an insert), the after image
+    /// the new state (`None` for a delete). A delete of a row that did not exist changes
+    /// nothing and is left out. Change-data capture and the change log both derive their row
+    /// changes from this one function, so the two feeds cannot disagree.
+    pub fn row_images(&self) -> impl Iterator<Item = (RowId, Option<Row>, Option<Row>)> + '_ {
+        self.mutations.iter().filter_map(|(row_id, mutation)| {
+            let before = self
+                .before_images
+                .iter()
+                .find(|(id, _)| id == row_id)
+                .and_then(|(_, version)| version.value.clone());
+            let after = match mutation {
+                Mutation::Put(row) => Some(row.clone()),
+                Mutation::Delete => None,
+            };
+            (before.is_some() || after.is_some()).then_some((*row_id, before, after))
+        })
+    }
+
     /// The contiguous run of log records describing this commit.
     pub fn to_records(&self) -> Vec<WalRecord> {
         let tx_id = self.tx_id;

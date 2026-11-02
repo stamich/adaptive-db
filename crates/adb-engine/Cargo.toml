@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+adb-change-log = { path = "../adb-change-log" }
 adb-core = { path = "../adb-core" }
 adb-execution = { path = "../adb-execution" }
 adb-index = { path = "../adb-index" }

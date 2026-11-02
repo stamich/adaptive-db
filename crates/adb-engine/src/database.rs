@@ -30,6 +30,7 @@ use std::{
     },
 };
 
+use adb_change_log::{ChangeLog, DEFAULT_SEGMENT_BYTES};
 use adb_core::encode_key;
 use adb_core::{
     CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
@@ -52,6 +53,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     cdc::{self, ChangeBatch, ChangeCursor, ChangeFilter},
+    change_log::{envelope_of, CHANGE_LOG_DIR},
     committed::CommittedTx,
     format,
     health::EngineHealth,
@@ -110,6 +112,8 @@ struct Inner {
     wal_dir: PathBuf,
     /// Appender of the canonical log (group commit).
     log: LogWriter,
+    /// Ordered envelopes of the published commits (derived from the log, fsynced lazily).
+    change_log: ChangeLog,
     /// Current and version stores; readers share, apply/vacuum take it exclusively.
     projections: RwLock<Projections>,
     /// Ids, timestamps and active snapshots.
@@ -151,6 +155,7 @@ impl Database {
 
         let recovered = recover(dir, &wal_dir, &options, &journal, &checkpoints)?;
         let log = LogWriter::open(&wal_dir, options.log_segment_bytes)?;
+        let change_log = ChangeLog::open(&dir.join(CHANGE_LOG_DIR), DEFAULT_SEGMENT_BYTES)?;
         let mut tx_manager = TransactionManager::default();
         tx_manager.advance_after_recovery(
             recovered.last_tx_id,
@@ -164,6 +169,7 @@ impl Database {
                 options,
                 wal_dir,
                 log,
+                change_log,
                 projections: RwLock::new(recovered.projections),
                 tx_manager: Mutex::new(tx_manager),
                 commit_lock: Mutex::new(()),
@@ -293,6 +299,7 @@ impl Database {
                         .write()
                         .apply(&committed, appended.commit_lsn)?;
                     self.inner.modifications.lock().record(&committed);
+                    self.inner.change_log.append(&envelope_of(&committed))?;
                     Ok(appended.end)
                 })
                 .map_err(DbError::CommitOutcomeUnknown)?;
@@ -306,6 +313,15 @@ impl Database {
         self.inner.tx_manager.lock().publish_commit(commit);
         self.checkpoint_if_needed();
         Ok(commit)
+    }
+
+    /// The change log: one envelope per published commit, ordered by commit sequence number.
+    ///
+    /// The returned handle shares the instance's log; use [`ChangeLog::cursor`] to stream it.
+    /// The log is derived from the canonical WAL (which stays the source of truth) and is
+    /// fsynced at checkpoints rather than on every commit.
+    pub fn change_log(&self) -> ChangeLog {
+        self.inner.change_log.clone()
     }
 
     /// Abandons `tx`. (Dropping it has the same effect.)
@@ -831,6 +847,7 @@ impl Database {
                     .projections
                     .write()
                     .apply(&committed, appended.commit_lsn)?;
+                self.inner.change_log.append(&envelope_of(&committed))?;
                 Ok(appended.end)
             })
             .map_err(DbError::CommitOutcomeUnknown)?;
@@ -870,6 +887,9 @@ impl Database {
             .guard(|| {
                 let end = self.inner.log.end()?;
                 self.inner.log.sync_through(end)?;
+                // The change log is fsynced lazily, here: it is derived from the log, so a
+                // crash before this point only costs a rebuild of its tail.
+                self.inner.change_log.sync()?;
                 let checkpoint = {
                     let tx_manager = self.inner.tx_manager.lock();
                     Checkpoint {

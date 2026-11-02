@@ -70,6 +70,7 @@ dependencies = [
 name = "adb-engine"
 version = "2.4.0"
 dependencies = [
+ "adb-change-log",
  "adb-core",
  "adb-execution",
  "adb-index",

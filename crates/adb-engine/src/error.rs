@@ -16,6 +16,9 @@ pub enum DbError {
     /// Canonical-log failure.
     #[error("WAL error: {0}")]
     Wal(#[from] WalError),
+    /// Change-log failure (see `adb-change-log`).
+    #[error("change log error: {0}")]
+    ChangeLog(#[from] adb_change_log::ChangeLogError),
     /// Projection (store) failure.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
