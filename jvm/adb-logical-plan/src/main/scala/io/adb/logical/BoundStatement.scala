@@ -32,6 +32,9 @@ final case class BoundShowIndexes(entity: Option[Entity]) extends BoundStatement
 /** `SET optimizer = cost | rule`. */
 final case class BoundSetOptimizer(mode: OptimizerMode) extends BoundStatement
 
+/** `SET SESSION CONSISTENCY ...`. */
+final case class BoundSetConsistency(level: io.adb.consistency.ReadConsistency) extends BoundStatement
+
 /** How SELECT statements are optimized. */
 enum OptimizerMode derives CanEqual:
   /** Statistics-driven: cardinality estimates, cost model, join ordering, cost-based

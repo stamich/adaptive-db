@@ -211,6 +211,10 @@ final class AdaptiveDatabase(
       mode = newMode
       QueryResult(Vector.empty, Vector.empty, Some(s"SET optimizer = ${newMode.toString.toLowerCase}"))
 
+    case BoundSetConsistency(level) =>
+      session.consistency = level
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET SESSION CONSISTENCY ${level.sql}"))
+
     case BoundInsert(entity, values) =>
       val pk = values.get(entity.primaryKeyField.id) match
         case Some(DbValue.Int64Value(value)) => value

@@ -98,6 +98,36 @@ private final case class ParserState(tokens: Vector[Token], var pos: Int = 0):
 
   /** Parses the rest of `SET name = value` or `SET name TO value`; the value is a word or number. */
   private def parseSet(): Statement =
+    if isSessionConsistency then parseSessionConsistency() else parseSetOption()
+
+  /** Whether the next tokens are `SESSION CONSISTENCY` (a setting called `session` stays possible). */
+  private def isSessionConsistency: Boolean = (current, peek(1)) match
+    case (Token.Word(a), Token.Word(b)) => a.equalsIgnoreCase("SESSION") && b.equalsIgnoreCase("CONSISTENCY")
+    case _ => false
+
+  /** Parses the rest of `SET SESSION CONSISTENCY level`, from `SESSION`. */
+  private def parseSessionConsistency(): Statement =
+    expectWord("SESSION")
+    expectWord("CONSISTENCY")
+    val level = current match
+      case Token.Word(word) => advance(); word.toUpperCase
+      case other => throw error(s"expected a consistency level, got $other")
+    level match
+      case "STRONG" | "READ_YOUR_WRITES" | "EVENTUAL" => SetSessionConsistency(level, None)
+      case "BOUNDED" =>
+        val amount = current match
+          case Token.Number(number) =>
+            advance()
+            number.toLongOption.filter(_ >= 0).getOrElse(throw error(s"a staleness bound must be a non-negative whole number, got $number"))
+          case other => throw error(s"expected a staleness bound after BOUNDED, got $other")
+        val unit = current match
+          case Token.Word(word) if word.equalsIgnoreCase("MS") || word.equalsIgnoreCase("COMMITS") => advance(); word.toUpperCase
+          case other => throw error(s"expected MS or COMMITS after the bound, got $other")
+        SetSessionConsistency(level, Some((amount, unit)))
+      case other => throw error(s"unknown consistency level $other (STRONG, READ_YOUR_WRITES, BOUNDED n MS|COMMITS, EVENTUAL)")
+
+  /** Parses the rest of `SET name = value`, from the name. */
+  private def parseSetOption(): Statement =
     val name = expectIdentifier()
     if !acceptSymbol("=") then expectWord("TO")
     val value = current match

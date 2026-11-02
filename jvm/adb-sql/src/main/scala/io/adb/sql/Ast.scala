@@ -81,6 +81,13 @@ final case class ShowIndexes(table: Option[String]) extends Statement derives Ca
 final case class Analyze(table: Option[String]) extends Statement derives CanEqual
 /** `SET name = value` (or `SET name TO value`): a session setting such as `optimizer`. */
 final case class SetOption(name: String, value: String) extends Statement derives CanEqual
+/** `SET SESSION CONSISTENCY STRONG | READ_YOUR_WRITES | EVENTUAL | BOUNDED n MS | BOUNDED n COMMITS`:
+  * how fresh the data the session reads must be.
+  *
+  * @param level the level word, upper-cased (`STRONG`, `READ_YOUR_WRITES`, `EVENTUAL`, `BOUNDED`)
+  * @param bound for `BOUNDED`, the amount and its unit (`MS` or `COMMITS`)
+  */
+final case class SetSessionConsistency(level: String, bound: Option[(Long, String)]) extends Statement derives CanEqual
 /** `EXPLAIN [ANALYZE] statement`. */
 final case class Explain(statement: Statement, analyze: Boolean) extends Statement derives CanEqual
 
