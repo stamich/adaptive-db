@@ -293,3 +293,29 @@ fn cursor_start_positions() {
         })
     ));
 }
+
+/// Truncating after a number drops the surplus across segments, keeps the rest readable and
+/// lets the numbers be appended again with new content.
+#[test]
+fn truncate_after_removes_the_surplus() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 300).unwrap();
+    for seq in 1..=20 {
+        log.append(&envelope(seq, 40)).unwrap();
+    }
+    assert_eq!(log.truncate_after(CommitSeq(20)).unwrap(), 0);
+    assert!(log.truncate_after(CommitSeq(8)).unwrap() > 0);
+    assert_eq!(log.head(), Some(CommitSeq(8)));
+    assert_eq!(
+        seqs(&log.read_after(CommitSeq(0), 100).unwrap()),
+        (1..=8).collect::<Vec<_>>()
+    );
+    // The numbers are free again, with different content.
+    log.append(&envelope(9, 5)).unwrap();
+    drop(log);
+    let log = ChangeLog::open(dir.path(), 300).unwrap();
+    assert_eq!(log.head(), Some(CommitSeq(9)));
+    // Truncating below the first stored number empties the log.
+    log.truncate_after(CommitSeq(0)).unwrap();
+    assert_eq!(log.head(), None);
+}

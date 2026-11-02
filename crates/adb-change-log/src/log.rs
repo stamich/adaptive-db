@@ -189,6 +189,66 @@ impl ChangeLog {
         Ok(AppendOutcome::Appended)
     }
 
+    /// Removes every envelope with a sequence number above `seq`.
+    ///
+    /// Used at open when the change log is ahead of the canonical log (a crash lost the WAL
+    /// tail but not the change-log tail): the canonical log is the truth, so the surplus must
+    /// go before the numbers are reused. Whole segments above `seq` are deleted and the segment
+    /// holding `seq` is cut after its frame. Returns the number of bytes removed (0 when nothing
+    /// was above `seq`).
+    pub fn truncate_after(&self, seq: CommitSeq) -> Result<u64, ChangeLogError> {
+        let mut state = self.state.lock();
+        if state.segments.last().is_none_or(|s| s.last_seq <= seq) {
+            return Ok(0);
+        }
+        state.active = None;
+        let mut removed = 0u64;
+        while state
+            .segments
+            .last()
+            .is_some_and(|segment| segment.first_seq > seq)
+        {
+            let segment = state.segments.pop().expect("checked above");
+            fs::remove_file(&segment.path)?;
+            removed += segment.len;
+        }
+        if let Some(segment) = state.segments.last_mut() {
+            if segment.last_seq > seq {
+                let mut file = File::open(&segment.path)?;
+                file.seek(SeekFrom::Start(HEADER_LEN))?;
+                let mut reader = BufReader::new(file);
+                let mut offset = HEADER_LEN;
+                let mut last = segment.first_seq;
+                while offset < segment.len {
+                    match read_frame(&mut reader, offset, segment.len)? {
+                        FrameRead::Frame(payload) => {
+                            let current = payload_seq(&payload).unwrap_or(CommitSeq::ZERO);
+                            if current > seq {
+                                break;
+                            }
+                            last = current;
+                            offset += FRAME_HEADER_LEN + payload.len() as u64;
+                        }
+                        FrameRead::End => break,
+                        FrameRead::Damaged { reason, .. } => {
+                            return Err(ChangeLogError::Corrupt {
+                                segment: segment_label(segment),
+                                offset,
+                                reason,
+                            })
+                        }
+                    }
+                }
+                removed += segment.len - offset;
+                truncate(&segment.path, offset)?;
+                segment.len = offset;
+                segment.last_seq = last;
+            }
+        }
+        sync_dir(&state.dir)?;
+        Ok(removed)
+    }
+
     /// Makes everything appended so far durable (fsync of the active segment).
     pub fn sync(&self) -> Result<(), ChangeLogError> {
         let mut state = self.state.lock();

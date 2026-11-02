@@ -30,7 +30,7 @@ use std::{
     },
 };
 
-use adb_change_log::{ChangeLog, DEFAULT_SEGMENT_BYTES};
+use adb_change_log::ChangeLog;
 use adb_core::encode_key;
 use adb_core::{
     CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
@@ -53,7 +53,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     cdc::{self, ChangeBatch, ChangeCursor, ChangeFilter},
-    change_log::{envelope_of, CHANGE_LOG_DIR},
+    change_log::{envelope_of, open_or_reset, repair, CHANGE_LOG_DIR},
     committed::CommittedTx,
     format,
     health::EngineHealth,
@@ -153,9 +153,18 @@ impl Database {
         let journal = Journal::new(dir);
         let checkpoints = CheckpointStore::new(dir.join(CHECKPOINT_FILE));
 
+        // The checkpoint as it was before recovery tells how much of the change log is known to
+        // be durable.
+        let before_recovery = checkpoints.load()?;
+        let change_log = open_or_reset(&dir.join(CHANGE_LOG_DIR))?;
         let recovered = recover(dir, &wal_dir, &options, &journal, &checkpoints)?;
+        repair(
+            &wal_dir,
+            &change_log,
+            &before_recovery,
+            recovered.last_commit_seq,
+        )?;
         let log = LogWriter::open(&wal_dir, options.log_segment_bytes)?;
-        let change_log = ChangeLog::open(&dir.join(CHANGE_LOG_DIR), DEFAULT_SEGMENT_BYTES)?;
         let mut tx_manager = TransactionManager::default();
         tx_manager.advance_after_recovery(
             recovered.last_tx_id,
