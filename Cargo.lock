@@ -44,6 +44,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-change-log"
+version = "2.4.0"
+dependencies = [
+ "adb-core",
+ "bincode",
+ "crc32fast",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-core"
 version = "2.4.0"
 dependencies = [
