@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod offsets;
 pub mod options;
 pub mod projection;
+pub mod projection_runtime;
 pub mod projections;
 mod recovery;
 pub mod schema_registry;

@@ -19,6 +19,9 @@ pub enum DbError {
     /// Change-log failure (see `adb-change-log`).
     #[error("change log error: {0}")]
     ChangeLog(#[from] adb_change_log::ChangeLogError),
+    /// Projection-runtime failure (registry, frontiers, checkpoints).
+    #[error("projection runtime error: {0}")]
+    ProjectionRuntime(#[from] adb_projection_runtime::ProjectionError),
     /// Projection (store) failure.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),

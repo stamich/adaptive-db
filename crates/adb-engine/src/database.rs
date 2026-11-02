@@ -30,7 +30,7 @@ use std::{
     },
 };
 
-use adb_change_log::ChangeLog;
+use adb_change_log::{ChangeLog, ChangeRetentionPolicy, PruneReport};
 use adb_core::encode_key;
 use adb_core::{
     CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
@@ -41,6 +41,7 @@ use adb_execution::{
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
+use adb_projection_runtime::ProjectionRegistry;
 use adb_schema::{CatalogEvent, EntitySchema, EntitySpec, SchemaChange, SchemaRegistry};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
@@ -61,6 +62,7 @@ use crate::{
     log::LogWriter,
     offsets::ConsumerOffsets,
     projection::Projection,
+    projection_runtime::{index_projection_id, open_registry, reconcile, register_index},
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
     schema_registry::registry_path,
@@ -112,6 +114,8 @@ struct Inner {
     wal_dir: PathBuf,
     /// Appender of the canonical log (group commit).
     log: LogWriter,
+    /// Registry of projections and their frontiers.
+    projection_registry: ProjectionRegistry,
     /// Ordered envelopes of the published commits (derived from the log, fsynced lazily).
     change_log: ChangeLog,
     /// Current and version stores; readers share, apply/vacuum take it exclusively.
@@ -165,6 +169,12 @@ impl Database {
             recovered.last_commit_seq,
         )?;
         let log = LogWriter::open(&wal_dir, options.log_segment_bytes)?;
+        let projection_registry = open_registry(dir)?;
+        reconcile(
+            &projection_registry,
+            recovered.projections.catalog().definitions(),
+            recovered.last_commit_seq,
+        )?;
         let mut tx_manager = TransactionManager::default();
         tx_manager.advance_after_recovery(
             recovered.last_tx_id,
@@ -179,6 +189,7 @@ impl Database {
                 wal_dir,
                 log,
                 change_log,
+                projection_registry,
                 projections: RwLock::new(recovered.projections),
                 tx_manager: Mutex::new(tx_manager),
                 commit_lock: Mutex::new(()),
@@ -309,6 +320,9 @@ impl Database {
                         .apply(&committed, appended.commit_lsn)?;
                     self.inner.modifications.lock().record(&committed);
                     self.inner.change_log.append(&envelope_of(&committed))?;
+                    self.inner
+                        .projection_registry
+                        .advance_synchronous(committed.commit_seq);
                     Ok(appended.end)
                 })
                 .map_err(DbError::CommitOutcomeUnknown)?;
@@ -319,7 +333,7 @@ impl Database {
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit);
+        self.publish(commit);
         self.checkpoint_if_needed();
         Ok(commit)
     }
@@ -331,6 +345,27 @@ impl Database {
     /// fsynced at checkpoints rather than on every commit.
     pub fn change_log(&self) -> ChangeLog {
         self.inner.change_log.clone()
+    }
+
+    /// The projection registry: every projection of the database with its state, frontier and
+    /// lag. The current-row store and the secondary indexes are registered as synchronous
+    /// projections; asynchronous ones are registered by their owners.
+    pub fn projection_registry(&self) -> ProjectionRegistry {
+        self.inner.projection_registry.clone()
+    }
+
+    /// Prunes the change log: segments no asynchronous projection still needs are removed, and
+    /// `policy` bounds the log even against a stalled one. Projections whose history was
+    /// removed are marked [`adb_projection_runtime::ProjectionState::NeedsRebuild`].
+    pub fn prune_change_log(&self, policy: &ChangeRetentionPolicy) -> Result<PruneReport, DbError> {
+        self.inner.health.check()?;
+        let head = self.inner.tx_manager.lock().latest_commit_seq();
+        let frontier = self.inner.projection_registry.retention_frontier(head);
+        let report = self.inner.change_log.prune(frontier, policy)?;
+        if let Some(earliest) = report.earliest_after {
+            self.inner.projection_registry.mark_overtaken(earliest);
+        }
+        Ok(report)
     }
 
     /// Abandons `tx`. (Dropping it has the same effect.)
@@ -608,6 +643,15 @@ impl Database {
             lsn,
             self.inner.options.buffer_pages,
         )?;
+        register_index(
+            &self.inner.projection_registry,
+            &definition,
+            self.inner
+                .tx_manager
+                .lock()
+                .last_allocated_commit()
+                .commit_seq,
+        )?;
         // Plans made before the index existed must be planned again (they may now use it).
         self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         // If the build cannot be published, the failed checkpoint poisons the instance and the
@@ -615,7 +659,7 @@ impl Database {
         self.checkpoint_locked()?;
         // Every commit up to `created_at` is applied and, after the checkpoint's log sync,
         // durable: it may be published, so a query planned right now can use the index.
-        self.inner.tx_manager.lock().publish_commit(created);
+        self.publish(created);
         Ok(definition)
     }
 
@@ -629,6 +673,9 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        self.inner
+            .projection_registry
+            .remove(index_projection_id(definition.id));
         // Plans that scan the index must be planned again.
         self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         self.checkpoint_locked()?;
@@ -857,6 +904,9 @@ impl Database {
                     .write()
                     .apply(&committed, appended.commit_lsn)?;
                 self.inner.change_log.append(&envelope_of(&committed))?;
+                self.inner
+                    .projection_registry
+                    .advance_synchronous(committed.commit_seq);
                 Ok(appended.end)
             })
             .map_err(DbError::CommitOutcomeUnknown)?;
@@ -864,7 +914,7 @@ impl Database {
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit);
+        self.publish(commit);
         Ok(value)
     }
 
@@ -899,6 +949,7 @@ impl Database {
                 // The change log is fsynced lazily, here: it is derived from the log, so a
                 // crash before this point only costs a rebuild of its tail.
                 self.inner.change_log.sync()?;
+                self.inner.projection_registry.checkpoint()?;
                 let checkpoint = {
                     let tx_manager = self.inner.tx_manager.lock();
                     Checkpoint {
@@ -1042,6 +1093,13 @@ impl Database {
             mutations,
             catalog: Vec::new(),
         })
+    }
+
+    /// Publishes a durable commit: readers may see it from now on, and the projection runtime
+    /// learns the new head (the reference point of every projection's lag).
+    fn publish(&self, commit: CommitResult) {
+        self.inner.tx_manager.lock().publish_commit(commit);
+        self.inner.projection_registry.set_head(commit.commit_seq);
     }
 
     /// Starts a checkpoint once the dirty-page budget is exceeded. A failure poisons the

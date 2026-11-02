@@ -113,6 +113,23 @@ impl ProjectionRegistry {
         }
     }
 
+    /// Moves every ready synchronous projection to `to`. The commit path calls this once per
+    /// commit, after the projections were applied: a synchronous projection is by construction
+    /// as far as the commit that was just applied.
+    pub fn advance_synchronous(&self, to: CommitSeq) {
+        let mut table = self.shared.table.lock();
+        for entry in table.entries.iter_mut() {
+            if entry.descriptor.mode == ProjectionMode::Synchronous
+                && entry.state == ProjectionState::Ready
+                && to > entry.frontier.base_commit_seq
+            {
+                entry.frontier.base_commit_seq = to;
+                entry.frontier.delta_commit_seq = entry.frontier.delta_commit_seq.max(to);
+            }
+        }
+        self.shared.changed.notify_all();
+    }
+
     /// Marks asynchronous projections that need history older than `earliest` (the oldest
     /// commit still in the change log) as [`ProjectionState::NeedsRebuild`]. Returns their ids.
     pub fn mark_overtaken(&self, earliest: CommitSeq) -> Vec<ProjectionId> {
