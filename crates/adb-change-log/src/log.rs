@@ -26,6 +26,16 @@ use crate::{
 /// Default size at which the active segment rolls over (16 MiB).
 pub const DEFAULT_SEGMENT_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Result of a successful [`ChangeLog::append`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppendOutcome {
+    /// The envelope was written.
+    Appended,
+    /// An identical envelope with the same sequence number was already stored; nothing changed.
+    /// This makes replaying a recovered WAL tail over an existing change log safe.
+    Duplicate,
+}
+
 /// What the log knows about one segment file.
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentMeta {
@@ -145,24 +155,38 @@ impl ChangeLog {
         self.state.lock().segments.len()
     }
 
-    /// Appends `envelope`. Its sequence number must be above the head.
+    /// Appends `envelope`.
+    ///
+    /// * A sequence number above the head is written.
+    /// * A sequence number at or below the head is accepted only as an exact repeat of the
+    ///   stored envelope ([`AppendOutcome::Duplicate`], nothing written); different content is
+    ///   [`ChangeLogError::Mismatch`], and a number that was pruned away (or never stored, in a
+    ///   gap) is [`ChangeLogError::Regression`].
     ///
     /// The frame is written and flushed to the operating system but **not** fsynced; call
     /// [`ChangeLog::sync`] to make it durable. The envelope becomes visible to readers only
     /// when the write is complete.
-    pub fn append(&self, envelope: &ChangeEnvelope) -> Result<(), ChangeLogError> {
+    pub fn append(&self, envelope: &ChangeEnvelope) -> Result<AppendOutcome, ChangeLogError> {
         let payload = encode_envelope(envelope)?;
         let framed = frame(&payload);
         let mut state = self.state.lock();
         if let Some(head) = state.segments.last().map(|s| s.last_seq) {
             if envelope.commit_seq <= head {
-                return Err(ChangeLogError::Regression {
-                    head: head.0,
-                    got: envelope.commit_seq.0,
-                });
+                let stored = state.read_one(envelope.commit_seq)?;
+                return match stored {
+                    Some(existing) if existing == payload => Ok(AppendOutcome::Duplicate),
+                    Some(_) => Err(ChangeLogError::Mismatch {
+                        seq: envelope.commit_seq.0,
+                    }),
+                    None => Err(ChangeLogError::Regression {
+                        head: head.0,
+                        got: envelope.commit_seq.0,
+                    }),
+                };
             }
         }
-        state.write_frame(envelope.commit_seq, &framed)
+        state.write_frame(envelope.commit_seq, &framed)?;
+        Ok(AppendOutcome::Appended)
     }
 
     /// Makes everything appended so far durable (fsync of the active segment).
@@ -201,6 +225,40 @@ impl ChangeLog {
 }
 
 impl State {
+    /// The encoded payload stored under `seq`, if the log has it.
+    fn read_one(&self, seq: CommitSeq) -> Result<Option<Vec<u8>>, ChangeLogError> {
+        let Some(segment) = self
+            .segments
+            .iter()
+            .find(|s| s.first_seq <= seq && seq <= s.last_seq)
+        else {
+            return Ok(None);
+        };
+        let mut file = File::open(&segment.path)?;
+        file.seek(SeekFrom::Start(HEADER_LEN))?;
+        let mut reader = BufReader::new(file);
+        let mut offset = HEADER_LEN;
+        while offset < segment.len {
+            match read_frame(&mut reader, offset, segment.len)? {
+                FrameRead::Frame(payload) => {
+                    offset += FRAME_HEADER_LEN + payload.len() as u64;
+                    if payload_seq(&payload) == Some(seq) {
+                        return Ok(Some(payload));
+                    }
+                }
+                FrameRead::End => break,
+                FrameRead::Damaged { reason, .. } => {
+                    return Err(ChangeLogError::Corrupt {
+                        segment: segment_label(segment),
+                        offset,
+                        reason,
+                    })
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Writes one framed envelope, rolling over to a new segment when the active one is full.
     fn write_frame(&mut self, seq: CommitSeq, framed: &[u8]) -> Result<(), ChangeLogError> {
         let needs_new = match self.segments.last() {
@@ -265,11 +323,7 @@ fn read_segment(
             FrameRead::End => break,
             FrameRead::Damaged { reason, .. } => {
                 return Err(ChangeLogError::Corrupt {
-                    segment: segment
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
+                    segment: segment_label(segment),
                     offset,
                     reason,
                 });
@@ -277,6 +331,15 @@ fn read_segment(
         }
     }
     Ok(())
+}
+
+/// File name of a segment, for error messages.
+fn segment_label(segment: &SegmentMeta) -> String {
+    segment
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Cuts `path` to `len` bytes and makes the cut durable.

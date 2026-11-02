@@ -13,7 +13,7 @@ pub mod model;
 pub(crate) mod segment;
 
 pub use error::ChangeLogError;
-pub use log::{ChangeLog, DEFAULT_SEGMENT_BYTES};
+pub use log::{AppendOutcome, ChangeLog, DEFAULT_SEGMENT_BYTES};
 pub use model::{
     decode_envelope, encode_envelope, ChangeEnvelope, ChangePayload, RowChange, SchemaChangeMarker,
     MAX_ENVELOPE_BYTES,

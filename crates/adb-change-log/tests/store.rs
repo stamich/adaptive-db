@@ -1,5 +1,7 @@
 //! The segmented change log store: append, read back, roll over, restart and torn tails.
-use adb_change_log::{ChangeEnvelope, ChangeLog, ChangeLogError, ChangePayload, RowChange};
+use adb_change_log::{
+    AppendOutcome, ChangeEnvelope, ChangeLog, ChangeLogError, ChangePayload, RowChange,
+};
 use adb_core::{CommitSeq, CommitTs, Row, RowId, SchemaEpoch, TxId, Value};
 use tempfile::tempdir;
 
@@ -70,19 +72,15 @@ fn rollover_and_restart() {
     assert_eq!(log.head(), Some(CommitSeq(21)));
 }
 
-/// Sequence numbers must increase.
+/// A number below the first stored envelope (not stored, e.g. pruned) is a regression.
 #[test]
 fn regression_is_refused() {
     let dir = tempdir().unwrap();
     let log = ChangeLog::open(dir.path(), 1 << 20).unwrap();
     log.append(&envelope(3, 4)).unwrap();
     assert!(matches!(
-        log.append(&envelope(3, 4)),
-        Err(ChangeLogError::Regression { head: 3, got: 3 })
-    ));
-    assert!(matches!(
         log.append(&envelope(2, 4)),
-        Err(ChangeLogError::Regression { .. })
+        Err(ChangeLogError::Regression { head: 3, got: 2 })
     ));
 }
 
@@ -172,4 +170,52 @@ fn oversized_envelope_is_refused() {
         Err(ChangeLogError::TooLarge { .. })
     ));
     assert_eq!(log.head(), Some(CommitSeq(1)));
+}
+
+/// Re-appending an identical envelope is a no-op (also across a restart and a segment
+/// boundary); different content under the same number is a mismatch and nothing is overwritten.
+#[test]
+fn append_is_idempotent() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 300).unwrap();
+    for seq in 1..=10 {
+        assert_eq!(
+            log.append(&envelope(seq, 40)).unwrap(),
+            AppendOutcome::Appended
+        );
+    }
+    for seq in [1, 5, 10] {
+        assert_eq!(
+            log.append(&envelope(seq, 40)).unwrap(),
+            AppendOutcome::Duplicate
+        );
+    }
+    assert_eq!(log.head(), Some(CommitSeq(10)));
+    assert!(matches!(
+        log.append(&envelope(5, 41)),
+        Err(ChangeLogError::Mismatch { seq: 5 })
+    ));
+    drop(log);
+    let log = ChangeLog::open(dir.path(), 300).unwrap();
+    assert_eq!(
+        log.append(&envelope(7, 40)).unwrap(),
+        AppendOutcome::Duplicate
+    );
+    assert_eq!(
+        seqs(&log.read_after(CommitSeq(0), 100).unwrap()),
+        (1..=10).collect::<Vec<_>>()
+    );
+}
+
+/// A number that is not stored (a gap below the head) cannot be inserted.
+#[test]
+fn gap_below_head_is_a_regression() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 1 << 20).unwrap();
+    log.append(&envelope(2, 4)).unwrap();
+    log.append(&envelope(5, 4)).unwrap();
+    assert!(matches!(
+        log.append(&envelope(3, 4)),
+        Err(ChangeLogError::Regression { head: 5, got: 3 })
+    ));
 }

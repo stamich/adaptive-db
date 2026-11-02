@@ -38,4 +38,11 @@ pub enum ChangeLogError {
         /// Offered sequence number.
         got: u64,
     },
+    /// An envelope with this sequence number is stored, but with different content. The caller
+    /// holds a diverged copy of history; nothing is overwritten.
+    #[error("commit sequence {seq} is already in the change log with different content")]
+    Mismatch {
+        /// The contested sequence number.
+        seq: u64,
+    },
 }
