@@ -31,7 +31,9 @@ use std::{
 };
 
 use adb_core::encode_key;
-use adb_core::{CommitResult, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
+use adb_core::{
+    CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
+};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
     QueryCursor, ReadView,
@@ -344,6 +346,13 @@ impl Database {
     /// Latest commit visible to new snapshots.
     pub fn latest_committed_ts(&self) -> CommitTs {
         self.inner.tx_manager.lock().latest_committed_ts()
+    }
+
+    /// The canonical head: the sequence number of the latest published commit, data or catalog
+    /// (0 on an empty database). A session that read `head` before a query has seen every
+    /// commit up to it; see [`CommitSeq`].
+    pub fn latest_commit_seq(&self) -> CommitSeq {
+        self.inner.tx_manager.lock().latest_commit_seq()
     }
 
     /// Runs a plan made at catalog epoch `schema_epoch` (plan wire v4) at `snapshot` (the latest
