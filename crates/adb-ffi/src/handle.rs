@@ -20,3 +20,9 @@ pub struct AdbBatchHandle {
     /// Buffer contents.
     pub(crate) bytes: Box<[u8]>,
 }
+
+/// A cursor over the change log (`adb_change_cursor_open` / `adb_change_cursor_close`).
+pub struct AdbChangeCursorHandle {
+    /// The cursor; the mutex makes the handle safe to use from several threads.
+    pub(crate) cursor: Mutex<adb_change_log::ChangeCursor>,
+}

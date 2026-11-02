@@ -104,6 +104,7 @@ dependencies = [
 name = "adb-ffi"
 version = "2.4.0"
 dependencies = [
+ "adb-change-log",
  "adb-core",
  "adb-engine",
  "adb-execution",

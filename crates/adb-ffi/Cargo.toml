@@ -8,6 +8,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+adb-change-log = { path = "../adb-change-log" }
 adb-storage = { path = "../adb-storage" }
 adb-wal = { path = "../adb-wal" }
 adb-core = { path = "../adb-core" }

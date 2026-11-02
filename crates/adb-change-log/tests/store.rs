@@ -319,3 +319,24 @@ fn truncate_after_removes_the_surplus() {
     log.truncate_after(CommitSeq(0)).unwrap();
     assert_eq!(log.head(), None);
 }
+
+/// Rewinding re-delivers commits; it never moves a cursor forward.
+#[test]
+fn cursor_rewind() {
+    let dir = tempdir().unwrap();
+    let log = ChangeLog::open(dir.path(), 1 << 20).unwrap();
+    for seq in 1..=6 {
+        log.append(&envelope(seq, 4)).unwrap();
+    }
+    let mut cursor = log.cursor(CommitSeq(0)).unwrap();
+    let batch = cursor.next_batch(6, u64::MAX).unwrap().unwrap();
+    assert_eq!(batch.commits.len(), 6);
+    cursor.rewind_to(CommitSeq(3));
+    assert_eq!(cursor.position(), CommitSeq(3));
+    assert_eq!(
+        seqs(&cursor.next_batch(10, u64::MAX).unwrap().unwrap().commits),
+        [4, 5, 6]
+    );
+    cursor.rewind_to(CommitSeq(99));
+    assert_eq!(cursor.position(), CommitSeq(6), "never forward");
+}

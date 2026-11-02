@@ -11,6 +11,7 @@
 pub mod args;
 pub mod batch;
 pub mod cdc;
+pub mod change_cursor;
 pub mod database;
 pub mod error;
 pub mod handle;
@@ -27,6 +28,10 @@ pub mod version;
 pub use batch::{adb_batch_data, adb_batch_len, adb_batch_release};
 pub use cdc::{
     adb_change_feed_end, adb_commit_consumer_offset, adb_consumer_offset, adb_read_changes_json,
+};
+pub use change_cursor::{
+    adb_change_cursor_close, adb_change_cursor_next_batch, adb_change_cursor_open,
+    adb_change_cursor_position,
 };
 pub use database::{adb_close, adb_open};
 pub use error::{adb_last_error_len, adb_last_error_ptr};

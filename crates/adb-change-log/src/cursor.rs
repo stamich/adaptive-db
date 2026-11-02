@@ -50,6 +50,15 @@ impl ChangeCursor {
         self.after
     }
 
+    /// Moves the position back to `seq` (never forward), so commits above it are delivered
+    /// again. A caller that had to cut a page short (for a size limit of its own) uses this to
+    /// resume right after the last commit it actually passed on.
+    pub fn rewind_to(&mut self, seq: CommitSeq) {
+        if seq < self.after {
+            self.after = seq;
+        }
+    }
+
     /// Verifies the commit right above the position has not been pruned.
     fn check_available(&self) -> Result<(), ChangeLogError> {
         match self.log.earliest() {

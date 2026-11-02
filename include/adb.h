@@ -50,6 +50,7 @@ extern "C" {
 typedef struct AdbDatabaseHandle AdbDatabaseHandle;
 typedef struct AdbQueryHandle AdbQueryHandle;
 typedef struct AdbBatchHandle AdbBatchHandle;
+typedef struct AdbChangeCursorHandle AdbChangeCursorHandle;
 
 typedef enum AdbStatus {
     ADB_OK = 0,
@@ -208,6 +209,31 @@ AdbStatus adb_consumer_offset(
     const uint8_t* name_ptr,
     size_t name_len,
     uint64_t* out_cursor);
+
+/* ---- change-log cursors (ABI 8) ---- */
+
+/* Opens a cursor that delivers the commits above after_commit_seq (0 = from the start of the
+ * retained change log). ADB_LOG_TRUNCATED when the commits right above it were pruned. *out_cursor
+ * is NULL on failure. */
+AdbStatus adb_change_cursor_open(
+    AdbDatabaseHandle* db,
+    uint64_t after_commit_seq,
+    AdbChangeCursorHandle** out_cursor);
+
+/* Next commits as a UTF-8 JSON document in an AdbBatchHandle (read with adb_batch_data/len, free
+ * with adb_batch_release; the format is in docs/change-log.md), at most max_commits (1..=10000)
+ * and about max_bytes (1..=64 MiB) of change data; at least one commit when any is available.
+ * Returns ADB_END_OF_STREAM (and a NULL batch) when the consumer is caught up. The cursor
+ * advances past the commits returned. */
+AdbStatus adb_change_cursor_next_batch(
+    AdbChangeCursorHandle* cursor,
+    uint32_t max_commits,
+    uint64_t max_bytes,
+    AdbBatchHandle** out_batch);
+
+/* The last commit sequence number the cursor delivered (its start before the first batch). */
+AdbStatus adb_change_cursor_position(AdbChangeCursorHandle* cursor, uint64_t* out_commit_seq);
+AdbStatus adb_change_cursor_close(AdbChangeCursorHandle* cursor);
 
 /* ---- optimizer statistics (ABI 5) ---- */
 
