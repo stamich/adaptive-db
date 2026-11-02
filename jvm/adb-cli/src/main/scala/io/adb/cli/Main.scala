@@ -15,7 +15,7 @@ object Main:
   /** Runs a backslash meta-command, or returns `None` for ordinary SQL.
     *
     * `\\projections` lists the projections, `\\session` shows the session's consistency level and
-    * token, `\\changes [after] [max]` lists change-log commits after commit `after` (default 0,
+    * token, `\\cache [clear]` shows or empties the plan cache, `\\changes [after] [max]` lists change-log commits after commit `after` (default 0,
     * at most `max`, default 20).
     */
   private[cli] def metaCommand(db: AdaptiveDatabase, line: String): Option[io.adb.gateway.QueryResult] =
