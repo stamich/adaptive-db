@@ -44,3 +44,12 @@ final class ProjectionJsonCodecTest:
     bad(consumer.replace("12.5", "\"fast\""))
     bad(consumer.replace("\"search\"", "\"\""))
     assertThrows(classOf[IllegalArgumentException], () => ProjectionJsonCodec.decodeList("{}"))
+
+  /** A large listing decodes in full, and nonsense numbers are refused. */
+  @Test def handlesLargeListingsAndHostileNumbers(): Unit =
+    val many = (1 to 2000).map(i => consumer.replace("1000000", (1000000 + i).toString).replace("\"search\"", s"\"c$i\""))
+    val listing = ProjectionJsonCodec.decodeList(many.mkString("[", ",", "]"))
+    assertEquals(2000, listing.size)
+    assertEquals("c2000", listing.last.name)
+    assertThrows(classOf[IllegalArgumentException], () => { ProjectionJsonCodec.decode(consumer.replace("12.5", "1e999")); () })
+    assertThrows(classOf[IllegalArgumentException], () => { ProjectionJsonCodec.decode(consumer.replace("\"epoch\":1", "\"epoch\":99999999999999999999")); () })
