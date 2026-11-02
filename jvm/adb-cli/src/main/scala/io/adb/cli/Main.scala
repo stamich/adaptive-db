@@ -23,12 +23,15 @@ object Main:
     words match
       case "\\projections" :: Nil => Some(db.showProjections())
       case "\\session" :: Nil => Some(db.showSession())
+      case "\\cache" :: Nil => Some(db.showPlanCache())
+      case "\\cache" :: "clear" :: Nil =>
+        Some(io.adb.gateway.QueryResult(Vector.empty, Vector.empty, Some(s"plan cache cleared (${db.clearPlanCache()} entries)")))
       case "\\changes" :: rest if rest.size <= 2 =>
         val after = rest.headOption.map(_.toLong).getOrElse(0L)
         val max = rest.drop(1).headOption.map(_.toInt).getOrElse(20)
         Some(db.showChanges(after, max))
       case word :: _ if word.startsWith("\\") =>
-        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\changes [after] [max], \\q)")
+        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\cache [clear], \\changes [after] [max], \\q)")
       case _ => None
 
   /** Runs the interactive SQL shell until EOF or `\\q`. */

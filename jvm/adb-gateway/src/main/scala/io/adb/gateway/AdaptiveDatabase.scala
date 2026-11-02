@@ -321,11 +321,24 @@ final class AdaptiveDatabase(
           val (result, profile) = run(inner, plans, sql)
           Vector(s"Executed rows=${result.rows.size}", "Runtime profile:\n" + ProfileRenderer.render(profile, plans.physical.estimates))
         else Vector.empty
-      val sections = AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)
+      val sections = (AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)) :+ explainCache(inner, plans, decisions)
       QueryResult(Vector("plan"), (sections ++ analyzed).map(section => Vector[Any](section)))
 
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
+
+  /** The plan-cache section of EXPLAIN. EXPLAIN itself never reads or fills the cache (and
+    * EXPLAIN ANALYZE always plans afresh); the section says whether this SELECT, run on its own,
+    * would be cached and how the cache is doing.
+    */
+  private def explainCache(select: BoundSelect, plans: AdaptiveDatabase.Plans, decisions: Vector[IndexDecision]): String =
+    val s = planCache.stats
+    val verdict =
+      if !cacheEnabled then "plan cache is off"
+      else if select.asOfVersion.nonEmpty then "not cached: AS OF reads a snapshot"
+      else if !cacheable(plans, decisions) then "not cached: the plan reads a projection that depends on the session's freshness"
+      else "cacheable: stored on the second execution, valid until DDL or ANALYZE on a table it reads"
+    s"Plan cache: $verdict (entries=${s.entries}, hits=${s.hits}, misses=${s.misses}, stale=${s.stale})"
 
   /** What a plan for `select` is valid for, read now. */
   private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
