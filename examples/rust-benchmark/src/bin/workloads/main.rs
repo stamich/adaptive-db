@@ -1,4 +1,5 @@
-//! Milestone 2.4.0 workload benchmark.
+//! Milestone 2.5.0 workload benchmark (workloads A–H of 2.4.0 plus I–O, the commit order, change
+//! log and projection runtime, in [`consistency`]).
 //!
 //! Two modes:
 //!
@@ -18,6 +19,7 @@
 //! cargo run --release -p adb-benchmark-rust --bin workloads -- --prepare /tmp/bench/rust --scale 10
 //! ```
 
+mod consistency;
 mod dataset;
 mod schema;
 
@@ -591,6 +593,7 @@ fn main() -> Result<()> {
         "as_of_index_read": as_of,
         "write_overhead": write_overhead()?,
         "schema_evolution": schema::report(args.scale, args.iters, args.warmup)?,
+        "consistency": consistency::report(args.scale, args.iters.min(200))?,
     });
     let text = serde_json::to_string_pretty(&report)?;
     println!("{text}");

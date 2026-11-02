@@ -7,10 +7,12 @@ license.workspace = true
 default-run = "adb-benchmark-rust"
 
 [dependencies]
+adb-change-log = { path = "../../crates/adb-change-log" }
 adb-core = { path = "../../crates/adb-core" }
 adb-engine = { path = "../../crates/adb-engine" }
 adb-execution = { path = "../../crates/adb-execution" }
 adb-index = { path = "../../crates/adb-index" }
 adb-plan-wire = { path = "../../crates/adb-plan-wire" }
+adb-projection-runtime = { path = "../../crates/adb-projection-runtime" }
 tempfile.workspace = true
 serde_json.workspace = true
