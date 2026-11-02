@@ -9,9 +9,13 @@
 //!
 //! Frontiers are durable (see [`checkpoint`]) so a restart does not forget how far an
 //! asynchronous projection got.
+pub mod checkpoint;
 pub mod error;
 pub mod model;
 
+pub use checkpoint::{
+    CheckpointEntry, ProjectionCheckpoint, ProjectionCheckpointStore, CHECKPOINT_FILE,
+};
 pub use error::ProjectionError;
 pub use model::{
     ProjectionDescriptor, ProjectionFrontier, ProjectionKind, ProjectionMode, ProjectionProgress,
