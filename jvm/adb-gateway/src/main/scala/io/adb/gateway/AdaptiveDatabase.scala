@@ -1,7 +1,7 @@
 package io.adb.gateway
 
 import io.adb.consistency.*
-import io.adb.optimizer.access.SemanticFreshnessPlanner
+import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
@@ -97,6 +97,26 @@ final class AdaptiveDatabase(
         // so nothing was returned yet): bind against the new schemas and plan again, once.
         executeOnce(ast, sql, session)
 
+  /** Every projection with its state and lag (the shell's `\\projections`). */
+  def showProjections(): QueryResult =
+    QueryResult(ConsistencyReport.ProjectionColumns, ConsistencyReport.projectionRows(backend.projections()))
+
+  /** The level, token, head and wait limit of `session` (the shell's `\\session`). */
+  def showSession(session: AdaptiveSession = defaultSession): QueryResult =
+    QueryResult(ConsistencyReport.SessionColumns, ConsistencyReport.sessionRows(session.readContext()))
+
+  /** The commits of the change log after `after`, at most `maxCommits` (the shell's `\\changes`).
+    *
+    * @throws NativeException if the change log no longer holds commits that old
+    */
+  def showChanges(after: Long, maxCommits: Int): QueryResult =
+    require(maxCommits >= 1 && maxCommits <= 10000, "maxCommits must be 1..10000")
+    val cursor = native.openChangeCursor(after)
+    try
+      val batch = cursor.nextBatch(maxCommits, AdaptiveDatabase.MaxChangePageBytes)
+      QueryResult(ConsistencyReport.ChangeColumns, if batch.isPresent then ConsistencyReport.changeRows(batch.get().json()) else Vector.empty)
+    finally cursor.close()
+
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
   def plan(select: BoundSelect): AdaptiveDatabase.Plans = planAt(select, currentEpoch())
 
@@ -133,7 +153,7 @@ final class AdaptiveDatabase(
     * @return the plan, and the read context it was made for
     * @throws IllegalStateException if the session's token is beyond the database's head
     */
-  private def planFresh(select: BoundSelect, epoch: Long, session: AdaptiveSession): (AdaptiveDatabase.Plans, SemanticReadContext) =
+  private def planFresh(select: BoundSelect, epoch: Long, session: AdaptiveSession): (AdaptiveDatabase.Plans, SemanticReadContext, Vector[IndexDecision]) =
     val context = session.readContext()
     if context.consistency != ReadConsistency.Eventual && context.tokenIsAhead then
       throw new IllegalStateException(
@@ -150,7 +170,7 @@ final class AdaptiveDatabase(
     if timedOut.nonEmpty then
       allowed = allowed.filterNot(d => timedOut.exists(_.index.id == d.index.id))
       plans = planAt(select, epoch, IndexCatalog.of(allowed.map(_.index)*))
-    (plans, context)
+    (plans, context, decisions)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
   private def executeBound(statement: BoundStatement, sql: String, epoch: Long, session: AdaptiveSession): QueryResult = statement match
@@ -233,13 +253,14 @@ final class AdaptiveDatabase(
     case select: BoundSelect => run(select, planFresh(select, epoch, session)._1, sql)._1
 
     case BoundExplain(inner: BoundSelect, analyze) =>
-      val plans = planFresh(inner, epoch, session)._1
+      val (plans, context, decisions) = planFresh(inner, epoch, session)
       val analyzed =
         if analyze then
           val (result, profile) = run(inner, plans, sql)
           Vector(s"Executed rows=${result.rows.size}", "Runtime profile:\n" + ProfileRenderer.render(profile, plans.physical.estimates))
         else Vector.empty
-      QueryResult(Vector("plan"), (AdaptiveDatabase.explain(plans) ++ analyzed).map(section => Vector[Any](section)))
+      val sections = AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)
+      QueryResult(Vector("plan"), (sections ++ analyzed).map(section => Vector[Any](section)))
 
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
@@ -295,6 +316,9 @@ object AdaptiveDatabase:
   def isDdl(statement: BoundStatement): Boolean = statement match
     case _: BoundCreateTable | _: BoundAlterTable | _: BoundDropTable | _: BoundCreateIndex | _: BoundDropIndex => true
     case _ => false
+
+  /** Largest page of change-log commits `showChanges` asks the engine for: 1 MiB. */
+  val MaxChangePageBytes: Long = 1L << 20
 
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
