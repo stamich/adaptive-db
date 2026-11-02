@@ -102,8 +102,8 @@ final class PlanCache[V](maxBytes: Long, shards: Int, seenWindow: Int, weigh: V 
         staleCount.increment()
         Lookup.Stale
 
-  /** Offers a plan made under `stamp`; stored only if `key` was offered before. */
-  def offer(key: StatementKey, value: V, stamp: PlanStamp): Offer =
+  /** Offers a plan made under `stamp`; stored only if `key` was offered before. `value` is built only then. */
+  def offer(key: StatementKey, value: => V, stamp: PlanStamp): Offer =
     if !seen.seenBefore(key) then
       deferredCount.increment()
       Offer.Deferred

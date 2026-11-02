@@ -73,8 +73,14 @@ final class Binder(catalog: Catalog):
     case ShowIndexes(table) => BoundShowIndexes(table.map(requireEntity))
 
     case SetOption(name, value) =>
-      require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer)")
-      BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
+      if name.equalsIgnoreCase("plan_cache") then
+        value.toLowerCase match
+          case "on" => BoundSetPlanCache(true)
+          case "off" => BoundSetPlanCache(false)
+          case _ => throw new IllegalArgumentException(s"plan_cache must be on or off, got $value")
+      else
+        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache)")
+        BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
 
     case SetSessionConsistency(level, bound) =>
       BoundSetConsistency(level match
