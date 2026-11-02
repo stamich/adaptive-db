@@ -37,6 +37,8 @@ public final class NativeDatabase implements AutoCloseable {
     private static final long MAX_INDEX_JSON_BYTES = 16L * 1024 * 1024;
     /** Upper bound on the UTF-8 length of a schema definition or change (matches the native 1 MiB limit). */
     private static final int MAX_SCHEMA_REQUEST_BYTES = 1024 * 1024;
+    /** Upper bound on the size of a projection document or listing. */
+    private static final long MAX_PROJECTION_JSON_BYTES = 16L * 1024 * 1024;
     /** Upper bound on the size of a schema, catalog or history document. */
     private static final long MAX_SCHEMA_JSON_BYTES = 64L * 1024 * 1024;
 
@@ -140,6 +142,161 @@ public final class NativeDatabase implements AutoCloseable {
             out.set(ValueLayout.JAVA_LONG, 0, 0L);
             library.check(library.invokeInt(library.deleteRow, handle, entityId, primaryKey, out));
             return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    // ----- commit sequence numbers (ABI 8) ----------------------------------------------------
+
+    /**
+     * Newest published commit sequence number, 0 before the first commit. A session that wants to
+     * read everything committed so far (for example after DDL) can remember this number.
+     */
+    public synchronized long latestCommitSeq() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            library.check(library.invokeInt(library.latestCommitSeq, handle, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /** Inserts one row and returns the identity of its commit (timestamp and sequence number). */
+    public synchronized NativeCommitResult insertCommit(long entityId, long primaryKey, String rowJson) {
+        return mutationCommit(library.insertRowCommit, entityId, primaryKey, rowJson);
+    }
+
+    /** Updates selected fields and returns the identity of the commit. */
+    public synchronized NativeCommitResult updateCommit(long entityId, long primaryKey, String assignmentsJson) {
+        return mutationCommit(library.updateFieldsCommit, entityId, primaryKey, assignmentsJson);
+    }
+
+    /** Invokes one bounded JSON mutation function that reports the commit sequence number. */
+    private NativeCommitResult mutationCommit(java.lang.invoke.MethodHandle fn, long entityId, long primaryKey, String json) {
+        ensureOpen();
+        byte[] bytes = boundedJson(json, "mutation");
+        try (var arena = Arena.ofConfined()) {
+            var input = arena.allocate(bytes.length);
+            input.copyFrom(MemorySegment.ofArray(bytes));
+            var ts = arena.allocate(ValueLayout.JAVA_LONG);
+            var seq = arena.allocate(ValueLayout.JAVA_LONG);
+            ts.set(ValueLayout.JAVA_LONG, 0, 0L);
+            seq.set(ValueLayout.JAVA_LONG, 0, 0L);
+            library.check(library.invokeInt(fn, handle, entityId, primaryKey, input, (long) bytes.length, ts, seq));
+            return new NativeCommitResult(ts.get(ValueLayout.JAVA_LONG, 0), seq.get(ValueLayout.JAVA_LONG, 0));
+        }
+    }
+
+    /** Deletes one row and returns the identity of the commit. */
+    public synchronized NativeCommitResult deleteCommit(long entityId, long primaryKey) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var ts = arena.allocate(ValueLayout.JAVA_LONG);
+            var seq = arena.allocate(ValueLayout.JAVA_LONG);
+            ts.set(ValueLayout.JAVA_LONG, 0, 0L);
+            seq.set(ValueLayout.JAVA_LONG, 0, 0L);
+            library.check(library.invokeInt(library.deleteRowCommit, handle, entityId, primaryKey, ts, seq));
+            return new NativeCommitResult(ts.get(ValueLayout.JAVA_LONG, 0), seq.get(ValueLayout.JAVA_LONG, 0));
+        }
+    }
+
+    // ----- change log (ABI 8) ------------------------------------------------------------------
+
+    /**
+     * Opens a cursor over the change log that delivers the commits above {@code afterCommitSeq}
+     * (0 starts at the beginning of the retained log).
+     *
+     * @throws NativeException with {@link AdbStatus#LOG_TRUNCATED} if those commits were pruned
+     */
+    public synchronized NativeChangeCursor openChangeCursor(long afterCommitSeq) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.changeCursorOpen, handle, afterCommitSeq, out));
+            return new NativeChangeCursor(library, out.get(ValueLayout.ADDRESS, 0));
+        }
+    }
+
+    // ----- projections (ABI 8) -----------------------------------------------------------------
+
+    /**
+     * Registers (or finds, by name) an asynchronous projection for an external consumer of the
+     * change log and returns its id. It starts {@link NativeProjectionState#BUILDING} at commit 0.
+     *
+     * @param name     unique projection name
+     * @param entityId entity the projection covers, or empty for the whole database
+     */
+    public synchronized long registerProjection(String name, OptionalLong entityId) {
+        ensureOpen();
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(entityId, "entityId");
+        String escaped = name.replace("\\", "\\\\").replace("\"", "\\\"");
+        String request = "{\"name\":\"" + escaped + "\"" + (entityId.isPresent() ? ",\"entity_id\":" + entityId.getAsLong() : "") + "}";
+        byte[] bytes = request.getBytes(StandardCharsets.UTF_8);
+        try (var arena = Arena.ofConfined()) {
+            var input = arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
+            var out = arena.allocate(ValueLayout.JAVA_LONG);
+            out.set(ValueLayout.JAVA_LONG, 0, 0L);
+            library.check(library.invokeInt(library.projectionRegister, handle, input, (long) bytes.length, out));
+            return out.get(ValueLayout.JAVA_LONG, 0);
+        }
+    }
+
+    /** Every projection with its state, frontier and lag, as a JSON array ordered by id. */
+    public synchronized String projectionsJson() {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            library.check(library.invokeInt(library.projectionList, handle, out));
+            return new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_PROJECTION_JSON_BYTES), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** One projection as JSON, or empty if it is not registered. */
+    public synchronized Optional<String> projectionJson(long projectionId) {
+        ensureOpen();
+        try (var arena = Arena.ofConfined()) {
+            var out = arena.allocate(ValueLayout.ADDRESS);
+            out.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            int code = library.invokeInt(library.projectionGet, handle, projectionId, out);
+            if (AdbStatus.fromCode(code) == AdbStatus.NOT_FOUND) return Optional.empty();
+            library.check(code);
+            return Optional.of(new String(library.takeBuffer(out.get(ValueLayout.ADDRESS, 0), MAX_PROJECTION_JSON_BYTES), StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Reports that an external projection applied the change log through {@code commitSeq}. */
+    public synchronized void advanceProjection(long projectionId, long commitSeq) {
+        ensureOpen();
+        library.check(library.invokeInt(library.projectionAdvance, handle, projectionId, commitSeq));
+    }
+
+    /** Changes the state of an external projection. */
+    public synchronized void setProjectionState(long projectionId, NativeProjectionState state) {
+        ensureOpen();
+        Objects.requireNonNull(state, "state");
+        library.check(library.invokeInt(library.projectionSetState, handle, projectionId, state.code));
+    }
+
+    /**
+     * Waits until the projection is ready and has consumed {@code commitSeq}, for at most
+     * {@code timeoutMillis} (0..60000). The wait runs outside the object monitor, under the read
+     * side of the lifecycle lock, so other calls (including the writes that make the projection
+     * progress) are not blocked meanwhile.
+     */
+    public NativeWaitOutcome waitForProjection(long projectionId, long commitSeq, int timeoutMillis) {
+        lifecycle.readLock().lock();
+        try {
+            ensureOpen();
+            try (var arena = Arena.ofConfined()) {
+                var out = arena.allocate(ValueLayout.JAVA_INT);
+                out.set(ValueLayout.JAVA_INT, 0, 3);
+                library.check(library.invokeInt(library.projectionWaitUntil, handle, projectionId, commitSeq, timeoutMillis, out));
+                return NativeWaitOutcome.fromCode(out.get(ValueLayout.JAVA_INT, 0));
+            }
+        } finally {
+            lifecycle.readLock().unlock();
         }
     }
 

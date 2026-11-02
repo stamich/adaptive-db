@@ -5,7 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v7
+/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v8
  * function as a downcall handle, and translates native status codes into exceptions. */
 final class NativeLibrary implements AutoCloseable {
     /** Upper bound on the length of a native error message. */
@@ -34,6 +34,34 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle close;
     /** {@code adb_latest_committed_ts}: newest committed MVCC timestamp. */
     final MethodHandle latestCommittedTs;
+    /** {@code adb_latest_commit_seq}: newest published commit sequence number (ABI 8). */
+    final MethodHandle latestCommitSeq;
+    /** {@code adb_insert_row_commit_json}: inserts one row and returns the commit sequence number (ABI 8). */
+    final MethodHandle insertRowCommit;
+    /** {@code adb_update_fields_commit_json}: updates fields and returns the commit sequence number (ABI 8). */
+    final MethodHandle updateFieldsCommit;
+    /** {@code adb_delete_row_commit}: deletes one row and returns the commit sequence number (ABI 8). */
+    final MethodHandle deleteRowCommit;
+    /** {@code adb_change_cursor_open}: opens a change-log cursor (ABI 8). */
+    final MethodHandle changeCursorOpen;
+    /** {@code adb_change_cursor_next_batch}: next page of commits (ABI 8). */
+    final MethodHandle changeCursorNextBatch;
+    /** {@code adb_change_cursor_position}: last commit the cursor delivered (ABI 8). */
+    final MethodHandle changeCursorPosition;
+    /** {@code adb_change_cursor_close}: releases a change-log cursor (ABI 8). */
+    final MethodHandle changeCursorClose;
+    /** {@code adb_projection_register_json}: registers an external projection (ABI 8). */
+    final MethodHandle projectionRegister;
+    /** {@code adb_projection_list_json}: every projection with state and lag (ABI 8). */
+    final MethodHandle projectionList;
+    /** {@code adb_projection_get_json}: one projection (ABI 8). */
+    final MethodHandle projectionGet;
+    /** {@code adb_projection_advance}: moves an external projection's frontier forward (ABI 8). */
+    final MethodHandle projectionAdvance;
+    /** {@code adb_projection_set_state}: changes the state of an external projection (ABI 8). */
+    final MethodHandle projectionSetState;
+    /** {@code adb_projection_wait_until}: waits for a projection to reach a commit (ABI 8). */
+    final MethodHandle projectionWaitUntil;
     /** {@code adb_current_schema_epoch}: the current catalog epoch (plan wire v4). */
     final MethodHandle currentSchemaEpoch;
     /** {@code adb_execute_plan_json}: runs a JSON plan at the latest snapshot. */
@@ -143,6 +171,21 @@ final class NativeLibrary implements AutoCloseable {
         dropEntity = downcall("adb_drop_entity", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
         listSchemas = downcall("adb_list_schemas_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         schemaHistory = downcall("adb_schema_history_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+
+        latestCommitSeq = downcall("adb_latest_commit_seq", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        insertRowCommit = downcall("adb_insert_row_commit_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        updateFieldsCommit = downcall("adb_update_fields_commit_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        deleteRowCommit = downcall("adb_delete_row_commit", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        changeCursorOpen = downcall("adb_change_cursor_open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        changeCursorNextBatch = downcall("adb_change_cursor_next_batch", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        changeCursorPosition = downcall("adb_change_cursor_position", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        changeCursorClose = downcall("adb_change_cursor_close", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+        projectionRegister = downcall("adb_projection_register_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        projectionList = downcall("adb_projection_list_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+        projectionGet = downcall("adb_projection_get_json", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+        projectionAdvance = downcall("adb_projection_advance", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
+        projectionSetState = downcall("adb_projection_set_state", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+        projectionWaitUntil = downcall("adb_projection_wait_until", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
 
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);
