@@ -32,6 +32,7 @@ use std::{
 
 use adb_change_log::{ChangeLog, ChangeRetentionPolicy, PruneReport};
 use adb_core::encode_key;
+use adb_core::ProjectionId;
 use adb_core::{
     CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
 };
@@ -41,7 +42,7 @@ use adb_execution::{
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
-use adb_projection_runtime::ProjectionRegistry;
+use adb_projection_runtime::{ProjectionMode, ProjectionRegistry, ProjectionState};
 use adb_schema::{CatalogEvent, EntitySchema, EntitySpec, SchemaChange, SchemaRegistry};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
@@ -62,7 +63,9 @@ use crate::{
     log::LogWriter,
     offsets::ConsumerOffsets,
     projection::Projection,
-    projection_runtime::{index_projection_id, open_registry, reconcile, register_index},
+    projection_runtime::{
+        index_projection_id, open_registry, reconcile, register_consumer, register_index,
+    },
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
     schema_registry::registry_path,
@@ -160,7 +163,8 @@ impl Database {
         // The checkpoint as it was before recovery tells how much of the change log is known to
         // be durable.
         let before_recovery = checkpoints.load()?;
-        let change_log = open_or_reset(&dir.join(CHANGE_LOG_DIR))?;
+        let change_log =
+            open_or_reset(&dir.join(CHANGE_LOG_DIR), options.change_log_segment_bytes)?;
         let recovered = recover(dir, &wal_dir, &options, &journal, &checkpoints)?;
         repair(
             &wal_dir,
@@ -352,6 +356,101 @@ impl Database {
     /// projections; asynchronous ones are registered by their owners.
     pub fn projection_registry(&self) -> ProjectionRegistry {
         self.inner.projection_registry.clone()
+    }
+
+    /// Registers (or finds, by name) an asynchronous projection fed from the change log and
+    /// returns its id. See [`Database::feed_projection`].
+    pub fn register_consumer_projection(
+        &self,
+        name: &str,
+        entity_id: Option<u64>,
+    ) -> Result<ProjectionId, DbError> {
+        self.inner.health.check()?;
+        register_consumer(&self.inner.projection_registry, name, entity_id)
+    }
+
+    /// Delivers the commits an asynchronous projection has not seen yet to `apply`, in order and
+    /// in batches of at most `limits.0` commits / `limits.1` encoded bytes, and advances its
+    /// frontier after each batch that `apply` accepted. Returns the number of commits applied.
+    ///
+    /// The frontier is the projection's durable position (saved with the next checkpoint), so a
+    /// restart resumes after the last accepted batch; `apply` should be idempotent for the
+    /// commits since the last checkpoint. An `apply` error marks the projection
+    /// [`ProjectionState::Failed`]; a frontier behind the oldest commit of the change log marks
+    /// it [`ProjectionState::NeedsRebuild`]. The projection is marked ready once it has caught
+    /// up with the head.
+    pub fn feed_projection(
+        &self,
+        id: ProjectionId,
+        limits: (usize, u64),
+        mut apply: impl FnMut(&adb_change_log::ChangeBatch) -> Result<(), DbError>,
+    ) -> Result<u64, DbError> {
+        self.inner.health.check()?;
+        let registry = &self.inner.projection_registry;
+        let progress = registry.get(id).ok_or_else(|| {
+            DbError::InvalidArgument(format!("projection {} is not registered", id.0))
+        })?;
+        if progress.descriptor.mode != ProjectionMode::Asynchronous {
+            return Err(DbError::InvalidArgument(format!(
+                "projection {} is synchronous and cannot be fed",
+                progress.descriptor.name
+            )));
+        }
+        if !matches!(
+            progress.state,
+            ProjectionState::Building | ProjectionState::Ready
+        ) {
+            return Err(DbError::InvalidArgument(format!(
+                "projection {} is {:?}",
+                progress.descriptor.name, progress.state
+            )));
+        }
+        let started = std::time::Instant::now();
+        let mut cursor = match self
+            .inner
+            .change_log
+            .cursor(progress.frontier.base_commit_seq)
+        {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                registry.set_state(id, ProjectionState::NeedsRebuild)?;
+                return Err(error.into());
+            }
+        };
+        let mut applied = 0u64;
+        // Only commits published to readers are delivered: the change log may already hold the
+        // envelope of a commit that is still waiting for its fsync.
+        let published = self.inner.tx_manager.lock().latest_commit_seq();
+        while let Some(batch) = cursor.next_batch(limits.0, limits.1)? {
+            let mut batch = batch;
+            batch.commits.retain(|c| c.commit_seq <= published);
+            let Some(last) = batch.commits.last().map(|c| c.commit_seq) else {
+                break;
+            };
+            if let Err(error) = apply(&batch) {
+                registry.set_state(id, ProjectionState::Failed)?;
+                return Err(error);
+            }
+            registry.advance(id, last)?;
+            applied += batch.commits.len() as u64;
+            if last >= published {
+                break;
+            }
+        }
+        if applied > 0 {
+            let seconds = started.elapsed().as_secs_f64();
+            if seconds > 0.0 {
+                registry.observe_rate(id, applied as f64 / seconds)?;
+            }
+        }
+        let frontier = registry
+            .get(id)
+            .map_or(CommitSeq::ZERO, |p| p.frontier.readable_through());
+        if frontier >= published {
+            registry.report_lag(id, 0, 0)?;
+            registry.set_state(id, ProjectionState::Ready)?;
+        }
+        Ok(applied)
     }
 
     /// Prunes the change log: segments no asynchronous projection still needs are removed, and

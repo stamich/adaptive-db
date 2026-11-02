@@ -10,7 +10,6 @@ use std::{fs, path::Path};
 
 use adb_change_log::{
     ChangeEnvelope, ChangeLog, ChangeLogError, ChangePayload, RowChange, SchemaChangeMarker,
-    DEFAULT_SEGMENT_BYTES,
 };
 use adb_core::{CommitSeq, Lsn};
 use adb_schema::CatalogEvent;
@@ -71,12 +70,12 @@ pub(crate) fn envelope_of(tx: &CommittedTx) -> ChangeEnvelope {
 
 /// Opens the change log in `dir`; a log that fails validation (damage that is not a torn tail)
 /// is discarded and starts empty, because [`repair`] rebuilds it from the canonical log.
-pub(crate) fn open_or_reset(dir: &Path) -> Result<ChangeLog, DbError> {
-    match ChangeLog::open(dir, DEFAULT_SEGMENT_BYTES) {
+pub(crate) fn open_or_reset(dir: &Path, segment_bytes: u64) -> Result<ChangeLog, DbError> {
+    match ChangeLog::open(dir, segment_bytes) {
         Ok(log) => Ok(log),
         Err(ChangeLogError::Corrupt { .. }) => {
             fs::remove_dir_all(dir)?;
-            Ok(ChangeLog::open(dir, DEFAULT_SEGMENT_BYTES)?)
+            Ok(ChangeLog::open(dir, segment_bytes)?)
         }
         Err(other) => Err(other.into()),
     }

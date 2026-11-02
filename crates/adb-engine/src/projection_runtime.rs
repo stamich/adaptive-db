@@ -106,3 +106,49 @@ pub(crate) fn register_index(
     )?;
     Ok(())
 }
+
+/// Ids of projections registered by consumers (asynchronous projections) start here.
+const CONSUMER_PROJECTION_BASE: u64 = 1_000_000;
+
+/// Registers (or finds) the asynchronous projection called `name` and returns its id.
+///
+/// The call is idempotent by name, so an owner can run it at every start: the projection comes
+/// back with the frontier saved by the last checkpoint. A new projection starts in
+/// [`ProjectionState::Building`] at commit zero; its owner builds it from the change log (or
+/// from a snapshot) and marks it ready with [`ProjectionRegistry::set_state`].
+pub(crate) fn register_consumer(
+    registry: &ProjectionRegistry,
+    name: &str,
+    entity_id: Option<u64>,
+) -> Result<ProjectionId, DbError> {
+    if let Some(existing) = registry.find(name) {
+        if existing.descriptor.mode != ProjectionMode::Asynchronous
+            || existing.descriptor.entity_id != entity_id
+        {
+            return Err(DbError::InvalidArgument(format!(
+                "projection {name} exists with another definition"
+            )));
+        }
+        return Ok(existing.descriptor.id);
+    }
+    let next = registry
+        .list()
+        .iter()
+        .map(|p| p.descriptor.id.0)
+        .filter(|id| *id >= CONSUMER_PROJECTION_BASE)
+        .max()
+        .map_or(CONSUMER_PROJECTION_BASE, |id| id + 1);
+    let id = ProjectionId(next);
+    registry.register(
+        ProjectionDescriptor::new(
+            id,
+            name,
+            ProjectionKind::TestAsync,
+            ProjectionMode::Asynchronous,
+            entity_id,
+        ),
+        ProjectionState::Building,
+        ProjectionFrontier::at(CommitSeq::ZERO),
+    )?;
+    Ok(id)
+}
