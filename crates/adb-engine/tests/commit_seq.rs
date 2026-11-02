@@ -2,7 +2,7 @@
 //! number is part of the log record, and it survives restarts.
 mod common;
 
-use adb_core::{CommitSeq, RowId, ValueType};
+use adb_core::{CommitSeq, RowId, SchemaEpoch, ValueType};
 use adb_engine::{Database, EntitySpec, NewField};
 use adb_wal::{read_all, WalRecord};
 use common::{put, row_with_i64};
@@ -91,4 +91,117 @@ fn the_log_records_sequence_numbers_and_epochs() {
         })
         .collect();
     assert_eq!(commits, vec![(1, 0), (2, 1), (3, 1)]);
+}
+
+/// The head and the numbering continue after a restart, with and without a checkpoint.
+#[test]
+fn numbering_survives_restarts() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        put(&db, RowId(1), 1);
+        put(&db, RowId(2), 2);
+        db.checkpoint().unwrap();
+        put(&db, RowId(3), 3);
+        // Dropped without close: the third commit is only in the log tail.
+    }
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(db.latest_commit_seq(), CommitSeq(3));
+    assert_eq!(db.schema_epoch(), SchemaEpoch(0));
+    let mut tx = db.begin();
+    tx.put(RowId(4), row_with_i64(4));
+    assert_eq!(db.commit(tx).unwrap().commit_seq, CommitSeq(4));
+    db.close().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(db.latest_commit_seq(), CommitSeq(4));
+}
+
+/// A log written by 2.4.0 (data format 3, commit records without numbers) opens in place: its
+/// commits are numbered by timestamp and new commits continue above them.
+#[test]
+fn logs_without_sequence_numbers_are_numbered_by_timestamp() {
+    use adb_core::{CommitTs, TxId};
+    use adb_engine::format::stamp;
+    use adb_wal::SegmentedWalWriter;
+
+    let dir = tempdir().unwrap();
+    let wal = dir.path().join("wal");
+    std::fs::create_dir_all(&wal).unwrap();
+    {
+        let mut writer = SegmentedWalWriter::open(&wal, 1 << 20).unwrap();
+        for tx in 1..=2u64 {
+            for record in [
+                WalRecord::Begin {
+                    tx_id: TxId(tx),
+                    snapshot_ts: CommitTs(tx - 1),
+                },
+                WalRecord::Put {
+                    tx_id: TxId(tx),
+                    row_id: RowId(tx as u128),
+                    value: row_with_i64(tx as i64),
+                },
+                WalRecord::Commit {
+                    tx_id: TxId(tx),
+                    commit_ts: CommitTs(tx),
+                },
+            ] {
+                writer.append(&record).unwrap();
+            }
+        }
+        writer.sync().unwrap();
+    }
+    stamp(dir.path(), 3).unwrap();
+
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(db.latest_commit_seq(), CommitSeq(2));
+    assert_eq!(db.latest_committed_ts(), CommitTs(2));
+    let mut tx = db.begin();
+    tx.put(RowId(3), row_with_i64(3));
+    let result = db.commit(tx).unwrap();
+    assert_eq!(result.commit_seq, CommitSeq(3));
+    db.close().unwrap();
+
+    // The head is recomputed from the log when the projections are rebuilt.
+    let db = Database::rebuild_projections(dir.path(), Default::default()).unwrap();
+    assert_eq!(db.latest_commit_seq(), CommitSeq(3));
+}
+
+/// A log whose sequence numbers do not increase is refused as corrupt instead of being
+/// replayed.
+#[test]
+fn a_repeated_sequence_number_is_corruption() {
+    use adb_core::{CommitTs, SchemaEpoch, TxId};
+    use adb_wal::SegmentedWalWriter;
+
+    let dir = tempdir().unwrap();
+    let wal = dir.path().join("wal");
+    std::fs::create_dir_all(&wal).unwrap();
+    {
+        let mut writer = SegmentedWalWriter::open(&wal, 1 << 20).unwrap();
+        for tx in 1..=2u64 {
+            for record in [
+                WalRecord::Begin {
+                    tx_id: TxId(tx),
+                    snapshot_ts: CommitTs(tx - 1),
+                },
+                WalRecord::Put {
+                    tx_id: TxId(tx),
+                    row_id: RowId(tx as u128),
+                    value: row_with_i64(1),
+                },
+                WalRecord::CommitV2 {
+                    tx_id: TxId(tx),
+                    commit_ts: CommitTs(tx),
+                    commit_seq: CommitSeq(7), // the same number twice
+                    schema_epoch: SchemaEpoch(0),
+                },
+            ] {
+                writer.append(&record).unwrap();
+            }
+        }
+        writer.sync().unwrap();
+    }
+    adb_engine::format::stamp(dir.path(), adb_engine::format::DATA_FORMAT_VERSION).unwrap();
+    let error = Database::open(dir.path()).err().expect("refused");
+    assert!(error.is_corruption(), "{error:?}");
 }

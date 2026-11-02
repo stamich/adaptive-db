@@ -18,7 +18,7 @@ use std::path::Path;
 use adb_core::{CommitSeq, CommitTs, Lsn};
 use adb_journal::Journal;
 use adb_storage::{Checkpoint, CheckpointStore, Checkpointable};
-use adb_wal::{earliest_lsn, WalCursor, WalRecord};
+use adb_wal::{earliest_lsn, WalCursor, WalError, WalRecord};
 
 use crate::{
     committed::TxAssembler, projections::Projections, statistics::ModificationCounters,
@@ -102,6 +102,16 @@ pub(crate) fn recover(
             .is_some_and(|applied| logged.commit_lsn <= applied)
         {
             continue;
+        }
+        // Sequence numbers only grow along the log. A repeat or a step back means the log was
+        // edited or damaged in a way its checksums cannot see, and every consumer of the
+        // sequence (the change log, session tokens, projections) would be misled.
+        if logged.tx.commit_seq <= state.last_commit_seq {
+            return Err(WalError::Corrupt(format!(
+                "commit sequence {} at {:?} does not follow {}",
+                logged.tx.commit_seq.0, logged.commit_lsn, state.last_commit_seq.0
+            ))
+            .into());
         }
         state.projections.apply(&logged.tx, logged.commit_lsn)?;
         state.modifications.record(&logged.tx);
