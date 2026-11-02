@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod error;
 pub mod log;
 pub mod model;
+pub mod retention;
 pub(crate) mod segment;
 
 pub use cursor::{ChangeBatch, ChangeCursor};
@@ -20,3 +21,4 @@ pub use model::{
     decode_envelope, encode_envelope, ChangeEnvelope, ChangePayload, RowChange, SchemaChangeMarker,
     MAX_ENVELOPE_BYTES,
 };
+pub use retention::{ChangeRetentionPolicy, PruneReport, RetentionFrontier};
