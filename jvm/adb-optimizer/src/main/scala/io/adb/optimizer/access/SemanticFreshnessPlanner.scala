@@ -1,5 +1,6 @@
 package io.adb.optimizer.access
 
+import io.adb.catalog.IndexInfo
 import io.adb.consistency.*
 
 /** An access path together with the freshness decision for the projection behind it.
@@ -11,6 +12,14 @@ import io.adb.consistency.*
   */
 final case class FreshAccessPath(path: AccessPath, projection: Option[ProjectionInfo], resolution: FreshnessResolution)
 
+/** The freshness decision for one index.
+  *
+  * @param index      the index
+  * @param projection the engine's report for the index's projection, if it reported one
+  * @param resolution what to do about it
+  */
+final case class IndexDecision(index: IndexInfo, projection: Option[ProjectionInfo], resolution: FreshnessResolution)
+
 /** Applies a session's read context to the access paths of a relation.
   *
   * The enumerator knows which paths are possible; this planner knows which of them may be used
@@ -20,6 +29,24 @@ final case class FreshAccessPath(path: AccessPath, projection: Option[Projection
 object SemanticFreshnessPlanner:
   /** Name under which the engine registers the projection of index `name`. */
   def indexProjectionName(name: String): String = s"index:$name"
+
+  /** Decides, for every index, whether the session may read it.
+    *
+    * An index without a projection report is treated as a fresh synchronous index (2.4.0
+    * behaviour).
+    */
+  def resolveIndexes(indexes: Vector[IndexInfo], projections: Vector[ProjectionInfo], context: SemanticReadContext): Vector[IndexDecision] =
+    val byName = projections.map(p => p.name -> p).toMap
+    indexes.map { index =>
+      byName.get(indexProjectionName(index.name)) match
+        case Some(info) => IndexDecision(index, Some(info), FreshnessResolver.resolve(context, info, fallbackAvailable = true))
+        case None => IndexDecision(index, None, FreshnessResolution.Direct)
+    }
+
+  /** Whether a decision lets the planner use the index. */
+  def isUsable(resolution: FreshnessResolution): Boolean = resolution match
+    case FreshnessResolution.Fallback(_) | FreshnessResolution.Infeasible(_) => false
+    case _ => true
 
   /** Annotates each candidate with a freshness decision.
     *
@@ -53,9 +80,7 @@ object SemanticFreshnessPlanner:
     * input did.
     */
   def usable(annotated: Vector[FreshAccessPath]): Vector[FreshAccessPath] =
-    annotated.filter(_.resolution match
-      case FreshnessResolution.Fallback(_) | FreshnessResolution.Infeasible(_) => false
-      case _ => true)
+    annotated.filter(path => isUsable(path.resolution))
 
   /** The projections a chosen path must wait for before it runs, as (projection id, commit). */
   def waits(chosen: FreshAccessPath): Option[(Long, Long)] =

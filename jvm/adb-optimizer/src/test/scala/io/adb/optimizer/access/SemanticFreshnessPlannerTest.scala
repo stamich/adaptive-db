@@ -62,3 +62,12 @@ final class SemanticFreshnessPlannerTest:
   @Test def buildingIndexIsDropped(): Unit =
     val annotated = SemanticFreshnessPlanner.annotate(candidates, Vector(projection(20, state = ProjectionState.Building)), ryw(0))
     assertEquals(1, SemanticFreshnessPlanner.usable(annotated).size)
+
+  /** The per-index decisions used by the gateway agree with the per-path ones. */
+  @Test def decidesPerIndex(): Unit =
+    val stale = SemanticFreshnessPlanner.resolveIndexes(Vector(regionIndex), Vector(projection(5, 1.0)), ryw(15))
+    assertFalse(SemanticFreshnessPlanner.isUsable(stale.head.resolution))
+    val waiting = SemanticFreshnessPlanner.resolveIndexes(Vector(regionIndex), Vector(projection(10, 10.0)), ryw(15))
+    assertEquals(FreshnessResolution.WaitUntil(15, Some(500)), waiting.head.resolution)
+    assertTrue(SemanticFreshnessPlanner.isUsable(waiting.head.resolution))
+    assertEquals(FreshnessResolution.Direct, SemanticFreshnessPlanner.resolveIndexes(Vector(regionIndex), Vector.empty, ryw(15)).head.resolution)

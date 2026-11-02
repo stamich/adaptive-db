@@ -18,6 +18,7 @@ dependencies {
     api(project(":adb-catalog"))
     api(project(":adb-sql"))
     api(project(":adb-logical-plan"))
+    api(project(":adb-consistency"))
     api(project(":adb-optimizer"))
     api(project(":adb-physical-plan"))
     implementation(project(":adb-native"))
