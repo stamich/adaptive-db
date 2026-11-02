@@ -167,6 +167,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "adb-projection-runtime"
+version = "2.4.0"
+dependencies = [
+ "adb-change-log",
+ "adb-core",
+ "bincode",
+ "crc32fast",
+ "parking_lot",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "adb-rust-demo"
 version = "2.4.0"
 dependencies = [

@@ -9,6 +9,7 @@ members = [
     "crates/adb-schema",
     "crates/adb-wal",
     "crates/adb-change-log",
+    "crates/adb-projection-runtime",
     "crates/adb-storage",
     "crates/adb-tx",
     "crates/adb-engine",
