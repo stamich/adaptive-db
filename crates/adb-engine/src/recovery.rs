@@ -83,7 +83,7 @@ pub(crate) fn recover(
     let mut state = Recovered {
         projections,
         last_commit_ts: checkpoint.last_commit_ts,
-        last_commit_seq: CommitSeq(checkpoint.last_commit_ts.0),
+        last_commit_seq: checkpoint.last_commit_seq,
         last_tx_id: checkpoint.last_tx_id,
         vacuumed_through: checkpoint.vacuumed_through,
         modifications: ModificationCounters::load(dir)?,
@@ -142,6 +142,7 @@ impl Recovered {
         Checkpoint {
             replay_from,
             last_commit_ts: self.last_commit_ts,
+            last_commit_seq: self.last_commit_seq,
             last_tx_id: self.last_tx_id,
             vacuumed_through: self.vacuumed_through,
             ..Checkpoint::default()
@@ -157,6 +158,7 @@ fn tx_id_of(record: &WalRecord) -> u64 {
         | WalRecord::Put { tx_id, .. }
         | WalRecord::Delete { tx_id, .. }
         | WalRecord::Commit { tx_id, .. }
+        | WalRecord::CommitV2 { tx_id, .. }
         | WalRecord::Catalog { tx_id, .. }
         | WalRecord::Abort { tx_id } => tx_id.0,
     }

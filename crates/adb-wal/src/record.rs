@@ -1,5 +1,5 @@
 //! Records of the canonical log.
-use adb_core::{CommitTs, Row, RowId, SchemaEpoch, TxId};
+use adb_core::{CommitSeq, CommitTs, Row, RowId, SchemaEpoch, TxId};
 pub use adb_schema::CatalogEvent;
 use serde::{Deserialize, Serialize};
 
@@ -67,5 +67,19 @@ pub enum WalRecord {
         epoch: SchemaEpoch,
         /// The change.
         event: CatalogEvent,
+    },
+    /// Commit point of a transaction with its place in the global commit order (data format 4,
+    /// Milestone 2.5.0). Written by every commit of this engine in place of [`WalRecord::Commit`],
+    /// which is still read from older logs; appended last so the encoding of every earlier
+    /// record kind is unchanged.
+    CommitV2 {
+        /// Transaction.
+        tx_id: TxId,
+        /// Commit timestamp.
+        commit_ts: CommitTs,
+        /// Position of the commit in the global order of data and catalog commits.
+        commit_seq: CommitSeq,
+        /// Catalog epoch in force after this commit.
+        schema_epoch: SchemaEpoch,
     },
 }

@@ -808,6 +808,7 @@ impl Database {
             snapshot_ts,
             commit_ts: commit.commit_ts,
             commit_seq: commit.commit_seq,
+            schema_epoch: epoch,
             before_images: Vec::new(),
             mutations: Vec::new(),
             catalog: vec![(epoch, event)],
@@ -865,6 +866,7 @@ impl Database {
                     Checkpoint {
                         replay_from: end,
                         last_commit_ts: tx_manager.last_allocated_commit().commit_ts,
+                        last_commit_seq: tx_manager.last_allocated_commit().commit_seq,
                         last_tx_id: tx_manager.last_tx_id(),
                         vacuumed_through: CommitTs(
                             self.inner.vacuumed_through.load(Ordering::Acquire),
@@ -983,6 +985,7 @@ impl Database {
             snapshot_ts: tx.snapshot_ts(),
             commit_ts,
             commit_seq: commit.commit_seq,
+            schema_epoch: projections.registry().epoch(),
             before_images: before
                 .into_iter()
                 .filter_map(|(row_id, record)| {

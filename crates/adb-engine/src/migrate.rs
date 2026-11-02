@@ -68,10 +68,10 @@ pub struct MigrationReport {
 pub fn migrate(source: &Path, target: &Path) -> Result<MigrationReport, DbError> {
     match format::detect(source, &source.join(WAL_DIR))? {
         Some(LEGACY_DATA_FORMAT_VERSION) => {}
-        Some(UPGRADABLE_DATA_FORMAT_VERSION) => {
+        Some(found) if (UPGRADABLE_DATA_FORMAT_VERSION..DATA_FORMAT_VERSION).contains(&found) => {
             return Err(DbError::InvalidArgument(format!(
-                "{} is in data format 2, which this engine upgrades in place when it opens it; \
-                 nothing to migrate",
+                "{} is in data format {found}, which this engine upgrades in place when it \
+                 opens it; nothing to migrate",
                 source.display()
             )))
         }
