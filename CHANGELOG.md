@@ -54,7 +54,7 @@ inside the commit, so no existing statement changes meaning. Design and adaptati
 ### Notes
 - `BOUNDED n MS` is estimated from a projection's lag and observed consumption rate; it is not a
   measured wall-clock age.
-- Benchmark results on the reference machine are recorded after the merge.
+- Benchmark results on the reference machine (Ryzen 9 5950X) are in `examples/results/2.5.0-*.json`.
 
 ## 2.4.0 — Schema evolution
 

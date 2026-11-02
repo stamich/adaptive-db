@@ -12,13 +12,25 @@ python3 scripts/check-benchmarks.py examples/results/2.5.0-database.json example
 ```
 
 The `consistency` section of the database report (workloads I–O, see [../README.md](../README.md))
-measures the commit order, the change log and the projection runtime. No 2.5.0 result file is
-committed yet: it is recorded on the reference machine (AMD Ryzen 9 5950X) after the milestone is
-merged, so the comparison with the 2.4.0 files below is made on one machine. A development run on
-a 2-vCPU cloud VM (not committed, not comparable) showed single-row commits at about 2,800 per
-second with 188 change-log bytes per commit, a 5,000-commit log streamed in 23 ms, a projection
-catching up 5,000 commits in 12 ms, waits for a following consumer at p50 0.28 ms, and an open that
-rebuilds the change log from the WAL taking 56 ms against 23 ms with an intact log.
+measures the commit order, the change log and the projection runtime. The committed 2.5.0 files
+were recorded on an AMD Ryzen 9 5950X (32 threads, release build), scale 1, 100 iterations;
+`scripts/check-benchmarks.py` reports "benchmark results agree".
+
+* Workloads A–E (`rust_native`) are within 1–2 % of 2.4.0 on the same machine (A 0.468 vs 0.460 ms,
+  C 0.019 vs 0.018 ms, D 0.104 vs 0.101 ms, E 35.4 vs 34.8 ms); the schema-evolution scan G is
+  unchanged (21.3 ms).
+* I: 63 single-row commits/s and 60 commits/s of 100 rows, 188 change-log bytes per single-row
+  commit. Commit throughput here is bound by the disk's fsync, which differs between runs and
+  machines (the 2.4.0 write-overhead figures were 7.4k rows/s without an index, 2.5.0's 15.9k on
+  the same machine), so it says nothing about the cost of the change log by itself.
+* J: the change log streams 511,000 commits/s (685 MiB/s). K: opening a cursor and reading its
+  first batch takes 0.69 ms at the start, 0.71 ms in the middle and 5 µs at the end of a 28-segment log.
+* L: a consumer that follows the log is reached within 0.11 ms (p50) and 0.29 ms (p99); no wait
+  timed out. M: catching up on 5,000 commits runs at 1.64 million commits/s.
+* N: opening 5,000 commits takes 20 ms with an intact change log and 69 ms when it is rebuilt from
+  the WAL; both reach the same head.
+* O: pruning a consumed 28-segment log removes 27 segments in 5.8 ms; a byte limit against a
+  slow consumer removes 14 segments in 8.1 ms and marks the consumer as needing a rebuild.
 
 ## Milestone 2.4.0 schema evolution
 

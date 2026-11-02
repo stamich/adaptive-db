@@ -40,8 +40,11 @@ and the freshness decision: [docs/consistency.md](docs/consistency.md). Robustne
 place on open (commits of the old log are numbered by their timestamps) and builds the change log
 from the log the first time. 2.5.0 does not change the semantics of any existing statement: indexes
 are still maintained inside the commit, so every level reads the same rows until a later milestone
-makes projections asynchronous. Benchmarks I–O (`scripts/benchmark-db.sh`) measure the cost of
-the new machinery; results for the reference machine are recorded separately.
+makes projections asynchronous. Benchmarks I–O (`scripts/benchmark-db.sh`) measure the new
+machinery; on the Ryzen 9 5950X workloads A–E stay within 1–2 % of 2.4.0, the change log streams
+511,000 commits/s, a following projection is reached in 0.11 ms (p50) and an open that rebuilds the
+change log from the log takes 69 ms against 20 ms with an intact one
+([examples/results/README.md](examples/results/README.md)).
 
 ## What 2.4.0 added
 

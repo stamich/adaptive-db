@@ -29,14 +29,14 @@ Java / JVM
   feature tour (io.adb.cli.DemoMain) against libadb_ffi ........... OK (1.0.1 -> 2.5.0)
 
 Benchmarks
-  The workload benchmark (rust_native) was run once at scale 1 on the validation VM with
-  --iters 10: the consistency section (workloads I-O) passes its correctness checks in
-  scripts/check-benchmarks.py (check_consistency). No timings of this run are recorded as results;
-  the validation VM is not the reference machine. Results for the reference machine
-  (AMD Ryzen 9 5950X) are recorded after the merge (examples/results/2.5.0-*.json).
+  Recorded by the author on an AMD Ryzen 9 5950X (32 threads, release build), scale 1, 100
+  iterations: examples/results/2.5.0-{rust-local,database,ffi}.json;
+  scripts/check-benchmarks.py: "benchmark results agree". Summary in examples/results/README.md:
+  workloads A-E within 1-2 % of 2.4.0, change-log streaming 511,000 commits/s, a following
+  projection reached in 0.11 ms (p50), open with a rebuilt change log 69 ms vs 20 ms intact.
+  (The runs made in the validation VM were not recorded.)
 
-  Not run here: the data-plane benchmark, the FFI benchmark (scripts/benchmark-ffi.sh) and
-  demo/run-demo.sh through Gradle; Gradle could not be run (Maven Central is not reachable from the
+  Not run in the validation VM: the Gradle steps; Gradle could not be run (Maven Central is not reachable from the
   validation environment). The JVM modules were compiled and tested with the Scala 3.3.8 compiler and javac
   directly. CI runs the Gradle steps.
 
