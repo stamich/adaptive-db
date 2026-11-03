@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.2. Hardened patch releases preserve the functional scope of
+Milestone 2.5.2.1. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,36 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.2.1 — Telemetry capture path
+
+A follow-up of 2.5.2: a captured query no longer fetches, decodes and scans the JSON profile. One
+additive engine function, so the C ABI is 9; plan wire v4 and data format 4 are unchanged. No new
+SQL, no behaviour change visible to users. Why it is a separate version, what was left out and the
+measurements: `docs/milestone-2.5.2.1.md`, `docs/telemetry.md`.
+
+### Added
+- C ABI 9: `adb_query_telemetry` and the 32-byte `AdbQueryTelemetry` (rows returned and read,
+  batches, peak memory); `Cursor::telemetry` in the engine.
+- Java: `NativeQueryTelemetry` (reusable native holder) and `NativeQuery.readTelemetry`, called with
+  `invokeExact`.
+- `LongIdSet`, an allocation-free set of shape ids behind `QueryShapeRegistry.contains`.
+- Benchmarks: the capture cost split into execute, profile fetch and scan; allocation per query for
+  off, skipped and captured; a `telemetry` section in the JVM workload report;
+  `check-benchmarks.py` holds a skipped query to 64 extra bytes and a captured one to 512.
+
+### Changed
+- A captured query takes its rows read from the engine counters. The profile is fetched only for
+  EXPLAIN ANALYZE and the feedback log. Allocation per query: skipped +24 B to +0 B, captured
+  +2344 B to +144 B.
+- The telemetry mode comparison rotates the order of the modes and reports the fastest round.
+- Expected C ABI: 8 to 9.
+
+### Notes
+- Numbered 2.5.2.1 at the owner's request. Cargo cannot express four components: the crates stay
+  2.5.2; the engine version string, the JVM build and the reports say 2.5.2.1.
+- Not done, on purpose: a ring buffer, thread-local counters, double-buffered aggregation (2.5.3).
+- The time effect has not been measured on the reference machine; the validation VM is too noisy.
 
 ## 2.5.2 — Telemetry hot path
 

@@ -192,3 +192,6 @@ and offers it to a bounded queue that never blocks. The shape of a statement (en
 columns, join edges, order, flags; no literals) is computed once when the plan is made and kept
 with the cached plan. A background worker folds events into per-shape statistics. See
 [../docs/telemetry.md](../docs/telemetry.md).
+
+Since 2.5.2.1 the *rows read* column of `\telemetry shapes` comes from the engine counters
+(`adb_query_telemetry`, C ABI 9) and not from the query profile; the phase and its SQL are the same.

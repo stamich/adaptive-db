@@ -202,3 +202,12 @@ Each invariant names the test that guards it.
     it. *(TelemetryRuntimeTest, TelemetrySmoke)*
 66. A shape contains ids and flags only: never SQL text or a literal value, and two statements that
     differ only in literals share it. *(QueryShapeExtractorTest, TelemetrySmoke)*
+
+## Telemetry capture path (2.5.2.1)
+
+67. A query the sampler skips allocates nothing more than an unobserved one (at most 64 bytes in
+    the benchmark budget); a captured query allocates its event, not a profile document (at most
+    512 bytes). *(check-benchmarks.py, TelemetrySmoke, LongIdSetTest)*
+68. `adb_query_telemetry` writes exactly the 32 bytes of `AdbQueryTelemetry`, zeroes them first, and
+    reports the rows the plan's leaf operators produced; the Java and C layouts are identical.
+    *(query_telemetry.rs, NativeQueryTelemetryTest)*

@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.2
+# Adaptive DB — Milestone 2.5.2.1
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -15,7 +15,32 @@ cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.
 evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
 projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
-2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry.
+2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1).
+
+## What 2.5.2.1 adds
+
+2.5.2.1 is a follow-up of 2.5.2 that makes a **captured** telemetry query cheaper. It adds no SQL
+and no feature. It adds one engine function, so the **C ABI is 9** (additive: every ABI 8 function
+and struct is unchanged); plan wire v4 and data format 4 are the same.
+
+| Area | 2.5.2 | 2.5.2.1 |
+|---|---|---|
+| Rows read of a captured query | the JSON profile was fetched, decoded to a `String` and scanned | **`adb_query_telemetry`** fills four integers (rows returned and read, batches, peak memory) in a reused native segment; the profile is fetched only for EXPLAIN ANALYZE and the feedback log |
+| Allocation, query skipped by the sampler | +24 bytes (a boxed shape id) | **+0 bytes** (allocation-free known-shape test) |
+| Allocation, query captured | +2 344 bytes | **+144 bytes** |
+| Checks | timings only (noisy) | allocation held to a budget by `check-benchmarks.py` and the smoke test |
+| Version | 2.5.2 | engine string, JVM build and scripts **2.5.2.1**; crates stay 2.5.2 (Cargo has three components) |
+| Tests | 413 Rust, 229 JVM | **417 Rust, 237 JVM**, plus the four JVM smoke tests |
+
+What was left out and why (a ring buffer, thread-local counters, double-buffered aggregation) is in
+[docs/milestone-2.5.2.1.md](docs/milestone-2.5.2.1.md); the measurements, and why the shared VM's
+timings cannot judge a few microseconds, are in [docs/telemetry.md](docs/telemetry.md#measured).
+
+**Upgrading from 2.5.2:** rebuild the native library and the JVM modules together; a JVM built for
+ABI 9 refuses an ABI 8 library and the reverse. No data migration.
+
+**Numbering:** as for 2.5.1 and 2.5.2, a fix-level number is used for a follow-up at the author's
+request.
 
 ## What 2.5.2 adds
 
@@ -272,9 +297,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.2.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.2.1.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.2 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.2.1 through the JVM CLI
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
@@ -292,7 +317,7 @@ needs access to Maven Central. The Java FFM → Rust path is also checked withou
 `examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
 checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
 and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`
-and (telemetry, 2.5.2, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`.
+and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`.
 
 ## Repository layout
 
