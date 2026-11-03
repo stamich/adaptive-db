@@ -151,3 +151,11 @@ functions, so it can be driven by a scripted workload (the unit tests do).
 - Statistics and index definitions are read when `evaluate` runs; between evaluations the advice can
   describe a design that has changed. The `applied` check covers the common case.
 - State lives in memory: recommendations and the audit log do not survive a restart.
+
+## What changed in 2.5.4
+
+The advisor itself is unchanged and still only recommends: `ContractTest` freezes its public
+behaviour. It gained two read-only inputs for the actuator (per-entity write figures in the windows
+and in `EntityDesign.writes`, and `Advisor.workloadSnapshot()`), and its timer now runs any tick
+function. `SET advisor = on | off` still works; it means `SET adaptive = advisory | off`. What
+acts on the advice is described in [actuator.md](actuator.md).

@@ -1,6 +1,6 @@
 package io.adb.advisor
 
-import io.adb.telemetry.ShapeStats
+import io.adb.telemetry.{ShapeStats, WriteStats}
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -73,3 +73,38 @@ final class WorkloadModelTest:
   @Test def emptyWorkloadHasNoShare(): Unit =
     assertEquals(0L, WorkloadSnapshot.empty.spanNanos)
     assertEquals(0.0, WorkloadSnapshot.empty.timeShare(1L), 1e-9)
+
+  @Test def windowsHoldTheWritesOfTheirOwnInterval(): Unit =
+    val model = new WorkloadModel(4)
+    model.observe(Vector.empty, 0L, Vector(WriteStats(7L, 100L, 100L, 5_000L)))
+    val w = model.observe(Vector.empty, 1_000L, Vector(WriteStats(7L, 130L, 150L, 8_000L)))
+    assertEquals(WriteStats(7L, 30L, 50L, 3_000L), w.writes(7L))
+
+  @Test def anEntityThatWasNotWrittenIsAbsentFromTheWindow(): Unit =
+    val model = new WorkloadModel(4)
+    model.observe(Vector.empty, 0L, Vector(WriteStats(7L, 10L, 10L, 100L)))
+    val w = model.observe(Vector.empty, 1_000L, Vector(WriteStats(7L, 10L, 10L, 100L)))
+    assertTrue(w.writes.isEmpty)
+
+  @Test def writeTotalsAddUpOverTheRetainedWindows(): Unit =
+    val model = new WorkloadModel(4)
+    model.observe(Vector.empty, 0L, Vector(WriteStats(7L, 0L, 0L, 0L)))
+    model.observe(Vector.empty, 10L, Vector(WriteStats(7L, 4L, 4L, 40L)))
+    model.observe(Vector.empty, 20L, Vector(WriteStats(7L, 10L, 12L, 100L)))
+    val snapshot = model.snapshot()
+    assertEquals(WriteStats(7L, 10L, 12L, 100L), snapshot.writes(7L))
+    assertEquals(10L, snapshot.writeStatements(7L))
+    assertEquals(0L, snapshot.writeStatements(99L))
+
+  @Test def aWriteCounterThatWentBackwardsIsAFreshStart(): Unit =
+    val model = new WorkloadModel(4)
+    model.observe(Vector.empty, 0L, Vector(WriteStats(7L, 50L, 50L, 500L)))
+    val w = model.observe(Vector.empty, 10L, Vector(WriteStats(7L, 3L, 3L, 30L)))
+    assertEquals(WriteStats(7L, 3L, 3L, 30L), w.writes(7L))
+
+  @Test def callersThatGiveNoWriteCountersGetNoWrites(): Unit =
+    val model = new WorkloadModel(4)
+    model.observe(Vector(stats(1, 5)), 0L)
+    val w = model.observe(Vector(stats(1, 8)), 10L)
+    assertTrue(w.writes.isEmpty)
+    assertTrue(model.snapshot().writes.isEmpty)

@@ -38,7 +38,9 @@ class BinderTest:
         "SET planner = cost",
         "SET plan_cache = maybe",
         "SET telemetry = loud",
-        "SET advisor = auto"
+        "SET advisor = auto",
+        "SET adaptive = on",
+        "SET adaptive = auto"
       )
     do assertThrows(classOf[IllegalArgumentException], () => { binder.bind(parser.parse(bad)); () }, bad)
 
@@ -50,3 +52,6 @@ class BinderTest:
     assertEquals(BoundSetTelemetry("sampled"), binder.bind(parser.parse("SET telemetry = SAMPLED")))
     assertEquals(BoundSetAdvisor(true), binder.bind(parser.parse("SET advisor = ON")))
     assertEquals(BoundSetAdvisor(false), binder.bind(parser.parse("SET advisor TO off")))
+    assertEquals(BoundSetAdaptive("auto_safe"), binder.bind(parser.parse("SET adaptive = AUTO_SAFE")))
+    assertEquals(BoundSetAdaptive("advisory"), binder.bind(parser.parse("SET adaptive = advisory")))
+    assertEquals(BoundSetAdaptive("off"), binder.bind(parser.parse("SET adaptive TO off")))

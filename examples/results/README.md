@@ -4,6 +4,47 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+**Set the CPU governor to `performance` before benchmarking** (Linux:
+`sudo cpupower frequency-set -g performance`, check with
+`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`) and record it with the results. On the
+reference machine the same 2.5.4 code wrote 5.1k rows/s (no index) with the default governor and
+42.0k with `performance`, and committed 78 ops/s against 658 on one thread. Compare runs only when
+they used the same governor. The two benchmark scripts print a warning when it is not `performance`.
+
+## Milestone 2.5.4 actuator
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.5.4-database.json, 2.5.4-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.4-database.json examples/results/2.5.4-ffi.json
+```
+
+The JVM report has a new `actuator` section (two 5 000-row tables). `check-benchmarks.py` checks its
+counts exactly: no action while off or advisory, one index kept and one rolled back, the rolled-back
+target refused during its cooldown, no failed action, at least 4x fewer rows read per execution on
+the helped query, and the user's indexes unchanged. The mean tick time is for information. The
+telemetry section also reports `write_alloc_extra_counted` (budget 64 bytes).
+
+Recorded by the author on the AMD Ryzen 9 5950X (release build, scale 1);
+`check-benchmarks.py` reports "benchmark results agree (scale 1)".
+
+* **Actuator section:** 0 actions while off or advisory; 3 applied, 1 kept, 1 rolled back, 1 rejected,
+  0 failed; rows read per execution 5 000 -> 250; 2 user indexes before and after; 1 advisor index
+  left. One controller tick took 0.46 ms on average.
+* **Write counters:** an update of a single row allocates 4 280 bytes with telemetry off and the same
+  counted: +0 bytes (budget 64).
+* **Telemetry allocation unchanged:** skipped +0 bytes, captured +144 bytes.
+* **Read and planning paths against 2.5.3:** the 15 comparable workload timings of the ffi report have
+  a median change of -0.5 % (largest increase +4.8 %), as expected for an unchanged engine.
+* **Second run, CPU governor `performance`** (`cpupower frequency-set -g performance`;
+  `examples/results/2.5.4-performance-*.json`, same code and checks): writes with no index 42.0k rows/s
+  and with 3 indexes 14.1k, equal to the quiet 2.5.2.1 run (41.4k and 14.1k); database load 87.8k rows/s
+  and Rust load 44.7k; single-row commit 658 ops/s with one thread and 2 439 with several. The first
+  run (default governor) was 5.1k, 4.1k and 78 / 165. The code is identical (see
+  `docs/milestone-2.5.4.md`), so the earlier drop of 2.5.3 and 2.5.4 was the machine's power setting, not
+  the engine. Run the write benchmarks with the `performance` governor.
+* **Other rates of the first run (default governor):** database load 44.8k rows/s (2.5.3: 48.0k); `adb-benchmark-rust` commit
+  78 ops/s with one thread and 165 with several.
+
 ## Milestone 2.5.3 workload advisor
 
 ```bash

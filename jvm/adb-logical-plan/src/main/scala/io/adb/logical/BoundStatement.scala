@@ -41,6 +41,11 @@ final case class BoundSetTelemetry(mode: String) extends BoundStatement
 /** `SET advisor = on | off` (2.5.3): starts or stops the advisor's background evaluation. */
 final case class BoundSetAdvisor(enabled: Boolean) extends BoundStatement
 
+/** `SET adaptive = off | advisory | auto_safe` (2.5.4); validated here, interpreted by the gateway.
+  * `advisor = on | off` of 2.5.3 stays and means `advisory | off`.
+  */
+final case class BoundSetAdaptive(mode: String) extends BoundStatement
+
 /** `SET SESSION CONSISTENCY ...`. */
 final case class BoundSetConsistency(level: io.adb.consistency.ReadConsistency) extends BoundStatement
 

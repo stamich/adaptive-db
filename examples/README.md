@@ -84,6 +84,16 @@ examples/jvm-advisor-smoke/run.sh       # off by default, hysteresis, index advi
                                         # the advisor never acts, advice applied, audit log, SET advisor
 ```
 
+## JVM actuator smoke test (2.5.4)
+
+```bash
+examples/jvm-actuator-smoke/run.sh      # nothing happens unless auto_safe; adv_* index created on the third
+                                        # evaluation, measured (rows read per execution) and kept; an index that
+                                        # does not help is rolled back and not recreated; user index untouched;
+                                        # idle advisor index dropped; a person's drop respected; budget;
+                                        # re-adoption after a restart; SET adaptive and the telemetry switch
+```
+
 ## JVM plan cache smoke test (2.5.1)
 
 ```bash

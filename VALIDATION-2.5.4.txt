@@ -1,0 +1,72 @@
+Adaptive DB Milestone 2.5.4 — validation record
+Date: 2026-11-03
+Base: 2.5.3 (master, after the merge of PR #116)
+
+Environment
+  rustc / cargo of the validation VM, openjdk 22, Scala 3.3.8 compiler (official release archive),
+  JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44, cloud VM (2 vCPU, shared); a development machine, not the reference machine
+
+Rust (the engine is unchanged; only version strings)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 417 passed, 0 failed
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps ...... OK
+  C ABI 9, plan wire v4, data format 4: unchanged
+
+Java / JVM
+  JVM modules compiled with scalac 3.3.8 (-Werror) and javac 22 ... OK
+  JVM tests (Scala + Java) ........................................ 405 passed, 0 failed
+                                      (2.5.3: 279; new: the adb-actuator module, WriteCountersTest,
+                                       the 2.5.3 ContractTest, and the SET adaptive cases in BinderTest)
+  examples/jvm-actuator-smoke (new) ............................... PASS
+  examples/jvm-advisor-smoke ...................................... PASS
+  examples/jvm-telemetry-smoke (with write counters) .............. PASS
+  examples/jvm-plan-cache-smoke ................................... PASS
+  examples/jvm-consistency-smoke .................................. PASS
+  examples/jvm-cdc-smoke .......................................... PASS
+  feature tour (io.adb.cli.DemoMain) with the 2.5.4 phase, ABI 9 .. OK
+                                      (index created on the third evaluation, kept after the verify
+                                       windows: rows read per execution fell 2002x)
+  workload report (WorkloadBenchmark, scale 1) written by the JVM and checked with
+    scripts/check-benchmarks.py against a database report of an earlier build (the Rust engine path
+    is unchanged) ................................................ "benchmark results agree (scale 1)"
+
+Actuator section of the workload report (counts and exact engine counters; exact on any machine)
+  idle actions (off and advisory mode): 0
+  actions applied 3, kept 1, rolled back 1, rejected 1 (the rolled-back target during its cooldown),
+    failed 0
+  rows read per execution on the helped query: 5000 -> 250 (5000-row table)
+  user indexes before / after: 2 / 2; advisor indexes left: 1
+  one controller tick (evaluation, gate, verification): about 1 ms (VM, information only)
+
+Write counters (telemetry section of the same report, update of a single row, 18 000 statements)
+  allocation per write: 4688 B with telemetry off and 4688 B counted: +0 B (budget 64)
+Telemetry allocation (unchanged): skipped +0 B, captured +144 B
+
+Measured while building it
+  CREATE INDEX stalls reads and writes for the whole build, about 30 us per row; the actuator's
+  automatic build ceiling is therefore 50 000 rows (about 1.5 s).
+
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.4-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"
+  actuator section: as on the VM (3 applied, 1 kept, 1 rolled back, 1 rejected, 0 failed;
+    rows read per execution 5000 -> 250; user indexes 2 / 2); one controller tick 0.46 ms
+  write counters: +0 B per counted write (4280 B with and without); telemetry +0 B / +144 B
+  ffi report vs 2.5.3: median -0.5 % over 15 workload timings (largest increase +4.8 %)
+  database load 44.8k rows/s (2.5.3: 48.0k)
+
+Reference machine, second run (CPU governor `performance`; examples/results/2.5.4-performance-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"; actuator counts and tick (0.45 ms) as before
+  writes, no index 42.0k rows/s; 3 indexes 14.1k (2.5.2.1 quiet: 41.4k, 14.1k; first 2.5.4 run: 5.1k, 4.1k)
+  load 87.8k rows/s (database report), 44.7k (Rust binary); single-row commit 658 / 2439 ops/s
+  Conclusion: the slow write rates of the 2.5.3 and 2.5.4 first runs were the CPU governor, not the code.
+
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
+  The JVM BenchmarkMain and compare-write-path.sh on the reference machine.
+  auto_safe under hours of concurrent load; the quality of its decisions on real workloads.
+
+Commits
+  One commit per task, each authored by Michal Stawarski, without co-authors.

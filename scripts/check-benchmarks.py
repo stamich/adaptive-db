@@ -14,9 +14,15 @@ a slow consumer overtakes it and marks it as needing a rebuild.
 The telemetry section (2.5.2.1) holds the allocation of a skipped and of a captured query to a
 budget (allocation, unlike time, does not depend on the load of the machine) and requires a
 captured query to report the rows read.
+Since 2.5.4 the same section holds a write statement to an allocation budget too: the per-entity
+write counters add (almost) nothing to it.
 The advisor section (2.5.3) must show the hysteresis at work (no advice after two evaluations,
 an index on the filtered column after three), an unchanged number of indexes and a non-empty
 audit log; these are counts, so they are checked exactly.
+The actuator section (2.5.4) must do nothing in off and advisory mode, keep the index that cuts
+the rows read and roll back the one that does not, refuse the rolled-back target during its
+cooldown, never fail an action, and leave the user's own indexes untouched; these are counts and
+exact engine counters, so they are checked exactly.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -75,6 +81,11 @@ def check_telemetry(ffi: dict, check) -> None:
     check(section["alloc_extra_capture"] <= 512,
           f"telemetry: a captured query allocates {section['alloc_extra_capture']:.0f} extra bytes (budget 512)")
     check(section["captured_rows_read_per_execution"] > 0, "telemetry: a captured query reports no rows read")
+    # Write counters (2.5.4): counting a write is one map lookup and three adder increments, so a
+    # counted write allocates no more than an uncounted one beyond a small constant.
+    check(section["write_alloc_extra_counted"] <= 64,
+          f"telemetry: a counted write allocates {section['write_alloc_extra_counted']:.0f} extra bytes (budget 64)")
+    check(section["write_statements_counted"] > 0, "telemetry: no write was counted while telemetry was on")
 
 
 def check_advisor(ffi: dict, check) -> None:
@@ -95,6 +106,27 @@ def check_advisor(ffi: dict, check) -> None:
           f"advisor: the advice does not target ix_account(region): {section['index_sql']!r}")
     check(section["indexes_before"] == section["indexes_after"], "advisor: the advisor changed the number of indexes (it must only recommend)")
     check(section["audit_entries"] >= 1, "advisor: the audit log is empty although advice was confirmed")
+
+
+def check_actuator(ffi: dict, check) -> None:
+    """Checks the 2.5.4 actuator section of the JVM report with `check(ok, message)`.
+
+    Counts and the engine's rows-read counter only; the mean tick time is informational.
+    """
+    section = ffi.get("actuator")
+    check(section is not None, "the JVM report has no actuator section")
+    if section is None:
+        return
+    check(section["idle_actions"] == 0, f"actuator: {section['idle_actions']} actions or log entries while the mode was off or advisory")
+    check(section["actions_kept"] == 1, f"actuator: {section['actions_kept']} indexes kept (expected the one that helps)")
+    check(section["actions_rolled_back"] == 1, f"actuator: {section['actions_rolled_back']} indexes rolled back (expected the one that does not help)")
+    check(section["actions_rejected"] >= 1, "actuator: the rolled-back target was not refused during its cooldown")
+    check(section["actions_failed"] == 0, f"actuator: {section['actions_failed']} actions failed")
+    check(section["rows_read_per_execution_after"] * 4 <= section["rows_read_per_execution_before"],
+          f"actuator: rows read per execution {section['rows_read_per_execution_before']:.0f} -> "
+          f"{section['rows_read_per_execution_after']:.0f}, not at least 4x fewer")
+    check(section["user_indexes_before"] == section["user_indexes_after"], "actuator: the user's own indexes changed")
+    check(section["advisor_indexes_after"] == 1, f"actuator: {section['advisor_indexes_after']} advisor indexes left (expected 1)")
 
 
 def main(database_path: str, ffi_path: str) -> int:
@@ -175,6 +207,7 @@ def main(database_path: str, ffi_path: str) -> int:
     check_consistency(native, check)
     check_telemetry(ffi, check)
     check_advisor(ffi, check)
+    check_actuator(ffi, check)
     estimation = ffi["estimation"]
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")

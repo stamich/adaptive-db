@@ -12,8 +12,8 @@
 /// 9 = Milestone 2.5.2.1 (`adb_query_telemetry`: query counters without a JSON profile; additive,
 /// every existing function and layout is unchanged).
 pub const ABI_VERSION: u32 = 9;
-/// Engine version reported through the C ABI (Milestone 2.5.3; the engine itself is unchanged since 2.5.2.1).
-static ENGINE_VERSION: &[u8] = b"2.5.3";
+/// Engine version reported through the C ABI (Milestone 2.5.4; the engine itself is unchanged since 2.5.2.1).
+static ENGINE_VERSION: &[u8] = b"2.5.4";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

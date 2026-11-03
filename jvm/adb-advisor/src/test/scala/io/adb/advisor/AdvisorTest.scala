@@ -74,3 +74,13 @@ final class AdvisorTest:
     val advisor = Advisor.forTelemetry(runtime)
     assertEquals(0, advisor.evaluate(design()).recommendations.size)
     runtime.close()
+
+  @Test def theWorkloadSnapshotCarriesTheWriteFiguresTheAdvisorWasGiven(): Unit =
+    var written = io.adb.telemetry.WriteStats(7L, 0L, 0L, 0L)
+    var now = 0L
+    val advisor = new Advisor(() => Vector.empty, _ => None, AdvisorConfig(), () => now, Detectors.all, () => Vector(written))
+    advisor.evaluate(PhysicalDesign.empty)
+    now = 10L; written = io.adb.telemetry.WriteStats(7L, 6L, 6L, 600L)
+    advisor.evaluate(PhysicalDesign.empty)
+    assertEquals(6L, advisor.workloadSnapshot().writeStatements(7L))
+

@@ -1,6 +1,6 @@
 package io.adb.advisor
 
-import io.adb.telemetry.ShapeStats
+import io.adb.telemetry.{ShapeStats, WriteStats}
 
 /** What one query shape did inside a time window (or, summed, inside several windows).
   *
@@ -54,8 +54,15 @@ final case class ShapeDelta(
   * @param startedAtNanos start of the window, on the clock given to [[WorkloadModel.observe]]
   * @param endedAtNanos   end of the window
   * @param shapes         what each shape did inside it (shapes that were idle are absent)
+  * @param writes         what the writes to each entity cost inside it, by entity id (entities not
+  *                       written are absent; empty when the caller gave no write counters)
   */
-final case class WorkloadWindow(startedAtNanos: Long, endedAtNanos: Long, shapes: Map[Long, ShapeDelta]) derives CanEqual:
+final case class WorkloadWindow(
+    startedAtNanos: Long,
+    endedAtNanos: Long,
+    shapes: Map[Long, ShapeDelta],
+    writes: Map[Long, WriteStats] = Map.empty
+) derives CanEqual:
   /** Length of the window in nanoseconds. */
   def spanNanos: Long = endedAtNanos - startedAtNanos
 
@@ -63,8 +70,13 @@ final case class WorkloadWindow(startedAtNanos: Long, endedAtNanos: Long, shapes
   *
   * @param windows retained windows, oldest first
   * @param shapes  per-shape totals over all retained windows
+  * @param writes  per-entity write totals over all retained windows
   */
-final case class WorkloadSnapshot(windows: Vector[WorkloadWindow], shapes: Map[Long, ShapeDelta]) derives CanEqual:
+final case class WorkloadSnapshot(
+    windows: Vector[WorkloadWindow],
+    shapes: Map[Long, ShapeDelta],
+    writes: Map[Long, WriteStats] = Map.empty
+) derives CanEqual:
   /** Time covered by the retained windows, in nanoseconds. */
   def spanNanos: Long = if windows.isEmpty then 0L else windows.last.endedAtNanos - windows.head.startedAtNanos
 
@@ -73,6 +85,9 @@ final case class WorkloadSnapshot(windows: Vector[WorkloadWindow], shapes: Map[L
 
   /** Elapsed time of all shapes over the retained windows, in nanoseconds. */
   def totalNanos: Long = shapes.valuesIterator.map(_.totalNanos).sum
+
+  /** Write statements to `entityId` over the retained windows (0 if none). */
+  def writeStatements(entityId: Long): Long = writes.get(entityId).fold(0L)(_.statements)
 
   /** Share of the workload's elapsed time spent in `shapeId`, in `[0, 1]`. */
   def timeShare(shapeId: Long): Double =
@@ -99,6 +114,8 @@ final class WorkloadModel(maxWindows: Int):
 
   /** Cumulative counters seen by the previous [[observe]], by shape id. */
   private var previous: Map[Long, ShapeStats] = Map.empty
+  /** Cumulative write counters seen by the previous [[observe]], by entity id. */
+  private var previousWrites: Map[Long, WriteStats] = Map.empty
   /** Clock value of the previous [[observe]], or `None` before the first. */
   private var lastAt: Option[Long] = None
   /** Retained windows, oldest first. */
@@ -112,15 +129,22 @@ final class WorkloadModel(maxWindows: Int):
     *
     * @param cumulative per-shape counters, as [[io.adb.telemetry.TelemetryRuntime.allStats]] returns them
     * @param nowNanos   monotonic clock reading, in nanoseconds
+    * @param writes     cumulative per-entity write counters, as [[io.adb.telemetry.WriteCounters.all]]
+    *                   returns them (2.5.4); omitted by callers that only watch queries
     * @return the window that was closed
     */
-  def observe(cumulative: Vector[ShapeStats], nowNanos: Long): WorkloadWindow = synchronized {
+  def observe(cumulative: Vector[ShapeStats], nowNanos: Long, writes: Vector[WriteStats] = Vector.empty): WorkloadWindow = synchronized {
     val window = lastAt match
       case None => WorkloadWindow(nowNanos, nowNanos, Map.empty)
       case Some(start) =>
         val deltas = cumulative.iterator.flatMap(now => delta(previous.get(now.shapeId), now)).map(d => d.shapeId -> d).toMap
-        WorkloadWindow(start, math.max(nowNanos, start), deltas)
+        val written = writes.iterator
+          .map(now => now.entityId -> previousWrites.get(now.entityId).fold(now)(now.since))
+          .filter(_._2.statements > 0L)
+          .toMap
+        WorkloadWindow(start, math.max(nowNanos, start), deltas, written)
     previous = cumulative.iterator.map(s => s.shapeId -> s).toMap
+    previousWrites = writes.iterator.map(w => w.entityId -> w).toMap
     lastAt = Some(nowNanos)
     windows = (windows :+ window).takeRight(maxWindows)
     window
@@ -131,7 +155,11 @@ final class WorkloadModel(maxWindows: Int):
     val totals = windows.iterator.flatMap(_.shapes.valuesIterator).foldLeft(Map.empty[Long, ShapeDelta]) { (acc, d) =>
       acc.updated(d.shapeId, acc.get(d.shapeId).fold(d)(_.plus(d)))
     }
-    WorkloadSnapshot(windows, totals)
+    val writeTotals = windows.iterator.flatMap(_.writes.valuesIterator).foldLeft(Map.empty[Long, WriteStats]) { (acc, w) =>
+      acc.updated(w.entityId, acc.get(w.entityId).fold(w)(a =>
+        WriteStats(w.entityId, a.statements + w.statements, a.rows + w.rows, a.totalNanos + w.totalNanos)))
+    }
+    WorkloadSnapshot(windows, totals, writeTotals)
   }
 
   /** Number of windows currently retained. */
@@ -140,6 +168,7 @@ final class WorkloadModel(maxWindows: Int):
   /** Forgets every window and the baseline. */
   def clear(): Unit = synchronized {
     previous = Map.empty
+    previousWrites = Map.empty
     lastAt = None
     windows = Vector.empty
   }

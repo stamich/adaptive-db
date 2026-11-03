@@ -116,8 +116,17 @@
 - only `CREATE INDEX` and `ANALYZE` candidates map to actions we have; join-projection and
   partition candidates stay informational until their actuators exist (2.6 and later)
 - follow-ups: persisted snapshots, composite and covering index candidates, dropping unused
-  indexes, write telemetry (so the write cost of an index is measured), tuning the cost model on
-  the reference machine, any automatic action (needs its own safeguards)
+  indexes, tuning the cost model on the reference machine. Write telemetry and the first automatic
+  action (with its safeguards) are 2.5.4
+
+## 2.5.4 — AUTO_SAFE actuator (done)
+- `SET adaptive = off | advisory | auto_safe`; a policy gate with reasons; a budget; `CREATE INDEX`,
+  `ANALYZE` and `DROP INDEX` of its own indexes only; measurement on rows read per execution and on
+  write counters; rollback with a doubling cooldown; idle indexes retired; an action log, `\actions`
+- module `adb-actuator`; opt-in, default `off`
+- follow-ups: online index build (an engine feature, so larger tables can be indexed), persisted
+  registry and log, composite and covering candidates, tuning of the policy on the reference machine,
+  actions for join projections and partitions when their actuators exist
 
 ## 2.6 — asynchronous projections
 - asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0

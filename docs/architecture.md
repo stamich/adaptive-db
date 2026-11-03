@@ -1,4 +1,4 @@
-# Architecture — Milestone 2.5.3
+# Architecture — Milestone 2.5.4
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
 storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a
@@ -303,3 +303,12 @@ catalog, the engine statistics and the index catalog; a heuristic cost-benefit s
 candidates; hysteresis keeps the advice stable; an audit log records what was advised. The advisor
 only recommends (`CREATE INDEX`, `ANALYZE`, or information) and reads immutable values, never the
 telemetry queue. Nothing below the gateway changes. See [advisor.md](advisor.md).
+
+## AUTO_SAFE actuator (Milestone 2.5.4)
+
+The module `adb-actuator` closes the loop: observe (telemetry, write counters) → recommend (the
+advisor) → decide (`PolicyGate`, `Policy`, `Budget`) → act (`Actuator`, implemented by the gateway
+through its own session under the DDL lock) → measure (`BaselineCapture`, `EffectivenessVerifier`,
+`WriteCostCheck`) → keep or undo (`RollbackPlanner`, `FlapGuard`). `AdaptiveController.tick` is one
+pass and runs on the advisor's timer. It can drop only what the `OwnershipRegistry` says the advisor
+created. Nothing below the gateway changes. See [actuator.md](actuator.md).

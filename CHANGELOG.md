@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.3. Hardened patch releases preserve the functional scope of
+Milestone 2.5.4. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,51 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.4 — AUTO_SAFE actuator
+
+A new JVM module, `adb-actuator`, carries out the advisor's recommendations on request, measures
+them and keeps or undoes them. It is opt-in (`SET adaptive = auto_safe`; the default is `off`). No
+engine change: the C ABI stays 9, plan wire v4 and data format 4 are unchanged, and no data
+migration is needed. Design and limits: `docs/actuator.md`, `docs/milestone-2.5.4.md`.
+
+### Added
+- `SET adaptive = off | advisory | auto_safe`; `SET advisor = on | off` maps onto `advisory | off`.
+  `auto_safe` switches telemetry to `full` and restores the earlier mode when left.
+- `PolicyGate` (pure function, 11 rejection reasons in a fixed order), `Policy` and `Budget` with
+  conservative defaults.
+- `Actuator`, `GatewayActuator` (its own session, serialised with user DDL by a gateway lock),
+  `BuildGuard` (one build at a time, none after shutdown).
+- `OwnershipRegistry` and `OwnedOnlyActuator`: only `adv_*` indexes the advisor created (or
+  re-adopted after a restart) can be dropped; a person's drop is respected.
+- `BaselineCapture`, `EffectivenessVerifier` (rows read per execution is the evidence; time only
+  vetoes beyond 2x), `WriteCostCheck`, `IdleDetector`, `RollbackPlanner`, `FlapGuard`.
+- `ActionLog` and `AdaptiveController`; `\actions` and `\actions log` in the shell.
+- `WriteCounters` in `adb-telemetry`: statements, rows and time of INSERT, UPDATE and DELETE per
+  entity while telemetry is on; carried through the advisor's windows and `PhysicalDesign`.
+- Examples and checks: `examples/jvm-actuator-smoke`, the `actuator` section of the JVM benchmark
+  and `check_actuator`, a write-path allocation budget, the 2.5.4 phase of the feature tour.
+
+### Changed
+- `AdvisorScheduler` runs any tick function. `AdaptiveDatabase` takes an `AdaptiveConfig`.
+- Engine, crates, JVM build, scripts and workflows report 2.5.4.
+
+### Measured
+- Building an index stalls the database for the whole build, about 30 µs per row; the actuator
+  therefore builds only on tables of up to 50 000 rows.
+- Write counters add 0 bytes of allocation to a write; the actuator benchmark section (5 000-row
+  tables) keeps the helpful index (5 000 -> 250 rows read per execution), rolls back the useless one
+  and leaves the user's indexes alone.
+
+### Benchmarking
+- Set the CPU governor to `performance` before benchmarking: with the default governor the same code
+  wrote 5.1k rows/s (no index) and committed 78 ops/s on one thread; with `performance`, 42.0k and
+  658. The two benchmark scripts now warn when the governor is not `performance`; the README and
+  `examples/results/README.md` say so.
+
+### Not done
+- JVM `BenchmarkMain` on the reference machine, persistence of the registry and the log, online index builds,
+  and any action beyond the three statements.
 
 ## 2.5.3 — Workload model and advisor
 

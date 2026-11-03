@@ -3,6 +3,7 @@ package io.adb.gateway
 import io.adb.consistency.*
 import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.plancache.*
+import io.adb.actuator.{AdaptiveConfig, AdaptiveController, AdaptiveMode}
 import io.adb.advisor.{Advisor, AdvisorReport, AdvisorScheduler, EntityDesign, PhysicalDesign}
 import io.adb.telemetry.*
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
@@ -44,6 +45,7 @@ import scala.jdk.CollectionConverters.*
   * @param native      open native database handle
   * @param config      cost-based optimizer configuration
   * @param feedbackLog where executed queries' estimated and actual rows are logged, if anywhere
+  * @param adaptiveConfig policy and budget of `SET adaptive = auto_safe` (2.5.4)
   */
 final class AdaptiveDatabase(
     val catalog: Catalog,
@@ -51,7 +53,8 @@ final class AdaptiveDatabase(
     config: OptimizerConfig = OptimizerConfig.Default,
     feedbackLog: Option[PlannerFeedbackLog] = None,
     consistency: ConsistencyBackend = null,
-    planCacheBytes: Long = AdaptiveDatabase.DefaultPlanCacheBytes
+    planCacheBytes: Long = AdaptiveDatabase.DefaultPlanCacheBytes,
+    adaptiveConfig: AdaptiveConfig = AdaptiveConfig()
 ):
   /** The engine's commit order and projections (the native database unless a test supplies one). */
   private val backend: ConsistencyBackend = if consistency == null then ConsistencyBackend(native) else consistency
@@ -71,10 +74,19 @@ final class AdaptiveDatabase(
   private val planCache = new PlanCache[CachedQuery](math.max(1L, planCacheBytes), 8, 4096, _.weight)
   /** Query telemetry (off until `SET telemetry = sampled | full`); see [[io.adb.telemetry.TelemetryRuntime]]. */
   val telemetry: TelemetryRuntime = new TelemetryRuntime()
-  /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. */
+  /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. Since 2.5.4 the [[controller]] evaluates it. */
   val advisor: Advisor = Advisor.forTelemetry(telemetry)
-  /** The advisor's timer; created on the first `SET advisor = on`. */
+  /** Serialises schema changes: a user's DDL statement and an action of the actuator (2.5.4) never
+    * run at the same time. Re-entrant, so the actuator may hold it around a statement that takes it again.
+    */
+  private val ddlLock = new java.util.concurrent.locks.ReentrantLock()
+  /** The actuator's controller (2.5.4): off by default; `SET adaptive = auto_safe` lets it act. */
+  val controller: AdaptiveController =
+    new AdaptiveController(advisor, new GatewayActuator(this), telemetry.registry.get, adaptiveConfig)
+  /** The timer that ticks the controller; created on the first `SET advisor = on` or `SET adaptive = ...`. */
   private var advisorTimer: Option[AdvisorScheduler] = None
+  /** The telemetry mode to restore when `auto_safe` is left, if `auto_safe` switched it on. */
+  private var telemetryToRestore: Option[TelemetryMode] = None
   /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
   @volatile private var cacheEnabled: Boolean = planCacheBytes > 0
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
@@ -188,7 +200,9 @@ final class AdaptiveDatabase(
   private def executeOnce(ast: io.adb.sql.Statement, sql: String, session: AdaptiveSession, key: Option[StatementKey]): QueryResult =
     val epoch = currentEpoch()
     val statement = binder.bind(ast)
-    val result = executeBound(statement, sql, epoch, session, key)
+    val result =
+      if AdaptiveDatabase.isDdl(statement) then withDdlLock(executeBound(statement, sql, epoch, session, key))
+      else executeBound(statement, sql, epoch, session, key)
     if AdaptiveDatabase.isDdl(statement) then
       // A schema change is a commit of its own; the head read now covers it (and, under
       // concurrency, possibly a few later commits, which only makes the token safer).
@@ -196,6 +210,14 @@ final class AdaptiveDatabase(
       session.observe(head)
       result.copy(commitSeq = Some(head))
     else result
+
+  /** Runs `body` while holding the schema-change lock, so it cannot overlap a user's DDL or an
+    * actuator action. Used by the DDL path itself and by [[GatewayActuator]].
+    */
+  private[gateway] def withDdlLock[A](body: => A): A =
+    ddlLock.lock()
+    try body
+    finally ddlLock.unlock()
 
   /** The catalog epoch bound statements are planned with. It is read **before** the schema and
     * index metadata a plan is built from: if DDL commits in between, the plan carries the older
@@ -298,6 +320,7 @@ final class AdaptiveDatabase(
       QueryResult(Vector.empty, Vector.empty, Some(s"SET plan_cache = ${if cacheEnabled then "on" else "off"}"))
 
     case BoundSetTelemetry(name) =>
+      synchronized { telemetryToRestore = None } // a person's choice wins over what auto_safe set
       telemetry.mode = name match
         case "off" => TelemetryMode.Off
         case "sampled" => TelemetryMode.Sampled
@@ -305,8 +328,12 @@ final class AdaptiveDatabase(
       QueryResult(Vector.empty, Vector.empty, Some(s"SET telemetry = $name"))
 
     case BoundSetAdvisor(enabled) =>
-      if enabled then startAdvisor() else stopAdvisor()
+      setAdaptive(AdaptiveMode.ofAdvisorSwitch(enabled))
       QueryResult(Vector.empty, Vector.empty, Some(s"SET advisor = ${if enabled then "on" else "off"}"))
+
+    case BoundSetAdaptive(name) =>
+      setAdaptive(AdaptiveMode.parse(name).getOrElse(throw new IllegalArgumentException(s"adaptive must be off, advisory or auto_safe, got $name")))
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET adaptive = $name"))
 
     case BoundSetConsistency(level) =>
       session.consistency = level
@@ -316,15 +343,21 @@ final class AdaptiveDatabase(
       val pk = values.get(entity.primaryKeyField.id) match
         case Some(DbValue.Int64Value(value)) => value
         case _ => throw new IllegalArgumentException("BIGINT primary key value required")
+      val t0 = writeClock()
       val commit = native.insertCommit(entity.id.value, pk, MutationJsonEncoder.row(entity, values))
+      recordWrite(entity.id.value, t0)
       committed("INSERT 1", commit, session)
 
     case BoundUpdate(entity, assignments, pk) =>
+      val t0 = writeClock()
       val commit = native.updateCommit(entity.id.value, pk, MutationJsonEncoder.assignments(assignments))
+      recordWrite(entity.id.value, t0)
       committed("UPDATE 1", commit, session)
 
     case BoundDelete(entity, pk) =>
+      val t0 = writeClock()
       val commit = native.deleteCommit(entity.id.value, pk)
+      recordWrite(entity.id.value, t0)
       committed("DELETE 1", commit, session)
 
     case select: BoundSelect =>
@@ -386,6 +419,17 @@ final class AdaptiveDatabase(
         telemetry.offer(QueryTelemetry(shape.id, epoch, estimated, 0L, -1L, elapsed, cacheHit, failed = true))
     catch case NonFatal(_) => ()
 
+  /** Start time of a write statement, or 0 when telemetry is off (so a write costs nothing extra). */
+  private def writeClock(): Long = if telemetry.enabled then System.nanoTime() else 0L
+
+  /** Counts one finished single-row write into the per-entity write counters (2.5.4).
+    *
+    * @param entityId the entity written
+    * @param t0       the value [[writeClock]] returned before the statement; 0 means "not measured"
+    */
+  private def recordWrite(entityId: Long, t0: Long): Unit =
+    if t0 != 0L then telemetry.writes.record(entityId, 1L, System.nanoTime() - t0)
+
   /** The telemetry counters as `(metric, value)` rows (the shell's `\\telemetry`). */
   def showTelemetry(): QueryResult =
     val m = telemetry.metrics
@@ -420,7 +464,8 @@ final class AdaptiveDatabase(
         entity.fields.map(f => f.id.value.toLong -> f.name).toMap,
         stats.fold(0L)(_.table.rowCount),
         stats,
-        indexCatalog.indexes(entity.id)
+        indexCatalog.indexes(entity.id),
+        Some(telemetry.writes.stats(entity.id.value)).filter(_.statements > 0L)
       )
     })
 
@@ -428,9 +473,37 @@ final class AdaptiveDatabase(
     * Turns nothing else on: without `SET telemetry = sampled | full` the advisor sees no queries.
     */
   def startAdvisor(periodMillis: Long = AdaptiveDatabase.AdvisorPeriodMillis): Unit = synchronized {
-    if advisorTimer.isEmpty then advisorTimer = Some(new AdvisorScheduler(advisor, () => physicalDesign(), periodMillis))
+    if advisorTimer.isEmpty then advisorTimer = Some(new AdvisorScheduler(() => { controller.tick(physicalDesign()); () }, periodMillis))
     advisorTimer.foreach(_.start())
   }
+
+  /** Sets the adaptive mode (`SET adaptive = off | advisory | auto_safe`).
+    *
+    * - `off` stops the timer and every telemetry-driven action; the previous telemetry mode is
+    *   restored if `auto_safe` had switched it on.
+    * - `advisory` runs the 2.5.3 advisor on the timer and never acts.
+    * - `auto_safe` also lets the controller act inside its policy and budget. It switches telemetry
+    *   to `full` (and restores the earlier mode when left): in `sampled` mode a fast query is mostly
+    *   skipped, so the runs after an index was built would be undercounted and could not be verified.
+    *
+    * Leaving `auto_safe` stops new actions and rollbacks at once; a statement already running
+    * finishes or fails atomically in the engine.
+    */
+  def setAdaptive(mode: AdaptiveMode, periodMillis: Long = AdaptiveDatabase.AdvisorPeriodMillis): Unit = synchronized {
+    controller.mode = mode
+    mode match
+      case AdaptiveMode.AutoSafe =>
+        if telemetryToRestore.isEmpty && telemetry.mode != TelemetryMode.Full then
+          telemetryToRestore = Some(telemetry.mode)
+          telemetry.mode = TelemetryMode.Full
+      case _ =>
+        telemetryToRestore.foreach(telemetry.mode = _)
+        telemetryToRestore = None
+    if mode.needsTimer then startAdvisor(periodMillis) else stopAdvisor()
+  }
+
+  /** The adaptive mode now. */
+  def adaptiveMode: AdaptiveMode = controller.mode
 
   /** Stops the background evaluation (`SET advisor = off`); recommendations and the audit log stay. */
   def stopAdvisor(): Unit = synchronized(advisorTimer.foreach(_.stop()))
@@ -461,6 +534,24 @@ final class AdaptiveDatabase(
     QueryResult(
       Vector("seq", "event", "advice", "sql"),
       advisor.auditLog.entries.map(e => Vector[Any](e.sequence, e.kind.label, e.summary, e.sql.getOrElse(""))))
+
+  /** The actuator's actions (the shell's `\\actions`): `(id, target, action, state, sql, reason)` rows,
+    * oldest first. The note names the mode, because outside `auto_safe` nothing is ever added.
+    */
+  def showActions(): QueryResult =
+    val rows = controller.actions.map { a =>
+      Vector[Any](a.id.value, a.target.key, a.kind.label, a.state.label, a.sql, a.reason)
+    }
+    val note = controller.mode match
+      case AdaptiveMode.AutoSafe => None
+      case other => Some(s"adaptive = ${other.sql}: SET adaptive = auto_safe lets the advisor act inside its budget")
+    QueryResult(Vector("id", "target", "action", "state", "sql", "reason"), rows, note)
+
+  /** The actuator's log (the shell's `\\actions log`): everything it applied, kept, rolled back, rejected or refused. */
+  def showActionsLog(): QueryResult =
+    QueryResult(
+      Vector("seq", "event", "action", "detail"),
+      controller.log.entries.map(e => Vector[Any](e.sequence, e.event.label, e.action, e.detail)))
 
   /** What a plan for `select` is valid for, read now. */
   private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
@@ -606,7 +697,8 @@ object AdaptiveDatabase:
       native: NativeDatabase,
       legacyCatalog: Option[Path] = None,
       config: OptimizerConfig = OptimizerConfig.Default,
-      feedbackLog: Option[PlannerFeedbackLog] = None
+      feedbackLog: Option[PlannerFeedbackLog] = None,
+      adaptiveConfig: AdaptiveConfig = AdaptiveConfig()
   ): AdaptiveDatabase =
     val indexes = EngineIndexCatalog(native)
     val catalog = new EngineCatalog(new NativeSchemaBackend(native), () => indexes.indexes.map(dependency))
@@ -614,7 +706,7 @@ object AdaptiveDatabase:
       CatalogImport.importInto(catalog, new FileCatalog(path))
       Files.move(path, path.resolveSibling(path.getFileName.toString + ".imported"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     }
-    new AdaptiveDatabase(catalog, native, config, feedbackLog)
+    new AdaptiveDatabase(catalog, native, config, feedbackLog, adaptiveConfig = adaptiveConfig)
 
   /** The fields an index depends on, for RESTRICT checks of `DROP COLUMN` and `DROP TABLE`. */
   def dependency(index: IndexInfo): IndexDependency =

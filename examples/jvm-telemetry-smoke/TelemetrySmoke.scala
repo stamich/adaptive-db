@@ -95,5 +95,18 @@ object TelemetrySmoke:
       check(analyzed.rows.nonEmpty && analyzed.rows.flatten.mkString(" ").contains("rows"), "EXPLAIN ANALYZE still reports the profile while telemetry is on")
       check(scala.util.Try(db.execute("SELECT id FROM orders WHERE nope = 1")).isFailure, "a statement that fails to bind still fails")
       check(db.showTelemetry().rows.exists(_.head == "mode") && db.showTelemetryShapes().rows.nonEmpty, "\\telemetry and \\telemetry shapes list the counters and the shapes")
+      // Write counters (2.5.4): per entity, only while telemetry is on.
+      check(t.writes.all().isEmpty, "no write was counted while telemetry was off (the 220 inserts above)")
+      db.execute("SET telemetry = full")
+      db.execute("INSERT INTO customer (id, name) VALUES (100, 'w1')")
+      db.execute("INSERT INTO customer (id, name) VALUES (101, 'w2')")
+      db.execute("UPDATE customer SET name = 'w1b' WHERE id = 100")
+      db.execute("DELETE FROM customer WHERE id = 101")
+      val written = t.writes.all()
+      check(written.size == 1 && written.head.statements == 4 && written.head.rows == 4 && written.head.totalNanos > 0,
+        "four writes to one entity are counted as 4 statements and 4 rows with their time")
+      db.execute("SET telemetry = off")
+      db.execute("DELETE FROM customer WHERE id = 100")
+      check(t.writes.all().head.statements == 4, "switching telemetry off stops the write counters too")
       println("telemetry smoke passed")
     finally native.close()

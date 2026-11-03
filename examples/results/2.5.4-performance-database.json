@@ -1,0 +1,707 @@
+{
+  "analyze": {
+    "bench_customer": {
+      "exact": true,
+      "ms": 3.528431,
+      "rows": 100
+    },
+    "bench_orders": {
+      "exact": true,
+      "ms": 4.275754,
+      "rows": 1000
+    },
+    "ix_account": {
+      "exact": false,
+      "ms": 96.09200299999999,
+      "rows": 100000
+    },
+    "jo_a": {
+      "exact": true,
+      "ms": 16.867485000000002,
+      "rows": 20000
+    },
+    "jo_b": {
+      "exact": true,
+      "ms": 4.742297000000001,
+      "rows": 2000
+    },
+    "jo_c": {
+      "exact": true,
+      "ms": 3.3678190000000003,
+      "rows": 20
+    },
+    "sk_events": {
+      "exact": false,
+      "ms": 69.657694,
+      "rows": 100000
+    },
+    "sk_events_distinct_ids": {
+      "actual": 100000,
+      "estimated": 99799
+    },
+    "sk_stale": {
+      "exact": false,
+      "ms": 63.819442,
+      "rows": 100000
+    },
+    "st_dim": {
+      "exact": true,
+      "ms": 4.293654,
+      "rows": 1000
+    },
+    "st_fact": {
+      "exact": false,
+      "ms": 68.228977,
+      "rows": 100000
+    },
+    "st_region": {
+      "exact": true,
+      "ms": 3.887102,
+      "rows": 100
+    },
+    "total": {
+      "ms": 338.788539,
+      "rows": 424220,
+      "rows_per_s": 1252167.5061741094
+    }
+  },
+  "as_of_index_read": {
+    "as_of_before_change": {
+      "checksum": 1052395880,
+      "input_rows": 100,
+      "input_rows_per_s": 516766.4887267391,
+      "iterations": 100,
+      "max_ms": 0.221271,
+      "mean_ms": 0.1938674999999999,
+      "min_ms": 0.188271,
+      "p50_ms": 0.193511,
+      "p95_ms": 0.19792099999999999,
+      "p99_ms": 0.20782099999999998,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.193771,
+        0.19443100000000002,
+        0.192921,
+        0.19343100000000002,
+        0.193681,
+        0.19159099999999998,
+        0.193591
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.0037701370333185487,
+      "warmup_runs": 1043
+    },
+    "changed_rows": 1000,
+    "latest": {
+      "checksum": 1001016464,
+      "input_rows": 100,
+      "input_rows_per_s": 470165.6393547447,
+      "iterations": 100,
+      "max_ms": 0.231421,
+      "mean_ms": 0.2140284,
+      "min_ms": 0.209752,
+      "p50_ms": 0.212691,
+      "p95_ms": 0.222132,
+      "p99_ms": 0.231401,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.21144100000000002,
+        0.211491,
+        0.21374100000000001,
+        0.211841,
+        0.215111,
+        0.212252,
+        0.213662
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.004206812669943836,
+      "warmup_runs": 931
+    }
+  },
+  "consistency": {
+    "setup": {
+      "commits": 5000,
+      "rows_per_commit": 10,
+      "segment_bytes": 262144
+    },
+    "workloads": {
+      "I_commit_with_change_log": {
+        "batched": {
+          "change_log_bytes_per_commit": 13652.012,
+          "commits": 5000,
+          "commits_per_s": 140.17050941311544,
+          "rows_per_commit": 100,
+          "rows_per_s": 14017.050941311543,
+          "seconds": 35.670841327
+        },
+        "one_row_per_commit": {
+          "change_log_bytes_per_commit": 188.0024,
+          "commits": 5000,
+          "commits_per_s": 135.86850939354264,
+          "rows_per_commit": 1,
+          "rows_per_s": 135.86850939354264,
+          "seconds": 36.80028597
+        }
+      },
+      "J_change_log_stream": {
+        "checksum": 50000,
+        "commits": 5000,
+        "commits_per_s": 526565.9914616272,
+        "expected_changes": 50000,
+        "mib_per_s": 705.050136577725,
+        "seconds": 0.009495486
+      },
+      "K_cursor_start": {
+        "end": {
+          "first_commit_seq": 5000,
+          "max_ms": 0.00908,
+          "mean_ms": 0.004719949999999998,
+          "min_ms": 0.0046099999999999995,
+          "p50_ms": 0.0046500000000000005,
+          "p95_ms": 0.004719999999999999,
+          "p99_ms": 0.0063,
+          "round_medians_ms": [
+            0.0046700000000000005,
+            0.0046500000000000005,
+            0.0046500000000000005,
+            0.0046500000000000005,
+            0.0046500000000000005,
+            0.0046500000000000005,
+            0.00466
+          ],
+          "stddev_ms": 0.0004685776856616195
+        },
+        "middle": {
+          "first_commit_seq": 2501,
+          "max_ms": 0.7406469999999999,
+          "mean_ms": 0.6943626199999998,
+          "min_ms": 0.6862469999999999,
+          "p50_ms": 0.6926869999999999,
+          "p95_ms": 0.706147,
+          "p99_ms": 0.7118180000000001,
+          "round_medians_ms": [
+            0.700107,
+            0.691707,
+            0.690587,
+            0.691047,
+            0.690187,
+            0.6953769999999999,
+            0.689447
+          ],
+          "stddev_ms": 0.007824542565262205
+        },
+        "segments": 28,
+        "start": {
+          "first_commit_seq": 1,
+          "max_ms": 0.718178,
+          "mean_ms": 0.67710118,
+          "min_ms": 0.6640269999999999,
+          "p50_ms": 0.676257,
+          "p95_ms": 0.688837,
+          "p99_ms": 0.716688,
+          "round_medians_ms": [
+            0.6763570000000001,
+            0.675997,
+            0.675667,
+            0.675657,
+            0.6758759999999999,
+            0.676117,
+            0.678186
+          ],
+          "stddev_ms": 0.008090083504365086
+        }
+      },
+      "L_projection_wait_latency": {
+        "max_ms": 0.29782400000000003,
+        "mean_ms": 0.1504029049999999,
+        "min_ms": 0.011590000000000001,
+        "p50_ms": 0.148132,
+        "p95_ms": 0.272733,
+        "p99_ms": 0.289154,
+        "round_medians_ms": [
+          0.169012,
+          0.092891,
+          0.126531,
+          0.150352,
+          0.201242,
+          0.13631200000000002,
+          0.199153
+        ],
+        "stddev_ms": 0.07998507189342255,
+        "timed_out": 0,
+        "waits": 200
+      },
+      "M_projection_catch_up": {
+        "applied": 5000,
+        "backlog_commits": 5000,
+        "commits_per_s": 1674567.8359057487,
+        "lag_after": 0,
+        "seconds": 0.002985845
+      },
+      "N_recovery_tail_rebuild": {
+        "commits": 5000,
+        "head": 5000,
+        "intact_log_head": 5000,
+        "open_intact_ms": 21.039804,
+        "open_rebuilt_ms": 51.766667000000005,
+        "rebuilt_log_head": 5000
+      },
+      "O_retention_prune": {
+        "consumer_caught_up": {
+          "bytes_after": 7072,
+          "bytes_before": 7060336,
+          "bytes_freed": 7053264,
+          "consumer_state": "Ready",
+          "ms": 2.876137,
+          "overtook_frontier": false,
+          "segments_after": 1,
+          "segments_before": 28,
+          "segments_removed": 27
+        },
+        "slow_consumer_byte_limit": {
+          "bytes_after": 3403088,
+          "bytes_before": 7060336,
+          "bytes_freed": 3657248,
+          "consumer_state": "NeedsRebuild",
+          "ms": 11.257252000000001,
+          "overtook_frontier": true,
+          "segments_after": 14,
+          "segments_before": 28,
+          "segments_removed": 14
+        }
+      }
+    }
+  },
+  "host": {
+    "arch": "x86_64",
+    "build": "release",
+    "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+    "cpus": 32,
+    "os": "linux"
+  },
+  "index_build": {
+    "idx_ix_balance": {
+      "entries": 100000,
+      "ms": 2201.1414839999998,
+      "rows_per_s": 45430.973304939995,
+      "sql": "CREATE INDEX idx_ix_balance ON ix_account (balance)",
+      "table_rows": 100000
+    },
+    "idx_ix_owner": {
+      "entries": 100000,
+      "ms": 2322.2840690000003,
+      "rows_per_s": 43061.05412980809,
+      "sql": "CREATE INDEX idx_ix_owner ON ix_account (owner) INCLUDE (balance)",
+      "table_rows": 100000
+    }
+  },
+  "load": {
+    "rows": 424220,
+    "rows_per_s": 87786.94637955974,
+    "seconds": 4.832381322
+  },
+  "milestone": "2.5.4",
+  "path": "rust_native",
+  "schema_evolution": {
+    "alter_latency": {
+      "large": {
+        "log_bytes": 316,
+        "ms": 1.526799,
+        "table_rows": 50000
+      },
+      "small": {
+        "log_bytes": 312,
+        "ms": 1.479198,
+        "table_rows": 1000
+      }
+    },
+    "checks": {
+      "schema_versions": [
+        2,
+        2,
+        2
+      ]
+    },
+    "setup": {
+      "load_seconds": 2.322847682,
+      "rows_per_table": 50000,
+      "small_table_rows": 1000
+    },
+    "workloads": {
+      "F_virtual_default_point_read": {
+        "migrated_row": {
+          "checksum": 7920,
+          "input_rows": 1,
+          "input_rows_per_s": 518134.7150259067,
+          "iterations": 100,
+          "max_ms": 0.00198,
+          "mean_ms": 0.0019354999999999989,
+          "min_ms": 0.0019,
+          "p50_ms": 0.00193,
+          "p95_ms": 0.0019700000000000004,
+          "p99_ms": 0.0019700000000000004,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            0.00195,
+            0.00193,
+            0.00193,
+            0.00194,
+            0.00194,
+            0.00193,
+            0.00193
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.000017168284713389433,
+          "warmup_runs": 102161
+        },
+        "migrated_row_currency": "EUR",
+        "old_row": {
+          "checksum": 7920,
+          "input_rows": 1,
+          "input_rows_per_s": 505050.50505050505,
+          "iterations": 100,
+          "max_ms": 0.00202,
+          "mean_ms": 0.0019795099999999994,
+          "min_ms": 0.00194,
+          "p50_ms": 0.00198,
+          "p95_ms": 0.0020099999999999996,
+          "p99_ms": 0.00202,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            0.00199,
+            0.0019700000000000004,
+            0.0019700000000000004,
+            0.00198,
+            0.00198,
+            0.00198,
+            0.00199
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.00001761731818410506,
+          "warmup_runs": 100345
+        },
+        "old_row_currency": "EUR"
+      },
+      "G_schema_adapted_scan": {
+        "0_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2381578.395845003,
+          "iterations": 100,
+          "max_ms": 21.289681,
+          "mean_ms": 21.008332150000005,
+          "min_ms": 20.890968,
+          "p50_ms": 20.99448,
+          "p95_ms": 21.197,
+          "p99_ms": 21.254269999999998,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            20.998979000000002,
+            20.991567999999997,
+            20.993299,
+            20.992439,
+            21.012969,
+            20.982889,
+            21.035679000000002
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.07740976350298133,
+          "warmup_runs": 10
+        },
+        "100_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2329460.108950713,
+          "iterations": 100,
+          "max_ms": 22.296626,
+          "mean_ms": 21.515273529999998,
+          "min_ms": 21.336671000000003,
+          "p50_ms": 21.464201,
+          "p95_ms": 21.968064,
+          "p99_ms": 22.121395,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            21.469372,
+            21.453241000000002,
+            21.391031,
+            21.789644,
+            21.454121,
+            21.457832,
+            21.444021
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.17143959692932387,
+          "warmup_runs": 10
+        },
+        "50_percent_migrated": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2306565.319877016,
+          "iterations": 100,
+          "max_ms": 21.945414,
+          "mean_ms": 21.69653276,
+          "min_ms": 21.533213,
+          "p50_ms": 21.677253,
+          "p95_ms": 21.840314,
+          "p99_ms": 21.897234,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            21.691671999999997,
+            21.668522,
+            21.717333,
+            21.668922,
+            21.676422000000002,
+            21.662702999999997,
+            21.698153
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.07788047312479825,
+          "warmup_runs": 10
+        },
+        "unversioned_control": {
+          "checksum": 2499825000,
+          "input_rows": 50000,
+          "input_rows_per_s": 2582416.532424047,
+          "iterations": 100,
+          "max_ms": 19.681041999999998,
+          "mean_ms": 19.380171339999986,
+          "min_ms": 19.270739,
+          "p50_ms": 19.361710000000002,
+          "p95_ms": 19.523750999999997,
+          "p99_ms": 19.630411,
+          "peak_memory_bytes": 0,
+          "round_medians_ms": [
+            19.337309,
+            19.363409,
+            19.44593,
+            19.338939999999997,
+            19.36912,
+            19.31773,
+            19.35862
+          ],
+          "rows_out": 1,
+          "stddev_ms": 0.08332710940914963,
+          "warmup_runs": 10
+        }
+      },
+      "H_stale_schema_epoch_reject": {
+        "accepted_same_plan": {
+          "iterations": 100,
+          "max_ms": 0.00506,
+          "mean_ms": 0.001939110000000001,
+          "min_ms": 0.00184,
+          "p50_ms": 0.0019,
+          "p95_ms": 0.00195,
+          "p99_ms": 0.00255,
+          "refused": 0,
+          "round_medians_ms": [
+            0.0019,
+            0.0019,
+            0.00191,
+            0.0019,
+            0.0019,
+            0.0019,
+            0.00191
+          ],
+          "stddev_ms": 0.00032112243443895326
+        },
+        "catalog_epoch": 8,
+        "plan_epoch": 7,
+        "rejected": {
+          "iterations": 100,
+          "max_ms": 0.00004,
+          "mean_ms": 0.000030000000000000045,
+          "min_ms": 0.00002,
+          "p50_ms": 0.000029999999999999997,
+          "p95_ms": 0.000029999999999999997,
+          "p99_ms": 0.000029999999999999997,
+          "refused": 100,
+          "round_medians_ms": [
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997,
+            0.000029999999999999997
+          ],
+          "stddev_ms": 1.4142135623730952e-6
+        }
+      }
+    },
+    "write_validation": {
+      "no_schema": {
+        "rows": 20000,
+        "rows_per_commit": 100,
+        "rows_per_s": 44002.44051615884,
+        "seconds": 0.454520244,
+        "slowdown_vs_no_schema": 1.0
+      },
+      "schema": {
+        "rows": 20000,
+        "rows_per_commit": 100,
+        "rows_per_s": 44327.344013217844,
+        "seconds": 0.451188774,
+        "slowdown_vs_no_schema": 0.9926703594746817
+      }
+    }
+  },
+  "setup": {
+    "bench_customer": 100,
+    "bench_orders": 1000,
+    "iterations": 100,
+    "ix_account": 100000,
+    "scale": 1,
+    "warmup_ms": 200
+  },
+  "workloads": {
+    "A_hash_join_topk": {
+      "checksum": 9955,
+      "input_rows": 1100,
+      "input_rows_per_s": 2363390.64913747,
+      "iterations": 100,
+      "max_ms": 0.492803,
+      "mean_ms": 0.46716815000000006,
+      "min_ms": 0.454652,
+      "p50_ms": 0.46543300000000004,
+      "p95_ms": 0.477103,
+      "p99_ms": 0.480833,
+      "peak_memory_bytes": 32352,
+      "round_medians_ms": [
+        0.471112,
+        0.46402200000000005,
+        0.463702,
+        0.465112,
+        0.464533,
+        0.469302,
+        0.474143
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.005859296564221679,
+      "warmup_runs": 429
+    },
+    "B_hash_join_aggregate_topk": {
+      "checksum": 54550,
+      "input_rows": 1100,
+      "input_rows_per_s": 2235763.2692550034,
+      "iterations": 100,
+      "max_ms": 0.509563,
+      "mean_ms": 0.49287628999999994,
+      "min_ms": 0.48342300000000005,
+      "p50_ms": 0.49200199999999994,
+      "p95_ms": 0.500123,
+      "p99_ms": 0.5091530000000001,
+      "peak_memory_bytes": 55975,
+      "round_medians_ms": [
+        0.489673,
+        0.49200199999999994,
+        0.49318300000000004,
+        0.492893,
+        0.491263,
+        0.497213,
+        0.491363
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.0049282374319730175,
+      "warmup_runs": 405
+    },
+    "C_covering_index_eq": {
+      "checksum": 5742223708,
+      "input_rows": 10,
+      "input_rows_per_s": 489955.9039686428,
+      "iterations": 100,
+      "max_ms": 0.024409999999999998,
+      "mean_ms": 0.020445320000000003,
+      "min_ms": 0.020111,
+      "p50_ms": 0.02041,
+      "p95_ms": 0.020679999999999997,
+      "p99_ms": 0.02075,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.0204,
+        0.02041,
+        0.02037,
+        0.020380000000000002,
+        0.02047,
+        0.020380000000000002,
+        0.02043
+      ],
+      "rows_out": 10,
+      "stddev_ms": 0.00041962938124016024,
+      "warmup_runs": 9778
+    },
+    "D_index_range_order_limit": {
+      "checksum": 1052395880,
+      "input_rows": 100,
+      "input_rows_per_s": 991168.6869988404,
+      "iterations": 100,
+      "max_ms": 0.10733100000000001,
+      "mean_ms": 0.10124647000000003,
+      "min_ms": 0.099651,
+      "p50_ms": 0.100891,
+      "p95_ms": 0.10335000000000001,
+      "p99_ms": 0.107251,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        0.100791,
+        0.10068099999999999,
+        0.10017,
+        0.10046,
+        0.10179,
+        0.101531,
+        0.10192999999999999
+      ],
+      "rows_out": 100,
+      "stddev_ms": 0.0013065167083126047,
+      "warmup_runs": 1966
+    },
+    "E_seq_scan_region_eq": {
+      "checksum": 1000,
+      "input_rows": 100000,
+      "input_rows_per_s": 2963247.434716696,
+      "iterations": 100,
+      "max_ms": 41.349404,
+      "mean_ms": 34.148632049999996,
+      "min_ms": 33.543290000000006,
+      "p50_ms": 33.74676,
+      "p95_ms": 35.961282999999995,
+      "p99_ms": 37.979665000000004,
+      "peak_memory_bytes": 0,
+      "round_medians_ms": [
+        34.444854,
+        34.427845,
+        33.731001,
+        33.693921,
+        33.796571,
+        33.681951000000005,
+        33.63992
+      ],
+      "rows_out": 1,
+      "stddev_ms": 1.061005455530709,
+      "warmup_runs": 10
+    }
+  },
+  "write_overhead": {
+    "0_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 42006.58694368151,
+      "seconds": 0.476115806,
+      "slowdown_vs_no_index": 1.0
+    },
+    "1_index": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 23791.13722563793,
+      "seconds": 0.84064918,
+      "slowdown_vs_no_index": 1.7656401434402285
+    },
+    "3_indexes": {
+      "rows": 20000,
+      "rows_per_commit": 100,
+      "rows_per_s": 14138.907684406544,
+      "seconds": 1.41453643,
+      "slowdown_vs_no_index": 2.970992376589993
+    }
+  }
+}

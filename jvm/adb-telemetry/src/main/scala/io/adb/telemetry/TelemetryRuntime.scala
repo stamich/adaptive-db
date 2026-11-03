@@ -33,6 +33,8 @@ final class TelemetryRuntime(
   @volatile private var currentMode: TelemetryMode = TelemetryMode.Off
   /** The registered shapes. */
   val registry: QueryShapeRegistry = new QueryShapeRegistry(maxShapes)
+  /** Per-entity write counters (2.5.4); the gateway records into them while telemetry is on. */
+  val writes: WriteCounters = new WriteCounters()
   /** Pending events. */
   private val queue = new ArrayBlockingQueue[QueryTelemetry](capacity)
   /** Running count of finished queries seen by the sampler (drives the 1-in-N choice). */

@@ -1,6 +1,6 @@
 package io.adb.advisor
 
-import io.adb.telemetry.{QueryShape, ShapeStats, TelemetryRuntime}
+import io.adb.telemetry.{QueryShape, ShapeStats, TelemetryRuntime, WriteStats}
 
 /** All knobs of the advisor.
   *
@@ -53,6 +53,7 @@ final case class AdvisorReport(
   *
   * @param stats     returns the cumulative per-shape counters (see [[Advisor.forTelemetry]])
   * @param shapes    looks a shape up by id
+  * @param writes    returns the cumulative per-entity write counters (2.5.4); empty by default
   * @param config    knobs; also readable afterwards as `advisor.config`
   * @param clock     monotonic clock in nanoseconds (replaceable for tests)
   * @param detectors the detectors to run, in report order (default: all four)
@@ -62,7 +63,8 @@ final class Advisor(
     shapes: Long => Option[QueryShape],
     val config: AdvisorConfig = AdvisorConfig(),
     clock: () => Long = () => System.nanoTime(),
-    detectors: Vector[Detector] = Detectors.all
+    detectors: Vector[Detector] = Detectors.all,
+    writes: () => Vector[WriteStats] = () => Vector.empty
 ):
   private val workload = new WorkloadModel(config.windows)
   private val hysteresis = new Hysteresis(config.confirmAfter, config.withdrawAfter)
@@ -82,7 +84,7 @@ final class Advisor(
     */
   def evaluate(design: PhysicalDesign): AdvisorReport = synchronized {
     val now = clock()
-    workload.observe(stats(), now)
+    workload.observe(stats(), now, writes())
     val snapshot = workload.snapshot()
     val context = DetectorContext(snapshot, shapes, design, config.model, config.detectors)
     val found = detectors.flatMap(_.detect(context))
@@ -100,6 +102,11 @@ final class Advisor(
     latest = Some(report)
     report
   }
+
+  /** The workload over the windows kept now: per-shape deltas and per-entity write figures.
+    * An immutable copy; the actuator reads it to take baselines (2.5.4).
+    */
+  def workloadSnapshot(): WorkloadSnapshot = workload.snapshot()
 
   /** The report of the latest [[evaluate]], if there was one. */
   def lastReport: Option[AdvisorReport] = latest
@@ -120,4 +127,4 @@ final class Advisor(
 object Advisor:
   /** An advisor reading `runtime`'s folded per-shape counters and shape registry (not its queue). */
   def forTelemetry(runtime: TelemetryRuntime, config: AdvisorConfig = AdvisorConfig()): Advisor =
-    new Advisor(() => runtime.allStats(), runtime.registry.get, config)
+    new Advisor(() => runtime.allStats(), runtime.registry.get, config, writes = () => runtime.writes.all())

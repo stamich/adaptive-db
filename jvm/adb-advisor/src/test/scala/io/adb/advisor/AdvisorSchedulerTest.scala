@@ -38,3 +38,19 @@ final class AdvisorSchedulerTest:
 
   @Test def aNonPositivePeriodIsRejected(): Unit =
     assertThrows(classOf[IllegalArgumentException], () => new AdvisorScheduler(advisor, () => PhysicalDesign.empty, 0L))
+
+  @Test def anyTaskCanRunOnTheSameTimer(): Unit =
+    val ticks = new AtomicInteger()
+    val scheduler = new AdvisorScheduler(() => { ticks.incrementAndGet(); () }, 10L)
+    scheduler.start()
+    assertTrue(eventually(ticks.get >= 3), "the generalised timer runs an arbitrary task")
+    scheduler.stop()
+    assertFalse(scheduler.running)
+
+  @Test def aFailingTaskIsReportedThroughTheErrorHandler(): Unit =
+    val errors = new AtomicInteger()
+    val scheduler = new AdvisorScheduler(() => throw new IllegalStateException("boom"), 10L, _ => errors.incrementAndGet())
+    scheduler.start()
+    assertTrue(eventually(errors.get >= 2))
+    scheduler.close()
+

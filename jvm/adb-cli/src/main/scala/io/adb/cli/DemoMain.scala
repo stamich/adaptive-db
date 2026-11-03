@@ -32,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.5.3 - chronological feature tour")
+    banner("Adaptive DB 2.5.4 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -96,6 +96,7 @@ object DemoMain:
       planCachePhase(db)
       telemetryPhase(db)
       advisorPhase(db)
+      actuatorPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -358,6 +359,41 @@ object DemoMain:
     execute(db, "SET advisor = off;")
     println("Feature shown: SET advisor = on|off starts or stops the background evaluation (a timer thread that exists only while it is on).")
     execute(db, "SET telemetry = off;")
+
+  /** Milestone 2.5.4: the AUTO_SAFE actuator (creates a recommended index, measures it, keeps or undoes it).
+    *
+    * The background timer is not used so the output is deterministic: each "round" runs the hot
+    * query 40 times and then calls the controller's tick by hand, exactly as the timer would.
+    */
+  private def actuatorPhase(db: AdaptiveDatabase): Unit =
+    phase("2.5.4", "AUTO_SAFE actuator")
+    db.advisor.reset()
+    def round(label: String): Unit =
+      for _ <- 1 to 40 do db.execute("SELECT id, amount FROM ledger WHERE currency = 'PLN';")
+      db.telemetry.drainNow()
+      val result = db.controller.tick(db.physicalDesign())
+      val events = result.events.map(e => s"${e.event.label} ${e.detail}").mkString("; ")
+      println(s"round $label: ${if events.isEmpty then "no action" else events}")
+    execute(db, "SET adaptive = advisory;")
+    for r <- 1 to 4 do round(s"$r (advisory)")
+    execute(db, "SHOW INDEXES ON ledger;")
+    println("Feature shown: in advisory mode the controller only watches; nothing is created however long the workload runs (the default mode is off).")
+    execute(db, "SET adaptive = auto_safe;")
+    println("Feature shown: auto_safe switches telemetry to full for the time it is on and restores the earlier mode afterwards.")
+    var rounds = 0
+    while rounds < 10 && !db.execute("SHOW INDEXES ON ledger;").rows.exists(_.mkString.contains("adv_")) do
+      rounds += 1
+      round(s"$rounds (auto_safe)")
+    execute(db, "SHOW INDEXES ON ledger;")
+    println("Feature shown: after the advice held for three evaluations the policy gate approved it and the actuator ran CREATE INDEX; the index is owned by the advisor (adv_ prefix).")
+    for r <- 1 to 8 do round(s"verify $r")
+    show(db.showActions())
+    println("Feature shown: the verifier compared rows read per execution before and after the index; a big drop is kept, no drop is rolled back.")
+    show(db.showActionsLog())
+    println("Feature shown: the action log keeps every decision (applied, kept, rolled_back, rejected, failed, adopted).")
+    execute(db, "SET adaptive = off;")
+    execute(db, "DROP INDEX adv_ledger_currency;")
+    println("Feature shown: back to off the controller does nothing; the demo drops its own index so the tour can be repeated.")
 
   /** Renders a table result without echoing a statement. */
   private def show(result: QueryResult): Unit =

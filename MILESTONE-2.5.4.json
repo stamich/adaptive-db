@@ -1,0 +1,42 @@
+{
+  "milestone": "2.5.4",
+  "base": "2.5.3",
+  "engineVersion": "2.5.4",
+  "nativeAbi": 9,
+  "scope": "auto-safe-actuator",
+  "changesEngine": false,
+  "engineChange": "none; version strings only. C ABI 9, plan wire v4 and data format 4 are unchanged",
+  "versioning": "three components, so the Cargo crates are 2.5.4",
+  "newFeatures": [
+    "set-adaptive-off-advisory-auto-safe",
+    "policy-gate-with-11-rejection-reasons",
+    "policy-and-budget",
+    "create-index-analyze-drop-index-actions",
+    "ownership-registry-and-owned-only-actuator",
+    "adv-index-adoption-after-restart",
+    "build-guard",
+    "baseline-and-effectiveness-verifier",
+    "write-cost-check",
+    "per-entity-write-counters",
+    "rollback-and-flap-guard",
+    "idle-index-retirement",
+    "action-log",
+    "actions-shell-command"
+  ],
+  "notIncluded": [
+    "online-index-build",
+    "persisted-ownership-registry-and-action-log",
+    "join-projection-actions",
+    "partition-actions",
+    "composite-and-covering-index-candidates",
+    "dropping-a-users-index",
+    "jvm-benchmarkmain-on-reference-machine"
+  ],
+  "docs": [
+    "docs/milestone-2.5.4.md",
+    "docs/actuator.md",
+    "docs/telemetry.md",
+    "docs/advisor.md",
+    "docs/invariants.md"
+  ]
+}

@@ -1,5 +1,6 @@
 package io.adb.benchmark
 
+import io.adb.actuator.{ActionKind, ActionState, AdaptiveMode}
 import io.adb.advisor.{Advisor, AdvisorConfig, CreateIndex}
 import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.{NativeDatabase, NativeException}
@@ -16,7 +17,7 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.5.3 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
+/** Milestone 2.5.4 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
   * the tables are created in the engine catalog, so every row read goes through its schema).
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
@@ -91,6 +92,10 @@ object WorkloadBenchmark:
   val WorkloadD: String = "SELECT id, balance FROM ix_account WHERE balance >= 10000000 ORDER BY balance LIMIT 100"
   /** Workload E (control): no index on `region`, so a sequential scan with a filter. */
   val WorkloadE: String = "SELECT COUNT(*) FROM ix_account WHERE region = 7"
+  /** One single-row write that touches no indexed column (Milestone 2.5.4): the statement the
+    * write-counter allocation budget is measured on.
+    */
+  val WriteProbe: String = "UPDATE ix_account SET note = 'probe' WHERE id = 1"
   /** Fractions of `ix_account` the selectivity sweep selects by a balance range. */
   val SweepFractions: Vector[Double] = Vector(0.0001, 0.001, 0.01, 0.05, 0.2, 0.5)
 
@@ -168,7 +173,7 @@ object WorkloadBenchmark:
         points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
       }
       val report = obj(
-        "milestone" -> str("2.5.3"),
+        "milestone" -> str("2.5.4"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
@@ -184,7 +189,8 @@ object WorkloadBenchmark:
         "planner" -> plannerSection(timer),
         "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights),
         "telemetry" -> telemetrySection(db),
-        "advisor" -> advisorSection(db)
+        "advisor" -> advisorSection(db),
+        "actuator" -> actuatorSection(db)
       )
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
@@ -192,7 +198,8 @@ object WorkloadBenchmark:
 
   /** Telemetry cost of workload C through the whole SQL path (Milestone 2.5.2.1): the bytes the
     * calling thread allocates per execution with telemetry off, skipped by the sampler and
-    * captured, and the rows read a capture reports.
+    * captured, and the rows read a capture reports. Since 2.5.4 it also reports the bytes a
+    * single-row write allocates with the per-entity write counters off and on.
     *
     * Allocation, unlike time, does not depend on the machine's load, so
     * `scripts/check-benchmarks.py` can hold the numbers to a budget: a skipped query adds
@@ -220,7 +227,22 @@ object WorkloadBenchmark:
       val (off, skip, capture) = (figures.map(_._1).min, figures.map(_._2).min, figures.map(_._3).min)
       db.telemetry.drainNow()
       val perExecution = db.telemetry.allStats().map(s => s.totalRowsRead.toDouble / math.max(1L, s.executions))
+      // The write counters (2.5.4) are measured the same way on one single-row update.
+      def writeAllocated(mode: String): Double =
+        db.execute(s"SET telemetry = $mode")
+        for _ <- 0 until 1000 do db.execute(WriteProbe)
+        val before = threads.getCurrentThreadAllocatedBytes
+        var i = 0
+        while i < runs do { db.execute(WriteProbe); i += 1 }
+        (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
+      val writeFigures = (0 until 6).map(_ => (writeAllocated("off"), writeAllocated("full")))
+      val (writeOff, writeOn) = (writeFigures.map(_._1).min, writeFigures.map(_._2).min)
       obj(
+        "write_query" -> str("update_single_row"),
+        "write_alloc_bytes_off" -> num(writeOff),
+        "write_alloc_bytes_counted" -> num(writeOn),
+        "write_alloc_extra_counted" -> num(writeOn - writeOff),
+        "write_statements_counted" -> num(db.telemetry.writes.all().map(_.statements).sum.toDouble),
         "query" -> str("C_covering_index_eq"),
         "runs" -> num(runs.toLong),
         "alloc_bytes_off" -> num(off),
@@ -272,6 +294,100 @@ object WorkloadBenchmark:
         "evaluate_us_min" -> num(evaluateNanos.result().min / 1000.0)
       )
     finally db.execute("SET telemetry = off")
+
+  /** What the 2.5.4 actuator does, end to end, on two small tables (Milestone 2.5.4).
+    *
+    * `act_orders` is filtered on a selective column (20 customers over 5 000 rows), so the index the
+    * advisor builds cuts the rows a query reads twentyfold and must be kept. `act_events` is filtered
+    * on a column that is the same in every row, so its index cannot help and must be rolled back, and
+    * the same target must then be refused during the rollback cooldown. The tables are small on
+    * purpose: `CREATE INDEX` stalls the database for the whole build (about 30 us per row).
+    *
+    * The figures are counts and exact engine counters, not times, so `scripts/check-benchmarks.py`
+    * holds them exactly: actions applied, kept, rolled back and rejected, the rows read per execution
+    * before and after, the user's indexes unchanged, and nothing done while the mode is off or
+    * advisory. The mean cost of one controller tick is reported for information.
+    */
+  private def actuatorSection(db: AdaptiveDatabase): String =
+    val rows = 5000
+    db.execute("CREATE TABLE act_orders (id BIGINT PRIMARY KEY, customer_id BIGINT NOT NULL, amount BIGINT NOT NULL)")
+    db.execute("CREATE TABLE act_events (id BIGINT PRIMARY KEY, flag BIGINT NOT NULL, amount BIGINT NOT NULL)")
+    for i <- 1 to rows do
+      db.execute(s"INSERT INTO act_orders (id, customer_id, amount) VALUES ($i, ${1 + i % 20}, ${i * 3})")
+      db.execute(s"INSERT INTO act_events (id, flag, amount) VALUES ($i, 1, ${i * 3})")
+    val byCustomer = (n: Int) => s"SELECT id, amount FROM act_orders WHERE customer_id = ${1 + n % 20}"
+    val byFlag = (n: Int) => s"SELECT id FROM act_events WHERE flag = 1 AND amount = ${3 * (1 + n % rows)}"
+    val mixed = (n: Int) => if n % 2 == 0 then byFlag(n) else byCustomer(n)
+    def indexes(): Vector[String] = db.execute("SHOW INDEXES").rows.map(_.head.toString)
+    def userIndexes(): Int = indexes().count(!_.startsWith("adv_"))
+    def tick(): Unit =
+      db.telemetry.drainNow()
+      db.controller.tick(db.physicalDesign())
+    def round(sql: Int => String): Unit =
+      for n <- 1 to 100 do db.execute(sql(n))
+      tick()
+    /** Cumulative (rows read, executions) of every shape that reads the table of `sql`. */
+    def rowsRead(sql: String): (Long, Long) =
+      db.telemetry.drainNow()
+      val entity = entityId(db, sql)
+      val mine = db.telemetry.allStats().filter(st => db.telemetry.registry.get(st.shapeId).exists(_.entities.contains(entity)))
+      (mine.map(_.totalRowsRead).sum, mine.map(_.executions).sum)
+
+    val userBefore = userIndexes()
+    db.execute("SET telemetry = full")
+    try
+      // Off and advisory: nothing may happen however long the workload runs.
+      for _ <- 1 to 6 do round(mixed)
+      db.controller.mode = AdaptiveMode.Advisory
+      for _ <- 1 to 6 do round(mixed)
+      val idleActions = db.controller.actions.size + db.controller.log.size
+      // auto_safe, from a fresh model so the hysteresis counts three evaluations afresh.
+      db.advisor.reset()
+      db.controller.mode = AdaptiveMode.AutoSafe
+      round(mixed)                                        // baseline of the model
+      var built = false
+      var rowsBefore = (0L, 0L)
+      var rounds = 0
+      while !built && rounds < 12 do
+        round(mixed); rounds += 1
+        built = indexes().contains("adv_act_orders_customer_id")
+        if built then rowsBefore = rowsRead(byCustomer(1))
+      val atBuild = rowsRead(byCustomer(1))
+      for _ <- 1 to 8 do round(mixed)                     // verification windows, then the rollback cooldown
+      val after = rowsRead(byCustomer(1))
+      val perExecBefore = rowsBefore._1.toDouble / math.max(1L, rowsBefore._2)
+      val perExecAfter = (after._1 - atBuild._1).toDouble / math.max(1L, after._2 - atBuild._2)
+      val actions = db.controller.actions
+      val events = db.controller.log.entries.map(_.event.label)
+      val tickNanos = (0 until 20).map { _ =>
+        db.telemetry.drainNow()
+        val start = System.nanoTime()
+        db.controller.tick(db.physicalDesign())
+        System.nanoTime() - start
+      }
+      obj(
+        "table_rows" -> num(rows.toLong),
+        "idle_actions" -> num(idleActions.toLong),
+        "actions_applied" -> num(events.count(_ == "applied").toLong),
+        "actions_kept" -> num(actions.count(a => a.kind == ActionKind.CreateIndex && a.state == ActionState.Kept).toLong),
+        "actions_rolled_back" -> num(actions.count(a => a.kind == ActionKind.CreateIndex && a.state == ActionState.RolledBack).toLong),
+        "actions_rejected" -> num(events.count(_ == "rejected").toLong),
+        "actions_failed" -> num(events.count(_ == "failed").toLong),
+        "rows_read_per_execution_before" -> num(perExecBefore),
+        "rows_read_per_execution_after" -> num(perExecAfter),
+        "user_indexes_before" -> num(userBefore.toLong),
+        "user_indexes_after" -> num(userIndexes().toLong),
+        "advisor_indexes_after" -> num(indexes().count(_.startsWith("adv_")).toLong),
+        "tick_us_mean" -> num(tickNanos.sum.toDouble / tickNanos.size / 1000.0)
+      )
+    finally
+      db.controller.mode = AdaptiveMode.Off
+      db.execute("SET telemetry = off")
+
+  /** The id of the entity `sql` reads (its single table). */
+  private def entityId(db: AdaptiveDatabase, sql: String): Long =
+    val table = "(?i)\\bfrom\\s+(\\w+)".r.findFirstMatchIn(sql).get.group(1)
+    db.catalog.entities.find(_.name.equalsIgnoreCase(table)).get.id.value
 
   /** The access path cost mode chose for the first relation of `sql` (`entity_scan` when no
     * index was a candidate, so no access decision was recorded).

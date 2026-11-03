@@ -225,3 +225,22 @@ Each invariant names the test that guards it.
 72. The first evaluation, and one after a counter reset, are baselines: telemetry counters since the
     process started are never read as one window. *(WorkloadModelTest)*
 73. With the advisor off (the default) there is no advisor thread. *(AdvisorSchedulerTest, AdvisorSmoke)*
+
+## AUTO_SAFE actuator (2.5.4)
+
+74. `off` is the default, and with it there is no actuator thread and no state change on any query.
+    *(AdaptiveControllerTest, ActuatorSmoke)*
+75. `advisory` never runs a statement; only `auto_safe` does. *(AdaptiveControllerTest, ActuatorSmoke)*
+76. The actuator runs `CREATE INDEX`, `ANALYZE` and `DROP INDEX`, and nothing else. *(ActionTest, RollbackPlannerTest)*
+77. A `DROP INDEX` reaches the engine only for an index in the ownership registry, checked twice
+    (`OwnershipRegistry.mayDrop` and `OwnedOnlyActuator`); a user's index is never dropped.
+    *(OwnershipRegistryTest, RollbackPlannerTest, ActuatorSmoke, check-benchmarks.py)*
+78. At most one action is approved per tick and at most one build runs at a time. *(AdaptiveControllerTest, BuildGuardTest)*
+79. The gate returns the same rejection reason for the same input, checked in a fixed order, and a
+    rejection is logged once per target and reason. *(PolicyGateTest, AdaptiveControllerTest)*
+80. An action is kept only on evidence of fewer rows read per execution, measured over windows that
+    started after it was applied; time can only veto beyond the tolerance. *(EffectivenessVerifierTest, BaselineTest)*
+81. A rolled-back target waits longer each time (doubling, capped at 8x), and an index a person
+    dropped is not rebuilt. *(FlapGuardTest, AdaptiveControllerTest, ActuatorSmoke)*
+82. A query returns the same rows in every mode, with or without the advisor's indexes.
+    *(ActuatorSmoke)*

@@ -2,6 +2,7 @@ package io.adb.advisor
 
 import io.adb.catalog.{IndexInfo, IndexKeyColumn}
 import io.adb.model.*
+import io.adb.telemetry.WriteStats
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -28,3 +29,9 @@ final class PhysicalDesignTest:
     assertEquals(Some(orders), design.entity(7L))
     assertEquals(None, design.entity(8L))
     assertTrue(PhysicalDesign.empty.entities.isEmpty)
+
+  @Test def writeFiguresAreOptionalAndCarried(): Unit =
+    assertTrue(orders.writes.isEmpty, "an entity telemetry has not seen written has no figures")
+    val written = orders.copy(writes = Some(WriteStats(7L, 10L, 10L, 900L)))
+    assertEquals(90.0, written.writes.get.meanNanos)
+
