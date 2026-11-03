@@ -62,4 +62,14 @@ final class ProfileRendererTest:
         |"children":[{"operator":"entity_scan","rows_out":40},{"operator":"filter","rows_out":3,
         |"children":[{"operator":"entity_scan","rows_out":100}]}]}}""".stripMargin
     assertEquals(140L, ProfileRenderer.rowsScanned(json))
-    assertEquals(9L, ProfileRenderer.rowsScanned("""{"root":{"operator":"point_lookup","rows_out":9}}"""))
+    assertEquals(140L, ProfileRenderer.rowsScannedExact(json))
+    val point = """{"root":{"operator":"point_lookup","rows_out":9}}"""
+    assertEquals(9L, ProfileRenderer.rowsScanned(point))
+    assertEquals(9L, ProfileRenderer.rowsScannedExact(point))
+    // An index scan under a row fetch under a project, with counters in between.
+    val indexed =
+      """{"root":{"node_id":0,"operator":"project","rows_out":3,"children":[{"node_id":1,"operator":"row_fetch","rows_out":3,
+        |"counters":{"rows_fetched":3},"children":[{"node_id":2,"operator":"index_scan","rows_out":25,"counters":{"pages":2}}]}]}}""".stripMargin
+    assertEquals(25L, ProfileRenderer.rowsScanned(indexed))
+    assertEquals(25L, ProfileRenderer.rowsScannedExact(indexed))
+    assertEquals(0L, ProfileRenderer.rowsScanned("""{"root":{"operator":"limit","rows_out":4}}"""))

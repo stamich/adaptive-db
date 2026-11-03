@@ -46,6 +46,8 @@ object TelemetrySmoke:
       check(stats.size == 2, "five point queries with different literals are one shape, the join another")
       val pointStats = stats.find(_.executions >= 5).get
       check(pointStats.totalRowsRead >= pointStats.totalActualRows && pointStats.maxNanos > 0, "events carry rows returned, rows read and time")
+      check(stats.forall(_.totalRowsRead > 0), "every captured shape reports the rows its scans read (scan operator names match the engine's profile)")
+      check(stats.exists(s => s.totalRowsRead > s.totalActualRows * 2), "scan amplification is visible: a join reads more rows than it returns")
       check(stats.exists(_.cacheHits >= 1), "a repeated statement is recorded as a plan-cache hit")
       check(t.registry.size == 2, "each shape is registered once")
 

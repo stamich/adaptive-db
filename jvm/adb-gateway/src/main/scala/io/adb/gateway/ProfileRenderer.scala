@@ -65,11 +65,41 @@ object ProfileRenderer:
       f"index access: $pages pages, $examined entries examined, $returned returned ($visible%.0f%% visible)$fetch"
     }
 
-  /** Rows produced by the leaf operators (the scans) of a profile: the rows the statement read
-    * from storage, before filters and joins above them. Parsing the profile costs microseconds,
-    * so the gateway does it only for sampled queries.
+  /** Operator names that read storage and have no inputs (the leaves of every plan). */
+  private val ScanOperators = Set("entity_scan", "index_scan", "point_lookup", "scan")
+
+  /** Rows produced by the scan operators of a profile: the rows the statement read from
+    * storage, before filters and joins above them.
+    *
+    * This is a **scanner, not a JSON parse**: it walks the text once, finds each
+    * `"operator":"<name>"`, and for a scan reads the `"rows_out"` number that follows. Parsing the
+    * whole document costs about 16 µs for a small profile, which would triple the cost of a
+    * captured point query; the scan is a small fraction of that. [[rowsScannedExact]] is the
+    * reference implementation the tests compare it with.
     */
   def rowsScanned(json: String): Long =
+    val marker = "\"operator\":\""
+    val rows = "\"rows_out\":"
+    var total = 0L
+    var at = json.indexOf(marker)
+    while at >= 0 do
+      val nameStart = at + marker.length
+      val nameEnd = json.indexOf('"', nameStart)
+      val next = json.indexOf(marker, nameEnd)
+      if nameEnd > 0 && ScanOperators.contains(json.substring(nameStart, nameEnd)) then
+        val r = json.indexOf(rows, nameEnd)
+        if r >= 0 && (next < 0 || r < next) then
+          var i = r + rows.length
+          var n = 0L
+          while i < json.length && json.charAt(i) >= '0' && json.charAt(i) <= '9' do
+            n = n * 10 + (json.charAt(i) - '0')
+            i += 1
+          total += n
+      at = next
+    total
+
+  /** The same total computed by parsing the document and summing `rows_out` over its leaves. */
+  def rowsScannedExact(json: String): Long =
     /** Sum of `rows_out` over the leaves under `node`. */
     def leaves(node: Any): Long =
       val operator = node.asInstanceOf[Map[String, Any]]
