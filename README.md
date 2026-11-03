@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.2.1
+# Adaptive DB — Milestone 2.5.3
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -15,7 +15,43 @@ cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.
 evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
 projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
-2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1).
+2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1) and, since 2.5.3, a workload advisor that recommends indexes and `ANALYZE` from that telemetry (it never acts).
+
+## What 2.5.3 adds
+
+2.5.3 adds a **workload advisor** in a new JVM module, `adb-advisor`. It reads what telemetry
+captured, finds problems the physical design could fix and says so. It changes nothing in the
+engine: the **C ABI stays 9**, plan wire v4 and data format 4 are the same, and no data migration
+is needed.
+
+| Area | 2.5.2.1 | 2.5.3 |
+|---|---|---|
+| Use of telemetry | counters and shapes to read by hand (`\telemetry shapes`) | **workload model**: a bounded ring of time windows (deltas), so an old workload stops looking hot |
+| Findings | none | four detectors: **hot query**, **scan amplification**, **hot join**, **cardinality error** |
+| Advice | none | `CREATE INDEX` (heuristic cost-benefit score against one table scan to build it), `ANALYZE` (never analyzed, stale statistics), and information (hot joins, estimates off with fresh statistics) |
+| Stability | — | hysteresis: shown after 3 evaluations in a row, withdrawn after 3 misses, withdrawn at once when applied |
+| History | — | bounded **audit log** of every confirmed, withdrawn and applied recommendation |
+| SQL / shell | `SET telemetry`, `\telemetry` | `SET advisor = on \| off`; `\advice`, `\advice log` |
+| Acting | — | **never**: the advisor only recommends; it reads immutable snapshots and has no handle to the engine |
+| Version | 2.5.2.1 | engine, crates, JVM build and scripts **2.5.3** |
+| Tests | 417 Rust, 237 JVM | **417 Rust, 279 JVM**, plus the five JVM smoke tests |
+
+```sql
+SET telemetry = sampled;         -- the advisor reads telemetry
+-- ... run the workload ...
+\advice
+-- for example: index | create an index on orders(customer_id) (benefit/cost 12.4) | CREATE INDEX adv_orders_customer_id ON orders (customer_id)
+```
+
+The design, the cost formula, the limits (sampled evidence, no write telemetry, single-column
+candidates) and what is checked are in [docs/advisor.md](docs/advisor.md); what was done and left
+out is in [docs/milestone-2.5.3.md](docs/milestone-2.5.3.md).
+
+**Upgrading from 2.5.2.1:** rebuild the JVM modules; the native library is unchanged except for
+its version string. The advisor is off until `SET advisor = on` (or `\advice` is run by hand) and
+needs `SET telemetry = sampled | full` to see queries.
+
+**Numbering:** 2.5.3 has three components, so the Cargo crates are `2.5.3` again.
 
 ## What 2.5.2.1 adds
 
@@ -302,9 +338,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.2.1.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.3.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.2.1 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.3 through the JVM CLI
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
@@ -322,7 +358,8 @@ needs access to Maven Central. The Java FFM → Rust path is also checked withou
 `examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
 checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
 and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`
-and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`.
+and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`
+and (advisor, 2.5.3, [docs/advisor.md](docs/advisor.md)) `examples/jvm-advisor-smoke/run.sh`.
 
 ## Repository layout
 
@@ -330,12 +367,12 @@ and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `exam
 crates/        Rust engine (core, journal, page, buffer, btree, storage, schema, wal, tx, index,
                execution, plan-wire, stats, change-log, projection-runtime, engine, ffi) and the adb-migrate tool
 include/adb.h  C ABI v9
-jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), SQL, binder, optimizer
-               (estimation, cost, join order, access paths), physical planning, FFM, gateway,
-               CLI, benchmark
+jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), plan cache, telemetry,
+               advisor, SQL, binder, optimizer (estimation, cost, join order, access paths), physical planning, FFM,
+               gateway, CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC, consistency, plan-cache and telemetry smoke tests, results
+examples/      Rust demo and benchmark, JVM CDC, consistency, plan-cache, telemetry and advisor smoke tests, results
 demo/          feature tour through the JVM CLI
 docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap

@@ -1,4 +1,4 @@
-# Architecture — Milestone 2.5.0
+# Architecture — Milestone 2.5.3
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
 storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a
@@ -293,3 +293,13 @@ once when the plan is made and stored in the cached plan). A finished query asks
 captured one builds a small event and offers it to a bounded queue that never blocks, and a
 sleeping worker folds events into per-shape statistics. Nothing below the gateway changes. See
 [telemetry.md](telemetry.md).
+
+## Workload advisor (Milestone 2.5.3)
+
+The module `adb-advisor` turns telemetry into advice. A workload model closes one time window per
+evaluation (deltas of the per-shape counters); four detectors (hot query, scan amplification, hot
+join, cardinality error) look at the windows and a `PhysicalDesign` the gateway builds from the
+catalog, the engine statistics and the index catalog; a heuristic cost-benefit score gates index
+candidates; hysteresis keeps the advice stable; an audit log records what was advised. The advisor
+only recommends (`CREATE INDEX`, `ANALYZE`, or information) and reads immutable values, never the
+telemetry queue. Nothing below the gateway changes. See [advisor.md](advisor.md).

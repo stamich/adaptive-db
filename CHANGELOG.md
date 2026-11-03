@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.2.1. Hardened patch releases preserve the functional scope of
+Milestone 2.5.3. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,41 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.3 — Workload model and advisor
+
+A new JVM module, `adb-advisor`, turns telemetry into advice. It only recommends: it never runs a
+statement. No engine change: the C ABI stays 9, plan wire v4 and data format 4 are unchanged, and
+no data migration is needed. Design, limits and what was left out: `docs/advisor.md`,
+`docs/milestone-2.5.3.md`.
+
+### Added
+- `WorkloadModel`: a bounded ring of time windows holding deltas of the per-shape telemetry
+  counters; the first evaluation and a counter reset are baselines.
+- Detectors: hot query, scan amplification (index on the first unindexed filter column of a
+  single-table shape), hot join, cardinality error (`ANALYZE` when statistics are missing or stale).
+- `CostBenefitModel`: wasted share of a shape's time projected to a horizon, against one table scan
+  to build the index plus a maintenance share; all parameters configurable.
+- `Hysteresis` (3 evaluations in, 3 out, applied advice withdrawn at once) and a bounded
+  `AuditLog`.
+- `Advisor`, `AdvisorReport`, `AdvisorScheduler` (one daemon thread, only while on) and
+  `PhysicalDesign`, built by `AdaptiveDatabase.physicalDesign()` from the catalog, the engine
+  statistics and the index catalog.
+- SQL `SET advisor = on | off`; shell `\advice` and `\advice log`.
+- `examples/jvm-advisor-smoke`; an `advisor` section in the JVM workload report, checked exactly by
+  `check-benchmarks.py`; `advisor_evaluate_50_shapes` in `BenchmarkMain`; a 2.5.3 phase in the
+  feature tour.
+
+### Changed
+- The Cargo crates are `2.5.3` again (they stayed at `2.5.2` during 2.5.2.1); the engine version
+  string, the JVM build, the scripts and the reports say `2.5.3`.
+- The unknown-setting message lists `advisor`.
+
+### Notes
+- Evidence is sampled telemetry and covers SELECT only; the write cost of an index is a flat factor.
+  Candidates are single leading columns. Join-projection and partition findings are informational.
+- Not verified here: Gradle (CI runs it), advice quality on real workloads, the reference-machine
+  `BenchmarkMain` and `compare-write-path.sh` runs.
 
 ## 2.5.2.1 — Telemetry capture path
 

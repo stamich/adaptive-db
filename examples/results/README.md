@@ -4,6 +4,19 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+## Milestone 2.5.3 workload advisor
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.5.3-database.json, 2.5.3-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.3-database.json examples/results/2.5.3-ffi.json
+```
+
+The JVM report has a new `advisor` section (workload E: an unindexed filter reading every row to
+return one). `check-benchmarks.py` checks its counts exactly: no advice after two evaluations, an
+index on `ix_account(region)` after three, an unchanged index count, a non-empty audit log. No
+reference-machine results of 2.5.3 are kept here yet; the engine is the same as in 2.5.2.1, so the
+files `2.5.2.1-*.json` below still describe it.
+
 ## Milestone 2.5.2.1 telemetry capture path
 
 ```bash
