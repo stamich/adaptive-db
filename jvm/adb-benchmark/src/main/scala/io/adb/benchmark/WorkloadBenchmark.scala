@@ -91,6 +91,10 @@ object WorkloadBenchmark:
   val WorkloadD: String = "SELECT id, balance FROM ix_account WHERE balance >= 10000000 ORDER BY balance LIMIT 100"
   /** Workload E (control): no index on `region`, so a sequential scan with a filter. */
   val WorkloadE: String = "SELECT COUNT(*) FROM ix_account WHERE region = 7"
+  /** One single-row write that touches no indexed column (Milestone 2.5.4): the statement the
+    * write-counter allocation budget is measured on.
+    */
+  val WriteProbe: String = "UPDATE ix_account SET note = 'probe' WHERE id = 1"
   /** Fractions of `ix_account` the selectivity sweep selects by a balance range. */
   val SweepFractions: Vector[Double] = Vector(0.0001, 0.001, 0.01, 0.05, 0.2, 0.5)
 
@@ -192,7 +196,8 @@ object WorkloadBenchmark:
 
   /** Telemetry cost of workload C through the whole SQL path (Milestone 2.5.2.1): the bytes the
     * calling thread allocates per execution with telemetry off, skipped by the sampler and
-    * captured, and the rows read a capture reports.
+    * captured, and the rows read a capture reports. Since 2.5.4 it also reports the bytes a
+    * single-row write allocates with the per-entity write counters off and on.
     *
     * Allocation, unlike time, does not depend on the machine's load, so
     * `scripts/check-benchmarks.py` can hold the numbers to a budget: a skipped query adds
@@ -220,7 +225,22 @@ object WorkloadBenchmark:
       val (off, skip, capture) = (figures.map(_._1).min, figures.map(_._2).min, figures.map(_._3).min)
       db.telemetry.drainNow()
       val perExecution = db.telemetry.allStats().map(s => s.totalRowsRead.toDouble / math.max(1L, s.executions))
+      // The write counters (2.5.4) are measured the same way on one single-row update.
+      def writeAllocated(mode: String): Double =
+        db.execute(s"SET telemetry = $mode")
+        for _ <- 0 until 1000 do db.execute(WriteProbe)
+        val before = threads.getCurrentThreadAllocatedBytes
+        var i = 0
+        while i < runs do { db.execute(WriteProbe); i += 1 }
+        (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
+      val writeFigures = (0 until 6).map(_ => (writeAllocated("off"), writeAllocated("full")))
+      val (writeOff, writeOn) = (writeFigures.map(_._1).min, writeFigures.map(_._2).min)
       obj(
+        "write_query" -> str("update_single_row"),
+        "write_alloc_bytes_off" -> num(writeOff),
+        "write_alloc_bytes_counted" -> num(writeOn),
+        "write_alloc_extra_counted" -> num(writeOn - writeOff),
+        "write_statements_counted" -> num(db.telemetry.writes.all().map(_.statements).sum.toDouble),
         "query" -> str("C_covering_index_eq"),
         "runs" -> num(runs.toLong),
         "alloc_bytes_off" -> num(off),

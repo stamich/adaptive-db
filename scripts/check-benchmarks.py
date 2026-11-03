@@ -14,6 +14,8 @@ a slow consumer overtakes it and marks it as needing a rebuild.
 The telemetry section (2.5.2.1) holds the allocation of a skipped and of a captured query to a
 budget (allocation, unlike time, does not depend on the load of the machine) and requires a
 captured query to report the rows read.
+Since 2.5.4 the same section holds a write statement to an allocation budget too: the per-entity
+write counters add (almost) nothing to it.
 The advisor section (2.5.3) must show the hysteresis at work (no advice after two evaluations,
 an index on the filtered column after three), an unchanged number of indexes and a non-empty
 audit log; these are counts, so they are checked exactly.
@@ -75,6 +77,11 @@ def check_telemetry(ffi: dict, check) -> None:
     check(section["alloc_extra_capture"] <= 512,
           f"telemetry: a captured query allocates {section['alloc_extra_capture']:.0f} extra bytes (budget 512)")
     check(section["captured_rows_read_per_execution"] > 0, "telemetry: a captured query reports no rows read")
+    # Write counters (2.5.4): counting a write is one map lookup and three adder increments, so a
+    # counted write allocates no more than an uncounted one beyond a small constant.
+    check(section["write_alloc_extra_counted"] <= 64,
+          f"telemetry: a counted write allocates {section['write_alloc_extra_counted']:.0f} extra bytes (budget 64)")
+    check(section["write_statements_counted"] > 0, "telemetry: no write was counted while telemetry was on")
 
 
 def check_advisor(ffi: dict, check) -> None:
