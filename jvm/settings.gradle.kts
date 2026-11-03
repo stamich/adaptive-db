@@ -9,6 +9,7 @@ include(
     "adb-plan-cache",
     "adb-telemetry",
     "adb-advisor",
+    "adb-actuator",
     "adb-sql",
     "adb-logical-plan",
     "adb-optimizer",

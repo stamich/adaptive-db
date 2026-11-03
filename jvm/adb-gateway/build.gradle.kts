@@ -23,6 +23,7 @@ dependencies {
     api(project(":adb-consistency"))
     api(project(":adb-optimizer"))
     api(project(":adb-advisor"))
+    api(project(":adb-actuator"))
     api(project(":adb-physical-plan"))
     implementation(project(":adb-native"))
 }
