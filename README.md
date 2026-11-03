@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.4.0
+# Adaptive DB — Milestone 2.5.0
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -11,10 +11,42 @@ operator will do and measures what it actually did.
 
 This repository implements the V1 core: a single-node transactional engine with history, a native
 change stream, relational query execution (joins, aggregation, sorting), statistics and a
-cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.3.0) and, since
-2.4.0, schema evolution: versioned schemas owned by the engine and changed without rewriting rows.
+cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.3.0), schema
+evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
+2.5.0, a global commit order, a change log derived from the canonical log, a registry of
+projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`).
 
-## What 2.4.0 adds
+## What 2.5.0 adds
+
+| Area | 2.4.0 | 2.5.0 |
+|---|---|---|
+| Commit order | commit timestamps | + **`CommitSeq`**: one number per commit, shared by data and DDL commits, stored in the log record; `Database::commit` returns a `CommitResult` |
+| Change log | — | **derived from the canonical log**: envelopes per commit in CRC-framed segments, appended before the number is published, fsynced at checkpoint and close, **rebuilt from the log** when missing or damaged; cursors, retention by consumers, size, age and lag |
+| Projections | implicit | a **registry** with state (`Building`, `Ready`, `NeedsRebuild`, `Failed`), frontier, lag and consumption rate; `wait_until`; the current rows and indexes are registered as synchronous projections; asynchronous consumers can register and be fed from the change log |
+| Consistency | every read sees every commit | **session tokens** (the commit number of a session's last write) and `SET SESSION CONSISTENCY STRONG \| READ_YOUR_WRITES \| BOUNDED n MS\|COMMITS \| EVENTUAL`; a freshness resolver decides per index whether it may serve the read, must be waited for or must be bypassed |
+| Planner | indexes always usable | access paths filtered by freshness; EXPLAIN **Read context** section; a wait that times out re-plans without the index |
+| Shell | SQL | + `\session`, `\projections`, `\changes [after] [max]` |
+| Storage | data format 3 | **data format 4**, upgraded in place from format 3 (nothing rewritten) |
+| Boundary | C ABI 7 | **C ABI 8** (`adb_latest_commit_seq`, `*_commit` mutations, change-log cursors, projection registry); plan wire stays v4 |
+| Version | 2.4.0 | engine, crates and JVM build **2.5.0** |
+| Tests | 320 Rust, 159 JVM | **413 Rust, 201 JVM**, plus fuzzing of the change log and an end-to-end smoke through the real library |
+
+How the 2.5.0 proposal was implemented, and why: [docs/milestone-2.5.0.md](docs/milestone-2.5.0.md).
+The change log and projections: [docs/change-log.md](docs/change-log.md). Consistency levels, tokens
+and the freshness decision: [docs/consistency.md](docs/consistency.md). Robustness review:
+[docs/security-review-2.5.0.md](docs/security-review-2.5.0.md).
+
+**Upgrading from 2.4.0:** nothing to do. The engine upgrades the data directory to format 4 in
+place on open (commits of the old log are numbered by their timestamps) and builds the change log
+from the log the first time. 2.5.0 does not change the semantics of any existing statement: indexes
+are still maintained inside the commit, so every level reads the same rows until a later milestone
+makes projections asynchronous. Benchmarks I–O (`scripts/benchmark-db.sh`) measure the new
+machinery; on the Ryzen 9 5950X workloads A–E stay within 1–2 % of 2.4.0, the change log streams
+511,000 commits/s, a following projection is reached in 0.11 ms (p50) and an open that rebuilds the
+change log from the log takes 69 ms against 20 ms with an intact one
+([examples/results/README.md](examples/results/README.md)).
+
+## What 2.4.0 added
 
 | Area | 2.3.0 | 2.4.0 |
 |---|---|---|
@@ -70,8 +102,8 @@ Recorded runs and how to read them: [examples/results/README.md](examples/result
 
 ```text
 SQL -> Scala: parse -> bind (slots, engine catalog at epoch E) -> logical plan -> rules -> join order
-              -> physical plan (access paths, estimates, cost, decisions) <- statistics, indexes <- C ABI v7
-    -> plan wire v4 JSON {schema_epoch: E} -> Java FFM -> C ABI v7 -> Rust: check epoch -> validate
+              -> physical plan (access paths, estimates, cost, decisions) <- statistics, indexes <- C ABI v8
+    -> plan wire v4 JSON {schema_epoch: E} -> Java FFM -> C ABI v8 -> Rust: check epoch -> validate
                                                      -> operators (rows adapted to E) -> batch v2
                                                      -> runtime profile JSON (node ids)
 
@@ -81,13 +113,16 @@ SQL -> Scala: parse -> bind (slots, engine catalog at epoch E) -> logical plan -
   read:   snapshot over current + version projections; EntityScan = key-range scan in PK order;
           IndexScan = versioned index entries at the snapshot, RowFetch = batched lookups
   CDC:    WalCursor over the durable log prefix
+  order:  commit_ts + commit_seq at commit -> change-log envelope -> publish; projections follow the
+          change log; a session token (its last commit_seq) decides which projections may serve it
   checkpoint: dirty pages + roots + record -> journal -> in place
 ```
 
 Details: [docs/architecture.md](docs/architecture.md) (including the query path and the adaptive
 loop), execution layer: [docs/execution.md](docs/execution.md), statistics:
 [docs/statistics.md](docs/statistics.md), optimizer: [docs/optimizer.md](docs/optimizer.md), indexes:
-[docs/indexes.md](docs/indexes.md), schema evolution: [docs/schema.md](docs/schema.md), invariants mapped to tests:
+[docs/indexes.md](docs/indexes.md), schema evolution: [docs/schema.md](docs/schema.md), change log:
+[docs/change-log.md](docs/change-log.md), consistency: [docs/consistency.md](docs/consistency.md), invariants mapped to tests:
 [docs/invariants.md](docs/invariants.md), CDC: [docs/cdc.md](docs/cdc.md), ABI:
 [docs/ffi.md](docs/ffi.md), wire formats: [docs/plan-wire-format.md](docs/plan-wire-format.md),
 [docs/batch-format.md](docs/batch-format.md), roadmap: [docs/roadmap.md](docs/roadmap.md).
@@ -126,12 +161,14 @@ ALTER TABLE orders RENAME COLUMN amount TO total;
 ALTER TABLE customer DROP COLUMN city;                                                -- RESTRICT
 SHOW SCHEMA orders;                                                                   -- version history
 DROP TABLE orders;
+SET SESSION CONSISTENCY READ_YOUR_WRITES;   -- STRONG | READ_YOUR_WRITES | BOUNDED n MS|COMMITS | EVENTUAL
 ```
 
 The full grammar and its rules are in [docs/milestone-2.1.3.md](docs/milestone-2.1.3.md#supported-sql-213)
 [docs/milestone-2.2.3.md](docs/milestone-2.2.3.md#supported-sql-223-additions),
 [docs/milestone-2.3.0.md](docs/milestone-2.3.0.md#supported-sql-230-additions)
-and [docs/milestone-2.4.0.md](docs/milestone-2.4.0.md#supported-sql-240-additions).
+[docs/milestone-2.4.0.md](docs/milestone-2.4.0.md#supported-sql-240-additions)
+and [docs/milestone-2.5.0.md](docs/milestone-2.5.0.md#supported-sql-250-additions).
 
 ## Usage (Rust)
 
@@ -151,10 +188,13 @@ let id = RowId::from_primary_key(/* entity */ 1, /* BIGINT pk */ 42); // order-p
 if db.get_in_tx(&mut tx, id)?.is_none() {
     tx.put(id, Row::new().with_field(1, Value::Int64(100)));
 }
-let ts = db.commit(tx)?;                                   // durable when it returns
+let done = db.commit(tx)?;                                 // durable when it returns
+let (ts, seq) = (done.commit_ts, done.commit_seq);         // timestamp and place in the commit order
 
 let old = db.get_at(id, ts)?;                              // time travel
 let changes = db.read_changes(ChangeCursor::BEGINNING, 100, &ChangeFilter::entities([1]))?;
+let mut log = db.change_log().cursor(adb_core::CommitSeq::ZERO)?;   // the change log, in commit order
+while let Some(batch) = log.next_batch(500, 4 << 20)? { /* batch.commits */ }
 
 let decoded = adb_plan_wire::decode_json(plan_json)?;        // validated plan + its catalog epoch
 let mut cursor = db.execute_planned(decoded.plan, decoded.schema_epoch, None)?; // SchemaChanged if stale
@@ -175,10 +215,10 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.4.0.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.0.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.4.0 through the JVM CLI
-./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H)
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.0 through the JVM CLI
+./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
 
@@ -192,21 +232,22 @@ crates and Gradle dependencies.
 
 Requirements: Rust (stable) and JDK 22+. The Scala/JVM part uses the Gradle wrapper in `jvm/` and
 needs access to Maven Central. The Java FFM → Rust path is also checked without Gradle by
-`examples/jvm-cdc-smoke/run.sh`.
+`examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
+checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`.
 
 ## Repository layout
 
 ```text
 crates/        Rust engine (core, journal, page, buffer, btree, storage, schema, wal, tx, index,
-               execution, plan-wire, stats, engine, ffi) and the adb-migrate tool
-include/adb.h  C ABI v7
-jvm/           Scala/Java: model, statistics, schema, catalog (engine catalog, indexes), SQL, binder, optimizer
+               execution, plan-wire, stats, change-log, projection-runtime, engine, ffi) and the adb-migrate tool
+include/adb.h  C ABI v8
+jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), SQL, binder, optimizer
                (estimation, cost, join order, access paths), physical planning, FFM, gateway,
                CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC smoke test, results
+examples/      Rust demo and benchmark, JVM CDC and consistency smoke tests, results
 demo/          feature tour through the JVM CLI
-docs/          architecture, execution, statistics, optimizer, indexes, schema, invariants, CDC, ABI, wire
+docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap
 ```

@@ -12,6 +12,25 @@ object Main:
     if args.headOption.contains("--demo") then DemoMain.run()
     else runInteractiveShell()
 
+  /** Runs a backslash meta-command, or returns `None` for ordinary SQL.
+    *
+    * `\\projections` lists the projections, `\\session` shows the session's consistency level and
+    * token, `\\changes [after] [max]` lists change-log commits after commit `after` (default 0,
+    * at most `max`, default 20).
+    */
+  private[cli] def metaCommand(db: AdaptiveDatabase, line: String): Option[io.adb.gateway.QueryResult] =
+    val words = line.split("\\s+").toList
+    words match
+      case "\\projections" :: Nil => Some(db.showProjections())
+      case "\\session" :: Nil => Some(db.showSession())
+      case "\\changes" :: rest if rest.size <= 2 =>
+        val after = rest.headOption.map(_.toLong).getOrElse(0L)
+        val max = rest.drop(1).headOption.map(_.toInt).getOrElse(20)
+        Some(db.showChanges(after, max))
+      case word :: _ if word.startsWith("\\") =>
+        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\changes [after] [max], \\q)")
+      case _ => None
+
   /** Runs the interactive SQL shell until EOF or `\\q`. */
   private def runInteractiveShell(): Unit =
     val dataDir = Path.of(
@@ -25,7 +44,7 @@ object Main:
     // The engine owns the catalog; a pre-2.4.0 catalog file is imported once.
     val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")), feedbackLog = Some(feedback))
 
-    println("Adaptive DB 2.4.0 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.5.0 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do
@@ -33,7 +52,7 @@ object Main:
         if line == null || line.trim == "\\q" then running = false
         else if line.trim.nonEmpty then
           try
-            val result = db.execute(line)
+            val result = metaCommand(db, line.trim).getOrElse(db.execute(line))
             result.message.foreach(println)
             if result.columns.nonEmpty then
               println(result.columns.mkString(" | "))

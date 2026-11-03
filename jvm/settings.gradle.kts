@@ -5,6 +5,7 @@ include(
     "adb-statistics",
     "adb-schema",
     "adb-catalog",
+    "adb-consistency",
     "adb-sql",
     "adb-logical-plan",
     "adb-optimizer",

@@ -21,7 +21,7 @@ fn set(db: &Database, pk: i64, balance: i64) -> CommitTs {
             .with_field(2, Value::Int64(balance))
             .with_field(3, Value::String(format!("o{pk}"))),
     );
-    db.commit(tx).unwrap()
+    db.commit(tx).unwrap().commit_ts
 }
 
 /// A database with accounts -50..50 (balance pk.rem_euclid(10)) and idx_balance INCLUDE owner.

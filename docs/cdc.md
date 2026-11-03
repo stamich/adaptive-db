@@ -6,7 +6,8 @@ consumer receives.
 
 ## Model
 
-* **Event** = one committed transaction: `tx_id`, `commit_ts`, `commit_lsn` (unique, increasing),
+* **Event** = one committed transaction: `tx_id`, `commit_ts`, `commit_seq` (2.5.0: its position in the
+  global commit order, shared by data and DDL commits), `commit_lsn` (unique, increasing),
   `cursor_after`, its catalog changes (2.4.0) and its row changes in row order.
 * **Row change** = `row_id` (`entity_id`, `primary_key`: the SQL `BIGINT` value, decoded from the
   sign-flipped storage key of data format 2), `kind` (`insert` / `update` / `delete`),
@@ -25,6 +26,11 @@ consumer receives.
   [schema.md](schema.md).
 * **Cursor** = a transaction boundary in the log. `ChangeCursor::BEGINNING` (0) is the start;
   `change_feed_end()` is the current durable end ("only new changes").
+
+Since 2.5.0 the engine also keeps a durable, segmented change log with its own cursors that
+resume from a commit number rather than a log position, and with retention driven by consumers;
+see [change-log.md](change-log.md). The two agree commit for commit
+(`change_log_cdc::*`); this feed remains the way to read directly from the canonical log.
 
 ## Guarantees
 
@@ -64,7 +70,7 @@ C ABI (`include/adb.h`): `adb_read_changes_json`, `adb_change_feed_end`,
 
 ```json
 {"next_cursor":"8589934720",
- "events":[{"tx_id":5,"commit_ts":5,"commit_lsn":"420","cursor_after":"512",
+ "events":[{"tx_id":5,"commit_ts":5,"commit_seq":5,"commit_lsn":"420","cursor_after":"512",
             "changes":[{"entity_id":1,"primary_key":"7","kind":"update",
                         "before":{"fields":{"1":{"Int64":10}}},
                         "after":{"fields":{"1":{"Int64":20}}}}]}]}

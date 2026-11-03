@@ -6,10 +6,12 @@
 /// 6 = Milestone 2.3.0 (secondary indexes, plan wire v3, statistics format 2, order-preserving
 /// primary keys, `ADB_INCOMPATIBLE_FORMAT`);
 /// 7 = Milestone 2.4.0 (entity schemas and DDL, plan wire v4 with the catalog epoch,
-/// `ADB_SCHEMA_CHANGED`, statistics format 3).
-pub const ABI_VERSION: u32 = 7;
+/// `ADB_SCHEMA_CHANGED`, statistics format 3);
+/// 8 = Milestone 2.5.0 (commit sequence numbers: `adb_latest_commit_seq` and the `*_commit`
+/// mutations, change-log cursors, projection registry; plan wire stays v4).
+pub const ABI_VERSION: u32 = 8;
 /// Engine version reported through the C ABI.
-static ENGINE_VERSION: &[u8] = b"2.4.0";
+static ENGINE_VERSION: &[u8] = b"2.5.0";
 
 /// Returns the ABI version; bindings must refuse to run against a different one.
 #[no_mangle]

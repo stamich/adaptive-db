@@ -20,9 +20,8 @@
 
 use std::{collections::BTreeSet, path::Path};
 
-use adb_core::{CommitTs, Lsn, Row, RowId, SchemaEpoch, SchemaVersion, TxId};
+use adb_core::{CommitSeq, CommitTs, Lsn, Row, RowId, SchemaEpoch, SchemaVersion, TxId};
 use adb_schema::{CatalogEvent, EntitySchema};
-use adb_tx::Mutation;
 use adb_wal::{WalCursor, WalError};
 
 use crate::{
@@ -129,6 +128,10 @@ pub struct ChangeEvent {
     pub tx_id: TxId,
     /// Commit timestamp (the snapshot at which the changes became visible).
     pub commit_ts: CommitTs,
+    /// Position of the commit in the global commit order. The same number identifies the
+    /// commit in the change log and in session tokens, so a consumer of this feed can tell
+    /// how far it has caught up relative to any other.
+    pub commit_seq: CommitSeq,
     /// Position of the commit record; a unique, monotonically increasing event id.
     pub commit_lsn: Lsn,
     /// Cursor that resumes right after this event (for per-event acknowledgement).
@@ -248,39 +251,26 @@ fn to_event(logged: LoggedTx, filter: &ChangeFilter) -> Option<ChangeEvent> {
         commit_lsn,
         end,
     } = logged;
-    let before_of = |row_id: RowId| {
-        tx.before_images
-            .iter()
-            .find(|(id, _)| *id == row_id)
-            .and_then(|(_, version)| version.value.clone())
-    };
     let changes: Vec<RowChange> = tx
-        .mutations
-        .iter()
-        .filter(|(row_id, _)| filter.matches(*row_id))
-        .filter_map(|(row_id, mutation)| {
-            let before = before_of(*row_id);
-            let after = match mutation {
-                Mutation::Put(row) => Some(row.clone()),
-                Mutation::Delete => None,
-            };
+        .row_images()
+        .filter(|(row_id, _, _)| filter.matches(*row_id))
+        .map(|(row_id, before, after)| {
             let kind = match (&before, &after) {
                 (None, Some(_)) => ChangeKind::Insert,
                 (Some(_), Some(_)) => ChangeKind::Update,
-                (Some(_), None) => ChangeKind::Delete,
-                (None, None) => return None, // deleting a row that did not exist
+                _ => ChangeKind::Delete,
             };
             let schema_version = after
                 .as_ref()
                 .or(before.as_ref())
                 .map_or(SchemaVersion::default(), |row| row.schema_version);
-            Some(RowChange {
-                row_id: *row_id,
+            RowChange {
+                row_id,
                 kind,
                 before,
                 after,
                 schema_version,
-            })
+            }
         })
         .collect();
     let catalog: Vec<CatalogChange> = tx
@@ -292,6 +282,7 @@ fn to_event(logged: LoggedTx, filter: &ChangeFilter) -> Option<ChangeEvent> {
     (!changes.is_empty() || !catalog.is_empty()).then_some(ChangeEvent {
         tx_id: tx.tx_id,
         commit_ts: tx.commit_ts,
+        commit_seq: tx.commit_seq,
         commit_lsn,
         cursor_after: ChangeCursor(end),
         catalog,

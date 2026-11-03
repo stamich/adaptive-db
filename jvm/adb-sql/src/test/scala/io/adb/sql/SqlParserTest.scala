@@ -29,6 +29,20 @@ class SqlParserTest:
     assertEquals(Explain(Analyze(Some("t")), true), parser.parse("EXPLAIN ANALYZE ANALYZE t"))
     assertThrows(classOf[IllegalArgumentException], () => parser.parse("SET optimizer"))
 
+  /** `SET SESSION CONSISTENCY` takes four levels, the bounded one with a unit. */
+  @Test def parsesSessionConsistency(): Unit =
+    assertEquals(SetSessionConsistency("STRONG", None), parser.parse("SET SESSION CONSISTENCY STRONG"))
+    assertEquals(SetSessionConsistency("READ_YOUR_WRITES", None), parser.parse("set session consistency read_your_writes;"))
+    assertEquals(SetSessionConsistency("EVENTUAL", None), parser.parse("SET SESSION CONSISTENCY EVENTUAL"))
+    assertEquals(SetSessionConsistency("BOUNDED", Some((250L, "MS"))), parser.parse("SET SESSION CONSISTENCY BOUNDED 250 MS"))
+    assertEquals(SetSessionConsistency("BOUNDED", Some((3L, "COMMITS"))), parser.parse("SET SESSION CONSISTENCY bounded 3 commits"))
+    // A setting simply called `session` is still an ordinary option.
+    assertEquals(SetOption("session", "x"), parser.parse("SET session = x"))
+    for bad <- Seq("SET SESSION CONSISTENCY", "SET SESSION CONSISTENCY SOMETIMES", "SET SESSION CONSISTENCY BOUNDED",
+        "SET SESSION CONSISTENCY BOUNDED 5", "SET SESSION CONSISTENCY BOUNDED 5 DAYS", "SET SESSION CONSISTENCY BOUNDED 1.5 MS",
+        "SET SESSION CONSISTENCY BOUNDED -1 MS", "SET SESSION CONSISTENCY BOUNDED 99999999999999999999 MS") do
+      assertThrows(classOf[IllegalArgumentException], () => { parser.parse(bad); () }, bad)
+
   /** A foreign-key hint must say NOT ENFORCED and may appear once per column. */
   @Test def parsesForeignKeyHints(): Unit =
     val create = parser.parse(

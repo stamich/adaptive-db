@@ -92,6 +92,7 @@ object DemoMain:
       execute(db, "SHOW SCHEMA ledger;")
       execute(db, "SELECT id, amount, currency FROM ledger WHERE id <= 3;")
       println("Feature shown: the engine catalog is durable with the data; the JVM keeps no catalog file.")
+      consistencyPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -245,6 +246,47 @@ object DemoMain:
     execute(db, "DROP TABLE scratch;")
     println("Feature shown: DDL commits through the engine's log like data; a plan made before any of it would be")
     println("refused with SCHEMA_CHANGED and planned again by the gateway.")
+
+  /** Milestone 2.5.0: the global commit order, session tokens and consistency levels, the
+    * projection registry and the change log.
+    */
+  private def consistencyPhase(db: AdaptiveDatabase): Unit =
+    phase("2.5.0", "commit order, session consistency, projections and the change log")
+    show(db.showSession())
+    println("Feature shown: a session starts at token 0 and reads its own writes by default.")
+
+    val write = execute(db, "INSERT INTO ledger (id, account, amount) VALUES (3001, 1, 4242);")
+    show(db.showSession())
+    println(s"Feature shown: the INSERT is commit ${write.commitSeq.getOrElse(0L)} in the global order, and the session's token moved to it.")
+
+    execute(db, "SELECT id, amount FROM ledger WHERE account = 1 AND amount = 4242;")
+    execute(db, "EXPLAIN SELECT id, amount FROM ledger WHERE account = 1 AND amount = 4242;")
+    println("Feature shown: EXPLAIN's Read context names the level, the token, the head and, per index, whether its")
+    println("projection may serve this session's read.")
+
+    val reader = db.session()
+    reader.execute("SET SESSION CONSISTENCY EVENTUAL;")
+    show(db.showSession(reader))
+    println("Feature shown: another session has its own token and level; its reads never wait for projections.")
+
+    execute(db, "SET SESSION CONSISTENCY BOUNDED 250 MS;")
+    execute(db, "SET SESSION CONSISTENCY STRONG;")
+    show(db.showSession())
+    execute(db, "SET SESSION CONSISTENCY READ_YOUR_WRITES;")
+    println("Feature shown: strong, read-your-writes, bounded-staleness and eventual reads are chosen per session in SQL.")
+
+    show(db.showProjections())
+    println("Feature shown: the current-row store and each index are projections with a state, a frontier and a lag.")
+
+    val head = db.currentSession.readContext().headCommitSeq
+    show(db.showChanges(head - 2, 10))
+    println("Feature shown: the change log lists data and schema commits in one order; consumers resume from any commit.")
+
+  /** Renders a table result without echoing a statement. */
+  private def show(result: QueryResult): Unit =
+    println()
+    println(result.columns.mkString(" | "))
+    result.rows.foreach(row => println(row.map(v => Option(v).getOrElse("NULL")).mkString(" | ")))
 
   /** Opens one native database with its engine catalog for a demo phase (importing a
     * pre-2.4.0 catalog file left by an older demo run).

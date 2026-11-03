@@ -5,10 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+adb-change-log = { path = "../adb-change-log" }
 adb-core = { path = "../adb-core" }
 adb-execution = { path = "../adb-execution" }
 adb-index = { path = "../adb-index" }
 adb-journal = { path = "../adb-journal" }
+adb-projection-runtime = { path = "../adb-projection-runtime" }
 adb-schema = { path = "../adb-schema" }
 adb-stats = { path = "../adb-stats" }
 adb-storage = { path = "../adb-storage" }

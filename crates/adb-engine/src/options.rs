@@ -10,15 +10,18 @@ pub struct DatabaseOptions {
     pub checkpoint_dirty_pages: usize,
     /// Size of one log segment file.
     pub log_segment_bytes: u64,
+    /// Size of one change-log segment file; retention removes whole segments.
+    pub change_log_segment_bytes: u64,
 }
 
 impl Default for DatabaseOptions {
-    /// 256 cached pages per file, checkpoint after 4,096 dirty pages, 64 MiB log segments.
+    /// 256 cached pages per file, checkpoint after 4,096 dirty pages, 64 MiB log segments, 16 MiB change-log segments.
     fn default() -> Self {
         Self {
             buffer_pages: 256,
             checkpoint_dirty_pages: 4096,
             log_segment_bytes: adb_wal::DEFAULT_SEGMENT_SIZE,
+            change_log_segment_bytes: adb_change_log::DEFAULT_SEGMENT_BYTES,
         }
     }
 }

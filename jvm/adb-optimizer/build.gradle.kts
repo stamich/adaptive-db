@@ -15,4 +15,5 @@ tasks.test {
 dependencies {
     api(project(":adb-logical-plan"))
     api(project(":adb-statistics"))
+    api(project(":adb-consistency"))
 }

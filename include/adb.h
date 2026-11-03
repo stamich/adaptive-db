@@ -1,5 +1,11 @@
 /*
- * Adaptive DB native C ABI, version 7 (Milestone 2.4.0).
+ * Adaptive DB native C ABI, version 8 (Milestone 2.5.0).
+ *
+ * ABI 8 changes (vs. 7): commit sequence numbers — every commit (data and DDL) takes the next
+ * number of one global order, adb_latest_commit_seq reads the newest published one and the
+ * *_commit mutations return the number of their commit (a session token, see
+ * docs/consistency.md); data format 4 (format 2 and 3 upgraded on open). The change-log cursor
+ * and projection functions of this ABI follow in their own sections. Plan wire stays v4.
  *
  * ABI 7 changes (vs. 6): entity schemas — adb_create_entity_json, adb_alter_entity_json,
  * adb_drop_entity, adb_list_schemas_json, adb_schema_history_json (see docs/schema.md); writes
@@ -44,6 +50,7 @@ extern "C" {
 typedef struct AdbDatabaseHandle AdbDatabaseHandle;
 typedef struct AdbQueryHandle AdbQueryHandle;
 typedef struct AdbBatchHandle AdbBatchHandle;
+typedef struct AdbChangeCursorHandle AdbChangeCursorHandle;
 
 typedef enum AdbStatus {
     ADB_OK = 0,
@@ -63,7 +70,7 @@ typedef enum AdbStatus {
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 7
+#define ADB_ABI_VERSION 8
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -74,6 +81,8 @@ AdbStatus adb_open(const uint8_t* path_ptr, size_t path_len, AdbDatabaseHandle**
 /* Checkpoints (best effort) and always releases the handle. */
 AdbStatus adb_close(AdbDatabaseHandle* db);
 AdbStatus adb_latest_committed_ts(AdbDatabaseHandle* db, uint64_t* out_commit_ts);
+/* Newest published commit sequence number (0 before the first commit). (ABI 8) */
+AdbStatus adb_latest_commit_seq(AdbDatabaseHandle* db, uint64_t* out_commit_seq);
 /* Current catalog epoch. Plans are plan wire v4 documents carrying the epoch they were made at
  * ({"wire_version":4,"schema_epoch":N,"plan":{...}}); a plan of another epoch is refused before
  * it runs (a table or index it was planned against may have changed: plan it again). */
@@ -130,6 +139,33 @@ AdbStatus adb_delete_row(
     uint64_t primary_key,
     uint64_t* out_commit_ts);
 
+/* Like the three functions above, and also writing the commit's position in the global commit
+ * order to out_commit_seq (may be NULL). (ABI 8) */
+AdbStatus adb_insert_row_commit_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    const uint8_t* row_ptr,
+    size_t row_len,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
+
+AdbStatus adb_update_fields_commit_json(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    const uint8_t* assignments_ptr,
+    size_t assignments_len,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
+
+AdbStatus adb_delete_row_commit(
+    AdbDatabaseHandle* db,
+    uint64_t entity_id,
+    uint64_t primary_key,
+    uint64_t* out_commit_ts,
+    uint64_t* out_commit_seq);
+
 /* ---- maintenance (ABI 3) ---- */
 
 /* Persists in-memory projection changes; also runs automatically and on adb_close. */
@@ -173,6 +209,68 @@ AdbStatus adb_consumer_offset(
     const uint8_t* name_ptr,
     size_t name_len,
     uint64_t* out_cursor);
+
+/* ---- change-log cursors (ABI 8) ---- */
+
+/* Opens a cursor that delivers the commits above after_commit_seq (0 = from the start of the
+ * retained change log). ADB_LOG_TRUNCATED when the commits right above it were pruned. *out_cursor
+ * is NULL on failure. */
+AdbStatus adb_change_cursor_open(
+    AdbDatabaseHandle* db,
+    uint64_t after_commit_seq,
+    AdbChangeCursorHandle** out_cursor);
+
+/* Next commits as a UTF-8 JSON document in an AdbBatchHandle (read with adb_batch_data/len, free
+ * with adb_batch_release; the format is in docs/change-log.md), at most max_commits (1..=10000)
+ * and about max_bytes (1..=64 MiB) of change data; at least one commit when any is available.
+ * Returns ADB_END_OF_STREAM (and a NULL batch) when the consumer is caught up. The cursor
+ * advances past the commits returned. */
+AdbStatus adb_change_cursor_next_batch(
+    AdbChangeCursorHandle* cursor,
+    uint32_t max_commits,
+    uint64_t max_bytes,
+    AdbBatchHandle** out_batch);
+
+/* The last commit sequence number the cursor delivered (its start before the first batch). */
+AdbStatus adb_change_cursor_position(AdbChangeCursorHandle* cursor, uint64_t* out_commit_seq);
+AdbStatus adb_change_cursor_close(AdbChangeCursorHandle* cursor);
+
+/* ---- projections (ABI 8) ---- */
+
+/* The engine registers its own projections (__current_row and one per index, synchronous). An
+ * external consumer of the change log registers an asynchronous projection, reports how far it
+ * has consumed and is waited for by readers. Documents are JSON in an AdbBatchHandle; see
+ * docs/consistency.md. */
+
+/* Registers (or finds, by name) an asynchronous projection from {"name":"..","entity_id":N}
+ * (entity_id optional) and writes its id. It starts in the building state at commit 0. */
+AdbStatus adb_projection_register_json(
+    AdbDatabaseHandle* db,
+    const uint8_t* request_ptr,
+    size_t request_len,
+    uint64_t* out_projection_id);
+
+/* Every projection (state, frontier, lag) as a JSON array ordered by id; one as an object
+ * (ADB_NOT_FOUND when unknown). */
+AdbStatus adb_projection_list_json(AdbDatabaseHandle* db, AdbBatchHandle** out_json);
+AdbStatus adb_projection_get_json(
+    AdbDatabaseHandle* db, uint64_t projection_id, AdbBatchHandle** out_json);
+
+/* The consumer has applied the change log through commit_seq: moves its frontier forward (never
+ * back, never beyond the newest published commit). Only asynchronous projections. */
+AdbStatus adb_projection_advance(AdbDatabaseHandle* db, uint64_t projection_id, uint64_t commit_seq);
+
+/* state: 0 building (restarts from commit 0), 1 ready, 2 needs rebuild, 3 failed. */
+AdbStatus adb_projection_set_state(AdbDatabaseHandle* db, uint64_t projection_id, uint32_t state);
+
+/* Blocks until the projection is ready and has consumed commit_seq, at most timeout_ms (<= 60000).
+ * *out_outcome: 0 reached, 1 timed out, 2 not readable (failed / needs rebuild), 3 unknown. */
+AdbStatus adb_projection_wait_until(
+    AdbDatabaseHandle* db,
+    uint64_t projection_id,
+    uint64_t commit_seq,
+    uint32_t timeout_ms,
+    uint32_t* out_outcome);
 
 /* ---- optimizer statistics (ABI 5) ---- */
 

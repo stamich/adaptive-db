@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.4.0)
+# Engine invariants (Milestone 2.5.0)
 
 Each invariant names the test that guards it.
 
@@ -160,3 +160,27 @@ Each invariant names the test that guards it.
 52. Data format 2 upgrades to 3 without rewriting anything; a newer format is refused.
     *(format::format_two_directories_are_upgraded_in_place, format::newer_formats_are_refused)*
 
+## Commit order and change log (2.5.0)
+
+53. Every data and catalog commit takes the next `CommitSeq`; a read-only transaction takes none;
+    a log whose numbers do not increase is refused as corrupt.
+    *(commit_seq::catalog_and_data_commits_share_one_order, commit_seq::read_only_commits_do_not_consume_a_number,
+    commit_seq::a_repeated_sequence_number_is_corruption)*
+54. `latest_commit_seq` is the newest commit whose change-log envelope has been appended; the
+    sequence is published only after the append. *(change_log::every_commit_has_an_envelope_with_row_images)*
+55. The change log is derived: after any damage, loss or surplus it is repaired from the WAL at
+    open and then agrees with it. *(change_log_recovery::*, change-log fuzz::*)*
+56. Change-log appends are idempotent and strictly ordered; frames are CRC-checked; a torn last
+    frame is dropped, earlier damage is an error. *(store::append_is_idempotent, store::torn_tail_is_truncated,
+    store::mid_log_damage_is_an_error)*
+57. A cursor delivers each commit once, in order, at least one per batch, and fails with
+    `Truncated` when its start was pruned. *(store::cursor_streams_in_batches, store::cursor_respects_the_byte_budget)*
+58. Retention never removes a segment a registered consumer still needs unless a configured limit
+    says so; an overtaken consumer is `NeedsRebuild`. *(retention::*)*
+59. A projection frontier never moves backward; waiting for a projection is bounded (60 s); an
+    unreadable projection never satisfies a wait. *(registry::frontiers_are_monotonic_and_lag_follows_the_head,
+    wait::the_wait_cap_is_bounded, wait::unreadable_states)*
+60. A session token only moves forward, a token beyond the head is refused, and a read is served
+    from a projection only if the freshness resolver allows it. *(FreshnessResolverTest,
+    FreshnessAcceptanceTest, ConsistencySmoke)*
+61. Data format 3 upgrades to 4 without rewriting anything. *(format::format_three_directories_are_upgraded_in_place, commit_seq::logs_without_sequence_numbers_are_numbered_by_timestamp)*

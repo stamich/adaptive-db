@@ -11,7 +11,7 @@ import io.adb.sql.SqlParser
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.4.0) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.5.0) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
@@ -57,7 +57,7 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.4.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.5.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)

@@ -1,5 +1,7 @@
 package io.adb.gateway
 
+import io.adb.consistency.*
+import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
@@ -44,8 +46,13 @@ final class AdaptiveDatabase(
     val catalog: Catalog,
     native: NativeDatabase,
     config: OptimizerConfig = OptimizerConfig.Default,
-    feedbackLog: Option[PlannerFeedbackLog] = None
+    feedbackLog: Option[PlannerFeedbackLog] = None,
+    consistency: ConsistencyBackend = null
 ):
+  /** The engine's commit order and projections (the native database unless a test supplies one). */
+  private val backend: ConsistencyBackend = if consistency == null then ConsistencyBackend(native) else consistency
+  /** The session behind [[execute]]: statements run without an explicit session share it. */
+  private val defaultSession = new AdaptiveSession(this, backend)
   /** SQL text to AST parser. */
   private val parser = new SqlParser
   /** Resolves names and types against the catalog. */
@@ -68,22 +75,63 @@ final class AdaptiveDatabase(
     * @return rows for queries, plan text for EXPLAIN, or a status message for DDL/DML
     * @throws NativeException if the engine rejects the operation
     */
-  def execute(sql: String): QueryResult =
+  def execute(sql: String): QueryResult = executeIn(sql, defaultSession)
+
+  /** A new session with its own consistency level and token, starting at the default level
+    * (read your writes) and no writes.
+    */
+  def session(): AdaptiveSession = new AdaptiveSession(this, backend)
+
+  /** The session [[execute]] uses. */
+  def currentSession: AdaptiveSession = defaultSession
+
+  /** Executes one SQL statement on behalf of `session`: its writes move the session's token and
+    * its reads honour the session's consistency level.
+    */
+  private[gateway] def executeIn(sql: String, session: AdaptiveSession): QueryResult =
     val ast = parser.parse(sql)
-    try executeOnce(ast, sql)
+    try executeOnce(ast, sql, session)
     catch
       case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
         // The catalog changed between binding and execution (the engine checks before running,
         // so nothing was returned yet): bind against the new schemas and plan again, once.
-        executeOnce(ast, sql)
+        executeOnce(ast, sql, session)
+
+  /** Every projection with its state and lag (the shell's `\\projections`). */
+  def showProjections(): QueryResult =
+    QueryResult(ConsistencyReport.ProjectionColumns, ConsistencyReport.projectionRows(backend.projections()))
+
+  /** The level, token, head and wait limit of `session` (the shell's `\\session`). */
+  def showSession(session: AdaptiveSession = defaultSession): QueryResult =
+    QueryResult(ConsistencyReport.SessionColumns, ConsistencyReport.sessionRows(session.readContext()))
+
+  /** The commits of the change log after `after`, at most `maxCommits` (the shell's `\\changes`).
+    *
+    * @throws NativeException if the change log no longer holds commits that old
+    */
+  def showChanges(after: Long, maxCommits: Int): QueryResult =
+    require(maxCommits >= 1 && maxCommits <= 10000, "maxCommits must be 1..10000")
+    val cursor = native.openChangeCursor(after)
+    try
+      val batch = cursor.nextBatch(maxCommits, AdaptiveDatabase.MaxChangePageBytes)
+      QueryResult(ConsistencyReport.ChangeColumns, if batch.isPresent then ConsistencyReport.changeRows(batch.get().json()) else Vector.empty)
+    finally cursor.close()
 
   /** Plans a bound SELECT without executing it (used by EXPLAIN, tests and benchmarks). */
   def plan(select: BoundSelect): AdaptiveDatabase.Plans = planAt(select, currentEpoch())
 
   /** Binds and executes one parsed statement at the current catalog epoch. */
-  private def executeOnce(ast: io.adb.sql.Statement, sql: String): QueryResult =
+  private def executeOnce(ast: io.adb.sql.Statement, sql: String, session: AdaptiveSession): QueryResult =
     val epoch = currentEpoch()
-    executeBound(binder.bind(ast), sql, epoch)
+    val statement = binder.bind(ast)
+    val result = executeBound(statement, sql, epoch, session)
+    if AdaptiveDatabase.isDdl(statement) then
+      // A schema change is a commit of its own; the head read now covers it (and, under
+      // concurrency, possibly a few later commits, which only makes the token safer).
+      val head = backend.latestCommitSeq()
+      session.observe(head)
+      result.copy(commitSeq = Some(head))
+    else result
 
   /** The catalog epoch bound statements are planned with. It is read **before** the schema and
     * index metadata a plan is built from: if DDL commits in between, the plan carries the older
@@ -94,11 +142,36 @@ final class AdaptiveDatabase(
     case _ => native.currentSchemaEpoch()
 
   /** Plans a bound SELECT for execution at catalog epoch `epoch`. */
-  private def planAt(select: BoundSelect, epoch: Long): AdaptiveDatabase.Plans =
-    AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexCatalog).copy(schemaEpoch = epoch)
+  private def planAt(select: BoundSelect, epoch: Long, indexes: IndexCatalog = indexCatalog): AdaptiveDatabase.Plans =
+    AdaptiveDatabase.plan(select, catalog, statistics, config, mode, indexes).copy(schemaEpoch = epoch)
+
+  /** Plans a SELECT for `session`: indexes whose projection may not serve the session's reads
+    * are left out of planning, and the projections the chosen plan reads are waited for. If a
+    * wait times out, the plan is made again without that index (reads fall back to the canonical
+    * rows), so a lagging projection delays a read at most once, by the session's wait limit.
+    *
+    * @return the plan, and the read context it was made for
+    * @throws IllegalStateException if the session's token is beyond the database's head
+    */
+  private def planFresh(select: BoundSelect, epoch: Long, session: AdaptiveSession): (AdaptiveDatabase.Plans, SemanticReadContext, Vector[IndexDecision]) =
+    val context = session.readContext()
+    if context.consistency != ReadConsistency.Eventual && context.tokenIsAhead then
+      throw new IllegalStateException(
+        s"session token ${context.token.commitSeq} is beyond this database's head ${context.headCommitSeq}; the token comes from another database or from a commit that was lost")
+    val decisions = SemanticFreshnessPlanner.resolveIndexes(indexCatalog.indexes, backend.projections(), context)
+    var allowed = decisions.filter(d => SemanticFreshnessPlanner.isUsable(d.resolution))
+    var plans = planAt(select, epoch, IndexCatalog.of(allowed.map(_.index)*))
+    val used = io.adb.physical.PhysicalPlan.preorder(plans.physical.plan).collect { case scan: io.adb.physical.PhysicalPlan.IndexScan => scan.indexId }.toSet
+    val timedOut = SemanticFreshnessPlanner.waitsFor(allowed, used).collect {
+      case (decision, projectionId, seq) if !backend.awaitProjection(projectionId, seq, context.maxWaitMillis) => decision
+    }
+    if timedOut.nonEmpty then
+      allowed = allowed.filterNot(d => timedOut.exists(_.index.id == d.index.id))
+      plans = planAt(select, epoch, IndexCatalog.of(allowed.map(_.index)*))
+    (plans, context, decisions)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
-  private def executeBound(statement: BoundStatement, sql: String, epoch: Long): QueryResult = statement match
+  private def executeBound(statement: BoundStatement, sql: String, epoch: Long, session: AdaptiveSession): QueryResult = statement match
     case BoundCreateTable(name, fields, pk, references, defaults) =>
       val entity = catalog match
         case versioned: SchemaCatalog =>
@@ -156,34 +229,44 @@ final class AdaptiveDatabase(
       mode = newMode
       QueryResult(Vector.empty, Vector.empty, Some(s"SET optimizer = ${newMode.toString.toLowerCase}"))
 
+    case BoundSetConsistency(level) =>
+      session.consistency = level
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET SESSION CONSISTENCY ${level.sql}"))
+
     case BoundInsert(entity, values) =>
       val pk = values.get(entity.primaryKeyField.id) match
         case Some(DbValue.Int64Value(value)) => value
         case _ => throw new IllegalArgumentException("BIGINT primary key value required")
-      val ts = native.insert(entity.id.value, pk, MutationJsonEncoder.row(entity, values))
-      QueryResult(Vector.empty, Vector.empty, Some(s"INSERT 1 commitTs=$ts"))
+      val commit = native.insertCommit(entity.id.value, pk, MutationJsonEncoder.row(entity, values))
+      committed("INSERT 1", commit, session)
 
     case BoundUpdate(entity, assignments, pk) =>
-      val ts = native.update(entity.id.value, pk, MutationJsonEncoder.assignments(assignments))
-      QueryResult(Vector.empty, Vector.empty, Some(s"UPDATE 1 commitTs=$ts"))
+      val commit = native.updateCommit(entity.id.value, pk, MutationJsonEncoder.assignments(assignments))
+      committed("UPDATE 1", commit, session)
 
     case BoundDelete(entity, pk) =>
-      val ts = native.delete(entity.id.value, pk)
-      QueryResult(Vector.empty, Vector.empty, Some(s"DELETE 1 commitTs=$ts"))
+      val commit = native.deleteCommit(entity.id.value, pk)
+      committed("DELETE 1", commit, session)
 
-    case select: BoundSelect => run(select, planAt(select, epoch), sql)._1
+    case select: BoundSelect => run(select, planFresh(select, epoch, session)._1, sql)._1
 
     case BoundExplain(inner: BoundSelect, analyze) =>
-      val plans = planAt(inner, epoch)
+      val (plans, context, decisions) = planFresh(inner, epoch, session)
       val analyzed =
         if analyze then
           val (result, profile) = run(inner, plans, sql)
           Vector(s"Executed rows=${result.rows.size}", "Runtime profile:\n" + ProfileRenderer.render(profile, plans.physical.estimates))
         else Vector.empty
-      QueryResult(Vector("plan"), (AdaptiveDatabase.explain(plans) ++ analyzed).map(section => Vector[Any](section)))
+      val sections = AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)
+      QueryResult(Vector("plan"), (sections ++ analyzed).map(section => Vector[Any](section)))
 
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
+
+  /** The result of a DML statement; the session remembers its commit. */
+  private def committed(verb: String, commit: NativeCommitResult, session: AdaptiveSession): QueryResult =
+    session.observe(commit.commitSeq())
+    QueryResult(Vector.empty, Vector.empty, Some(s"$verb commitTs=${commit.commitTs()} commitSeq=${commit.commitSeq()}"), Some(commit.commitSeq()))
 
   /** The catalog as a versioned one, for statements that need schema evolution. */
   private def schemaCatalog(statement: String): SchemaCatalog = catalog match
@@ -227,6 +310,14 @@ final class AdaptiveDatabase(
 
 /** Planning pipeline, EXPLAIN rendering and limits of the gateway. */
 object AdaptiveDatabase:
+  /** Whether the statement is a schema change, which commits to the catalog. */
+  def isDdl(statement: BoundStatement): Boolean = statement match
+    case _: BoundCreateTable | _: BoundAlterTable | _: BoundDropTable | _: BoundCreateIndex | _: BoundDropIndex => true
+    case _ => false
+
+  /** Largest page of change-log commits `showChanges` asks the engine for: 1 MiB. */
+  val MaxChangePageBytes: Long = 1L << 20
+
   /** Maximum rows materialized by one gateway query result. */
   val MaxMaterializedResultRows: Int = 1000000
 

@@ -1,19 +1,21 @@
 //! Checkpoint record: how far the projections reflect the canonical log.
 //!
-//! Format 3 (Milestone 2.0.3) is published through the checkpoint journal together with the
-//! pages it describes, so it can never disagree with them. Format 2 (Milestones 1.6–2.0.2,
-//! where every commit was forced to the stores) is still readable and migrated on load.
+//! The checkpoint is published through the checkpoint journal together with the pages it
+//! describes, so it can never disagree with them. Format 4 (Milestone 2.5.0) adds the highest
+//! commit sequence number. Format 3 (Milestones 2.0.3–2.4.0) is migrated on load by numbering
+//! its commits by timestamp, and format 2 (Milestones 1.6–2.0.2, where every commit was forced
+//! to the stores) is still readable and migrated on load.
 
 use std::path::{Path, PathBuf};
 
-use adb_core::{CommitTs, Lsn};
+use adb_core::{CommitSeq, CommitTs, Lsn};
 use adb_journal::{envelope, replace_file, sync_dir, FileWrite};
 use serde::{Deserialize, Serialize};
 
 use crate::StorageError;
 
 /// Current checkpoint payload format.
-pub const CHECKPOINT_FORMAT_VERSION: u32 = 3;
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 4;
 /// Magic prefix of the checkpoint envelope.
 const MAGIC: &[u8; 8] = b"ADBCK161";
 /// Envelope version.
@@ -38,6 +40,9 @@ pub struct Checkpoint {
     /// Tombstones committed at or before this timestamp may have been vacuumed from the current
     /// store; scans at older snapshots must also consult the version index.
     pub vacuumed_through: CommitTs,
+    /// Highest commit sequence number reflected in the projections (the canonical head when
+    /// the checkpoint was written).
+    pub last_commit_seq: CommitSeq,
 }
 
 impl Default for Checkpoint {
@@ -50,6 +55,41 @@ impl Default for Checkpoint {
             last_commit_ts: CommitTs(0),
             last_tx_id: 0,
             vacuumed_through: CommitTs(0),
+            last_commit_seq: CommitSeq(0),
+        }
+    }
+}
+
+/// Format 3 payload of Milestones 2.0.3–2.4.0 (format 4 without the sequence number).
+#[derive(Deserialize)]
+struct CheckpointV3 {
+    /// Always 3.
+    format_version: u32,
+    /// Log position at which recovery starts reading.
+    replay_from: Lsn,
+    /// See [`Checkpoint::applied_through`].
+    applied_through: Option<Lsn>,
+    /// Highest committed timestamp.
+    last_commit_ts: CommitTs,
+    /// Highest transaction id.
+    last_tx_id: u64,
+    /// See [`Checkpoint::vacuumed_through`].
+    vacuumed_through: CommitTs,
+}
+
+impl CheckpointV3 {
+    /// Commits of a format-3 log are numbered by timestamp, so the highest sequence number is
+    /// the highest timestamp.
+    fn migrate(self) -> Checkpoint {
+        debug_assert_eq!(self.format_version, 3);
+        Checkpoint {
+            format_version: CHECKPOINT_FORMAT_VERSION,
+            replay_from: self.replay_from,
+            applied_through: self.applied_through,
+            last_commit_ts: self.last_commit_ts,
+            last_tx_id: self.last_tx_id,
+            vacuumed_through: self.vacuumed_through,
+            last_commit_seq: CommitSeq(self.last_commit_ts.0),
         }
     }
 }
@@ -81,6 +121,7 @@ impl CheckpointV2 {
             last_commit_ts: CommitTs(self.last_commit_ts),
             last_tx_id: self.last_tx_id,
             vacuumed_through: CommitTs(0),
+            last_commit_seq: CommitSeq(self.last_commit_ts),
         }
     }
 }
@@ -143,7 +184,7 @@ fn encode(checkpoint: &Checkpoint) -> Result<Vec<u8>, StorageError> {
     ))
 }
 
-/// Decodes format 3, or format 2 with migration.
+/// Decodes format 4, or formats 3 and 2 with migration.
 fn decode(payload: &[u8]) -> Result<Checkpoint, StorageError> {
     let version = payload
         .get(..4)
@@ -151,6 +192,7 @@ fn decode(payload: &[u8]) -> Result<Checkpoint, StorageError> {
         .ok_or_else(|| StorageError::Invalid("truncated checkpoint".into()))?;
     match version {
         CHECKPOINT_FORMAT_VERSION => Ok(bincode::deserialize(payload)?),
+        3 => Ok(bincode::deserialize::<CheckpointV3>(payload)?.migrate()),
         2 => {
             let legacy: CheckpointV2 = bincode::deserialize(payload)?;
             debug_assert_eq!(legacy.format_version, 2);
@@ -167,9 +209,9 @@ fn decode(payload: &[u8]) -> Result<Checkpoint, StorageError> {
 mod tests {
     use super::*;
 
-    /// A format-3 checkpoint round-trips; a missing file is the default.
+    /// A format-4 checkpoint round-trips; a missing file is the default.
     #[test]
-    fn round_trips_format_3() {
+    fn round_trips_format_4() {
         let dir = tempfile::tempdir().unwrap();
         let store = CheckpointStore::new(dir.path().join("checkpoint.meta"));
         assert_eq!(store.load().unwrap(), Checkpoint::default());
@@ -178,10 +220,30 @@ mod tests {
             last_commit_ts: CommitTs(9),
             last_tx_id: 12,
             vacuumed_through: CommitTs(3),
+            last_commit_seq: CommitSeq(11),
             ..Checkpoint::default()
         };
         store.save(&checkpoint).unwrap();
         assert_eq!(store.load().unwrap(), checkpoint);
+    }
+
+    /// A checkpoint of Milestones 2.0.3–2.4.0 loads with its commits numbered by timestamp.
+    #[test]
+    fn migrates_format_3() {
+        /// Field-for-field image of the format-3 payload.
+        #[derive(Serialize)]
+        struct V3(u32, u64, Option<u64>, u64, u64, u64);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.meta");
+        let payload = bincode::serialize(&V3(3, 4096, None, 9, 12, 3)).unwrap();
+        std::fs::write(&path, envelope::seal(MAGIC, ENVELOPE_VERSION, &payload)).unwrap();
+
+        let migrated = CheckpointStore::new(&path).load().unwrap();
+        assert_eq!(migrated.format_version, CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(migrated.replay_from, Lsn(4096));
+        assert_eq!(migrated.last_commit_ts, CommitTs(9));
+        assert_eq!(migrated.last_commit_seq, CommitSeq(9));
+        assert_eq!(migrated.vacuumed_through, CommitTs(3));
     }
 
     /// A Milestone 2.0.2 checkpoint is migrated to "replay the whole log, skip applied commits".
@@ -199,6 +261,7 @@ mod tests {
         assert_eq!(migrated.replay_from, Lsn(0));
         assert_eq!(migrated.applied_through, Some(Lsn(400)));
         assert_eq!(migrated.last_commit_ts, CommitTs(7));
+        assert_eq!(migrated.last_commit_seq, CommitSeq(7));
         assert_eq!(migrated.last_tx_id, 8);
     }
 

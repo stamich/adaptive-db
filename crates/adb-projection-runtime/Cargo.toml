@@ -1,0 +1,17 @@
+[package]
+name = "adb-projection-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adb-change-log = { path = "../adb-change-log" }
+adb-core = { path = "../adb-core" }
+serde.workspace = true
+bincode.workspace = true
+crc32fast.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

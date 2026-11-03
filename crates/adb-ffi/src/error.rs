@@ -35,6 +35,8 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
         DbError::TransactionConflict(_) => AdbStatus::Conflict,
         DbError::Poisoned(_) | DbError::CommitOutcomeUnknown(_) => AdbStatus::Poisoned,
         DbError::ChangeLogTruncated { .. } => AdbStatus::LogTruncated,
+        DbError::ChangeLog(error) => map_change_log_status(error),
+        DbError::ProjectionRuntime(_) => AdbStatus::InvalidArgument,
         DbError::InvalidArgument(_) | DbError::TransactionClosed => AdbStatus::InvalidArgument,
         DbError::IncompatibleFormat { .. } => AdbStatus::IncompatibleFormat,
         DbError::IndexNotFound(_) | DbError::EntityNotFound(_) => AdbStatus::NotFound,
@@ -50,6 +52,23 @@ pub fn map_db_error(error: DbError) -> (AdbStatus, String) {
         _ => AdbStatus::Internal,
     };
     (status, error.to_string())
+}
+
+/// Maps a change-log error onto a status category.
+pub fn map_change_log_status(error: &adb_change_log::ChangeLogError) -> AdbStatus {
+    use adb_change_log::ChangeLogError as E;
+    match error {
+        E::Truncated { .. } => AdbStatus::LogTruncated,
+        E::Corrupt { .. } | E::Malformed(_) => AdbStatus::Corruption,
+        E::TooLarge { .. } => AdbStatus::ResourceLimit,
+        E::Io(_) => AdbStatus::IoError,
+        E::Regression { .. } | E::Mismatch { .. } => AdbStatus::Internal,
+    }
+}
+
+/// Maps a change-log error onto a status and message.
+pub fn map_change_log_error(error: adb_change_log::ChangeLogError) -> (AdbStatus, String) {
+    (map_change_log_status(&error), error.to_string())
 }
 
 /// Maps a statistics error onto a status and message.

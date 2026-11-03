@@ -1,8 +1,9 @@
 import io.adb.ffm.*;
 import java.nio.file.*;
 import java.util.Optional;
+import java.util.OptionalLong;
 
-/** Java FFM -> native engine smoke test (ABI 7): change feed, offsets, vacuum, entity scan, statistics, indexes, schemas. Needs only a JDK 22. */
+/** Java FFM -> native engine smoke test (ABI 8): change feed, offsets, vacuum, entity scan, statistics, indexes, schemas, commit sequence numbers, change-log cursors, projections. Needs only a JDK 22. */
 public class CdcSmoke {
     /**
      * Fails the smoke test unless {@code ok} holds, otherwise prints a pass line.
@@ -100,6 +101,31 @@ public class CdcSmoke {
             check(feed.contains("\"schema_version\":1") && feed.contains("\"schema_version\":2"), "row changes name their schema version");
             try { db.dropEntity(5); check(false, "drop of a dropped table"); }
             catch (NativeException e) { check(e.status() == AdbStatus.NOT_FOUND, "dropping a missing table is NOT_FOUND"); }
+
+            // Commit sequence numbers, the change log and projections (ABI 8).
+            long head = db.latestCommitSeq();
+            check(head > 0, "commits have taken sequence numbers");
+            var inserted = db.insertCommit(1, 200, "{\"fields\":{\"1\":{\"Int64\":7}}}");
+            check(inserted.commitSeq() == head + 1 && db.latestCommitSeq() == inserted.commitSeq(), "an insert returns the next sequence number");
+            var updated = db.updateCommit(1, 200, "{\"1\":{\"Int64\":8}}");
+            var deleted = db.deleteCommit(1, 200);
+            check(updated.commitSeq() == inserted.commitSeq() + 1 && deleted.commitSeq() == updated.commitSeq() + 1, "update and delete take consecutive numbers");
+            try (var changes = db.openChangeCursor(head)) {
+                var batch = changes.nextBatch(10, 1 << 20).orElseThrow();
+                check(batch.json().contains("\"first_commit_seq\":\"" + (head + 1) + "\"") && batch.json().contains("\"last_commit_seq\":\"" + deleted.commitSeq() + "\""), "the change-log cursor delivers the three commits");
+                check(changes.position() == deleted.commitSeq() && changes.nextBatch(10, 1 << 20).isEmpty(), "the cursor is caught up afterwards");
+            }
+            long feedId = db.registerProjection("feed \"a\"", OptionalLong.of(1));
+            check(db.registerProjection("feed \"a\"", OptionalLong.of(1)) == feedId && db.projectionsJson().contains("feed \\\"a\\\""), "projection registration is idempotent and escapes names");
+            check(db.waitForProjection(feedId, deleted.commitSeq(), 20) == NativeWaitOutcome.TIMED_OUT, "a projection that is still building times out");
+            db.advanceProjection(feedId, deleted.commitSeq());
+            db.setProjectionState(feedId, NativeProjectionState.READY);
+            check(db.waitForProjection(feedId, deleted.commitSeq(), 20) == NativeWaitOutcome.REACHED, "a ready projection that consumed the commit is reached");
+            check(db.projectionJson(feedId).orElseThrow().contains("\"lag_commits\":0") && db.projectionJson(987654).isEmpty(), "projection progress is readable");
+            db.setProjectionState(feedId, NativeProjectionState.FAILED);
+            check(db.waitForProjection(feedId, deleted.commitSeq() + 1, 20) == NativeWaitOutcome.NOT_READABLE, "a failed projection ends the wait");
+            try { db.advanceProjection(1, 0); check(false, "engine projection"); }
+            catch (NativeException e) { check(e.status() == AdbStatus.INVALID_ARGUMENT, "the engine's own projections cannot be advanced from outside"); }
         }
         System.out.println("CDC e2e smoke: PASS");
     }

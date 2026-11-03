@@ -1,11 +1,11 @@
-# Examples — Milestone 2.4.0
+# Examples — Milestone 2.5.0
 
 ## Rust data-plane benchmark
 
 ```bash
 cargo run --release -p adb-benchmark-rust -- \
   --rows 5000 --iters 1000 --threads 8 --groups 100 --nested-rows 1000 --relational-iters 5 \
-  --output examples/results/2.4.0-rust-local.json
+  --output examples/results/2.5.0-rust-local.json
 ```
 
 Storage sections: bulk load, point lookup, `EntityScan` vs. full scan + filter, plan JSON parsing,
@@ -13,14 +13,14 @@ change-feed read throughput, single-row commit throughput with 1 and N threads (
 current-heap size under update churn, and recovery time after a crash. Relational sections (2.1):
 hash join, nested-loop join, GROUP BY with SUM, sort, TopK, plan wire encode/decode.
 
-## Workload benchmark (2.3.0 workloads, 2.4.0 schema evolution)
+## Workload benchmark (2.3.0 workloads, 2.4.0 schema evolution, 2.5.0 consistency)
 
 ```bash
 ./scripts/benchmark-db.sh    # rust_native, index builds, AS OF, write overhead, schema evolution
-                             #                    -> examples/results/2.4.0-database.json
+                             #                    -> examples/results/2.5.0-database.json
 ./scripts/benchmark-ffi.sh   # ffi_prepared_plan, scala_cbo_ffi_rust, selectivity sweep, join order,
-                             # estimation, calibration  -> examples/results/2.4.0-ffi.json
-python3 scripts/check-benchmarks.py examples/results/2.4.0-database.json examples/results/2.4.0-ffi.json
+                             # estimation, calibration  -> examples/results/2.5.0-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.0-database.json examples/results/2.5.0-ffi.json
 ```
 
 The Rust binary defines and loads the dataset (11 tables, `ADB_BENCH_SCALE`); the JVM opens the
@@ -63,3 +63,22 @@ cd jvm
 ```bash
 ./demo/run-demo.sh
 ```
+
+## JVM consistency smoke test (2.5.0)
+
+```bash
+examples/jvm-consistency-smoke/run.sh   # needs scalac/scala 3.3 and JDK 22 on PATH
+```
+
+Compiles the Java FFM binding and the Scala 3 JVM modules with plain `javac`/`scalac` and runs
+`ConsistencySmoke.scala` against the real library: DDL and DML move the session token in one order,
+two sessions stay independent, `SET SESSION CONSISTENCY` changes the level, EXPLAIN shows the read
+context, the projection and change-log listings work, and a token beyond the head is refused.
+
+## Consistency workloads I–O (2.5.0)
+
+The `consistency` section of `*-database.json`: I commit throughput with the change log, J change-log
+streaming, K cursor start across segments, L projection wait latency, M consumer catch-up, N open
+with and without the change log, O retention pruning. `scripts/check-benchmarks.py` checks their
+correctness (never their timings).
+

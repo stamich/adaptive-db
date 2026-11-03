@@ -16,4 +16,5 @@ dependencies {
     api(project(":adb-model"));
     api(project(":adb-sql"));
     api(project(":adb-catalog"))
+    api(project(":adb-consistency"))
 }

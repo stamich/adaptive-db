@@ -5,14 +5,15 @@
 //!
 //! ```json
 //! {"next_cursor":"8589934720",
-//!  "events":[{"tx_id":5,"commit_ts":5,"commit_lsn":"420","cursor_after":"512",
+//!  "events":[{"tx_id":5,"commit_ts":5,"commit_seq":5,"commit_lsn":"420","cursor_after":"512",
 //!             "changes":[{"entity_id":1,"primary_key":"7","kind":"update",
 //!                         "schema_version":2,
 //!                         "before":{"fields":{"1":{"Int64":10}},"schema_version":1},
 //!                         "after":{"fields":{"1":{"Int64":20}},"schema_version":2}}]}]}
 //! ```
 //!
-//! Log positions (`u64`) and primary keys (`i64`, the SQL value) are decimal strings.
+//! `commit_seq` is the commit's position in the global commit order (data and DDL commits
+//! share it); it is the number a session token carries. Log positions (`u64`) and primary keys (`i64`, the SQL value) are decimal strings.
 //!
 //! Since ABI 7 every row change carries `schema_version` (0 for rows written without a schema;
 //! rows are delivered as stored), and DDL appears in `changes` too, before the row changes of
@@ -163,6 +164,7 @@ fn event_json(event: &ChangeEvent) -> Value {
     json!({
         "tx_id": event.tx_id.0,
         "commit_ts": event.commit_ts.0,
+        "commit_seq": event.commit_seq.0,
         "commit_lsn": event.commit_lsn.0.to_string(),
         "cursor_after": event.cursor_after.0 .0.to_string(),
         "changes": event.catalog.iter().map(catalog_json).chain(event.changes.iter().map(|change| json!({

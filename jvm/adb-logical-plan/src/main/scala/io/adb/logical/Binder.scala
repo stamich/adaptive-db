@@ -1,6 +1,7 @@
 package io.adb.logical
 
 import io.adb.catalog.Catalog
+import io.adb.consistency.{ReadConsistency, StalenessBound}
 import io.adb.model.*
 import io.adb.schema.{NewField, SchemaChange}
 import io.adb.sql.*
@@ -74,6 +75,15 @@ final class Binder(catalog: Catalog):
     case SetOption(name, value) =>
       require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer)")
       BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
+
+    case SetSessionConsistency(level, bound) =>
+      BoundSetConsistency(level match
+        case "STRONG" => ReadConsistency.StrongLatest
+        case "READ_YOUR_WRITES" => ReadConsistency.ReadYourWrites
+        case "EVENTUAL" => ReadConsistency.Eventual
+        case _ =>
+          val (amount, unit) = bound.getOrElse(throw new IllegalArgumentException("BOUNDED needs a bound"))
+          ReadConsistency.BoundedStaleness(if unit == "MS" then StalenessBound.Millis(amount) else StalenessBound.Commits(amount)))
 
     case Insert(table, columns, values) =>
       val entity = requireEntity(table)

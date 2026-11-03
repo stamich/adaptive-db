@@ -13,7 +13,8 @@ pub mod version_key;
 
 pub use error::CoreError;
 pub use ids::{
-    CommitTs, FieldId, IndexId, Lsn, PageId, RowId, SchemaEpoch, SchemaVersion, TupleSlot, TxId,
+    CommitResult, CommitSeq, CommitTs, FieldId, IndexId, Lsn, PageId, ProjectionEpoch,
+    ProjectionId, RowId, SchemaEpoch, SchemaVersion, TupleSlot, TxId,
 };
 pub use key_encoding::{decode_key, encode_key, encode_value, prefix_successor, Direction};
 pub use key_range::KeyRange;

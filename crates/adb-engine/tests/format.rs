@@ -73,7 +73,7 @@ fn damaged_markers_are_corruption() {
 }
 
 /// A 2.3.0 directory (format 2) is upgraded in place on open: its rows read unchanged, and the
-/// marker moves to format 3 so a 2.3.0 engine no longer opens it.
+/// marker moves to the current format so a 2.3.0 engine no longer opens it.
 #[test]
 fn format_two_directories_are_upgraded_in_place() {
     let dir = tempdir().unwrap();
@@ -85,6 +85,28 @@ fn format_two_directories_are_upgraded_in_place() {
     stamp(dir.path(), UPGRADABLE_DATA_FORMAT_VERSION).unwrap();
     let db = Database::open(dir.path()).unwrap();
     assert_eq!(value(&db, RowId::from_primary_key(1, 5)), Some(11));
+    assert_eq!(
+        detect(dir.path(), &dir.path().join("wal")).unwrap(),
+        Some(DATA_FORMAT_VERSION)
+    );
+}
+
+/// A 2.4.0 directory (format 3) is upgraded in place too: its log and checkpoint are read as
+/// they are, and the commits written afterwards continue above the old ones.
+#[test]
+fn format_three_directories_are_upgraded_in_place() {
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        put(&db, RowId::from_primary_key(1, 5), 11);
+        put(&db, RowId::from_primary_key(1, 6), 12);
+        db.close().unwrap();
+    }
+    stamp(dir.path(), DATA_FORMAT_VERSION - 1).unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(value(&db, RowId::from_primary_key(1, 5)), Some(11));
+    let ts = put(&db, RowId::from_primary_key(1, 7), 13);
+    assert!(ts.0 > 2, "new commits continue above the old ones");
     assert_eq!(
         detect(dir.path(), &dir.path().join("wal")).unwrap(),
         Some(DATA_FORMAT_VERSION)

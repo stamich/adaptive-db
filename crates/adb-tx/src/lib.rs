@@ -10,6 +10,7 @@
 //!
 //! This crate is storage-agnostic: validation receives a lookup of the latest commit timestamp
 //! per row (dependency inversion).
+pub mod coordinator;
 pub mod isolation;
 pub mod manager;
 pub mod mutation;
@@ -17,6 +18,7 @@ pub mod snapshot;
 pub mod transaction;
 pub mod validation;
 
+pub use coordinator::CommitCoordinator;
 pub use isolation::IsolationLevel;
 pub use manager::TransactionManager;
 pub use mutation::Mutation;

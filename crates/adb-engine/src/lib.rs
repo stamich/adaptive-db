@@ -9,6 +9,7 @@
 //! * [`schema_registry`] — persistence of the schema registry, the projection of the catalog
 //!   records in the log (Milestone 2.4.0).
 pub mod cdc;
+mod change_log;
 pub mod committed;
 pub mod database;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod migrate;
 pub mod offsets;
 pub mod options;
 pub mod projection;
+pub mod projection_runtime;
 pub mod projections;
 mod recovery;
 pub mod schema_registry;

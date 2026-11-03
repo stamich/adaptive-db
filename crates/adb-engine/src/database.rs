@@ -30,14 +30,19 @@ use std::{
     },
 };
 
+use adb_change_log::{ChangeLog, ChangeRetentionPolicy, PruneReport};
 use adb_core::encode_key;
-use adb_core::{CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch};
+use adb_core::ProjectionId;
+use adb_core::{
+    CommitResult, CommitSeq, CommitTs, FieldId, IndexId, KeyRange, Row, RowId, SchemaEpoch,
+};
 use adb_execution::{
     DataSource, ExecutionContext, ExecutionError, Executor, IndexAccess, IndexPage, PhysicalPlan,
     QueryCursor, ReadView,
 };
 use adb_index::{IndexBounds, IndexDefinition, IndexSpec, ScanDirection};
 use adb_journal::{Journal, JOURNAL_FILE};
+use adb_projection_runtime::{ProjectionMode, ProjectionRegistry, ProjectionState};
 use adb_schema::{CatalogEvent, EntitySchema, EntitySpec, SchemaChange, SchemaRegistry};
 use adb_stats::{AnalyzeOptions, TableStatistics};
 use adb_stats::{IndexCollector, IndexStatistics};
@@ -50,6 +55,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     cdc::{self, ChangeBatch, ChangeCursor, ChangeFilter},
+    change_log::{envelope_of, open_or_reset, repair, CHANGE_LOG_DIR},
     committed::CommittedTx,
     format,
     health::EngineHealth,
@@ -57,6 +63,9 @@ use crate::{
     log::LogWriter,
     offsets::ConsumerOffsets,
     projection::Projection,
+    projection_runtime::{
+        index_projection_id, open_registry, reconcile, register_consumer, register_index,
+    },
     projections::{Projections, CURRENT_DIR, VERSIONS_DIR},
     recovery::{recover, write_checkpoint},
     schema_registry::registry_path,
@@ -108,6 +117,10 @@ struct Inner {
     wal_dir: PathBuf,
     /// Appender of the canonical log (group commit).
     log: LogWriter,
+    /// Registry of projections and their frontiers.
+    projection_registry: ProjectionRegistry,
+    /// Ordered envelopes of the published commits (derived from the log, fsynced lazily).
+    change_log: ChangeLog,
     /// Current and version stores; readers share, apply/vacuum take it exclusively.
     projections: RwLock<Projections>,
     /// Ids, timestamps and active snapshots.
@@ -147,10 +160,31 @@ impl Database {
         let journal = Journal::new(dir);
         let checkpoints = CheckpointStore::new(dir.join(CHECKPOINT_FILE));
 
+        // The checkpoint as it was before recovery tells how much of the change log is known to
+        // be durable.
+        let before_recovery = checkpoints.load()?;
+        let change_log =
+            open_or_reset(&dir.join(CHANGE_LOG_DIR), options.change_log_segment_bytes)?;
         let recovered = recover(dir, &wal_dir, &options, &journal, &checkpoints)?;
+        repair(
+            &wal_dir,
+            &change_log,
+            &before_recovery,
+            recovered.last_commit_seq,
+        )?;
         let log = LogWriter::open(&wal_dir, options.log_segment_bytes)?;
+        let projection_registry = open_registry(dir)?;
+        reconcile(
+            &projection_registry,
+            recovered.projections.catalog().definitions(),
+            recovered.last_commit_seq,
+        )?;
         let mut tx_manager = TransactionManager::default();
-        tx_manager.advance_after_recovery(recovered.last_tx_id, recovered.last_commit_ts.0);
+        tx_manager.advance_after_recovery(
+            recovered.last_tx_id,
+            recovered.last_commit_ts,
+            recovered.last_commit_seq,
+        );
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -158,6 +192,8 @@ impl Database {
                 options,
                 wal_dir,
                 log,
+                change_log,
+                projection_registry,
                 projections: RwLock::new(recovered.projections),
                 tx_manager: Mutex::new(tx_manager),
                 commit_lock: Mutex::new(()),
@@ -251,8 +287,11 @@ impl Database {
         self.get_at(row_id, tx.snapshot_ts())
     }
 
-    /// Validates and commits `tx`; returns its commit timestamp once it is durable.
-    pub fn commit(&self, mut tx: Transaction) -> Result<CommitTs, DbError> {
+    /// Validates and commits `tx`; returns its commit identity once it is durable: the MVCC
+    /// timestamp and the position in the global commit order (the session token of the client).
+    /// A read-only transaction commits nothing: it reports its snapshot and the head at that
+    /// moment.
+    pub fn commit(&self, mut tx: Transaction) -> Result<CommitResult, DbError> {
         if tx.is_closed() {
             return Err(DbError::TransactionClosed);
         }
@@ -260,14 +299,20 @@ impl Database {
         self.inner.health.check()?;
         if tx.is_read_only() {
             // A read-only transaction observed one consistent snapshot: nothing to validate.
-            return Ok(tx.snapshot_ts());
+            return Ok(CommitResult {
+                commit_ts: tx.snapshot_ts(),
+                commit_seq: self.inner.tx_manager.lock().latest_commit_seq(),
+            });
         }
 
-        let (commit_ts, end) = {
+        let (commit, end) = {
             let _commit = self.inner.commit_lock.lock();
             self.inner.health.check()?;
             let committed = self.prepare(&tx)?;
-            let commit_ts = committed.commit_ts;
+            let commit = CommitResult {
+                commit_ts: committed.commit_ts,
+                commit_seq: committed.commit_seq,
+            };
             let end = self
                 .inner
                 .health
@@ -278,19 +323,148 @@ impl Database {
                         .write()
                         .apply(&committed, appended.commit_lsn)?;
                     self.inner.modifications.lock().record(&committed);
+                    self.inner.change_log.append(&envelope_of(&committed))?;
+                    self.inner
+                        .projection_registry
+                        .advance_synchronous(committed.commit_seq);
                     Ok(appended.end)
                 })
                 .map_err(DbError::CommitOutcomeUnknown)?;
-            (commit_ts, end)
+            (commit, end)
         };
 
         self.inner
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        self.publish(commit);
         self.checkpoint_if_needed();
-        Ok(commit_ts)
+        Ok(commit)
+    }
+
+    /// The change log: one envelope per published commit, ordered by commit sequence number.
+    ///
+    /// The returned handle shares the instance's log; use [`ChangeLog::cursor`] to stream it.
+    /// The log is derived from the canonical WAL (which stays the source of truth) and is
+    /// fsynced at checkpoints rather than on every commit.
+    pub fn change_log(&self) -> ChangeLog {
+        self.inner.change_log.clone()
+    }
+
+    /// The projection registry: every projection of the database with its state, frontier and
+    /// lag. The current-row store and the secondary indexes are registered as synchronous
+    /// projections; asynchronous ones are registered by their owners.
+    pub fn projection_registry(&self) -> ProjectionRegistry {
+        self.inner.projection_registry.clone()
+    }
+
+    /// Registers (or finds, by name) an asynchronous projection fed from the change log and
+    /// returns its id. See [`Database::feed_projection`].
+    pub fn register_consumer_projection(
+        &self,
+        name: &str,
+        entity_id: Option<u64>,
+    ) -> Result<ProjectionId, DbError> {
+        self.inner.health.check()?;
+        register_consumer(&self.inner.projection_registry, name, entity_id)
+    }
+
+    /// Delivers the commits an asynchronous projection has not seen yet to `apply`, in order and
+    /// in batches of at most `limits.0` commits / `limits.1` encoded bytes, and advances its
+    /// frontier after each batch that `apply` accepted. Returns the number of commits applied.
+    ///
+    /// The frontier is the projection's durable position (saved with the next checkpoint), so a
+    /// restart resumes after the last accepted batch; `apply` should be idempotent for the
+    /// commits since the last checkpoint. An `apply` error marks the projection
+    /// [`ProjectionState::Failed`]; a frontier behind the oldest commit of the change log marks
+    /// it [`ProjectionState::NeedsRebuild`]. The projection is marked ready once it has caught
+    /// up with the head.
+    pub fn feed_projection(
+        &self,
+        id: ProjectionId,
+        limits: (usize, u64),
+        mut apply: impl FnMut(&adb_change_log::ChangeBatch) -> Result<(), DbError>,
+    ) -> Result<u64, DbError> {
+        self.inner.health.check()?;
+        let registry = &self.inner.projection_registry;
+        let progress = registry.get(id).ok_or_else(|| {
+            DbError::InvalidArgument(format!("projection {} is not registered", id.0))
+        })?;
+        if progress.descriptor.mode != ProjectionMode::Asynchronous {
+            return Err(DbError::InvalidArgument(format!(
+                "projection {} is synchronous and cannot be fed",
+                progress.descriptor.name
+            )));
+        }
+        if !matches!(
+            progress.state,
+            ProjectionState::Building | ProjectionState::Ready
+        ) {
+            return Err(DbError::InvalidArgument(format!(
+                "projection {} is {:?}",
+                progress.descriptor.name, progress.state
+            )));
+        }
+        let started = std::time::Instant::now();
+        let mut cursor = match self
+            .inner
+            .change_log
+            .cursor(progress.frontier.base_commit_seq)
+        {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                registry.set_state(id, ProjectionState::NeedsRebuild)?;
+                return Err(error.into());
+            }
+        };
+        let mut applied = 0u64;
+        // Only commits published to readers are delivered: the change log may already hold the
+        // envelope of a commit that is still waiting for its fsync.
+        let published = self.inner.tx_manager.lock().latest_commit_seq();
+        while let Some(batch) = cursor.next_batch(limits.0, limits.1)? {
+            let mut batch = batch;
+            batch.commits.retain(|c| c.commit_seq <= published);
+            let Some(last) = batch.commits.last().map(|c| c.commit_seq) else {
+                break;
+            };
+            if let Err(error) = apply(&batch) {
+                registry.set_state(id, ProjectionState::Failed)?;
+                return Err(error);
+            }
+            registry.advance(id, last)?;
+            applied += batch.commits.len() as u64;
+            if last >= published {
+                break;
+            }
+        }
+        if applied > 0 {
+            let seconds = started.elapsed().as_secs_f64();
+            if seconds > 0.0 {
+                registry.observe_rate(id, applied as f64 / seconds)?;
+            }
+        }
+        let frontier = registry
+            .get(id)
+            .map_or(CommitSeq::ZERO, |p| p.frontier.readable_through());
+        if frontier >= published {
+            registry.report_lag(id, 0, 0)?;
+            registry.set_state(id, ProjectionState::Ready)?;
+        }
+        Ok(applied)
+    }
+
+    /// Prunes the change log: segments no asynchronous projection still needs are removed, and
+    /// `policy` bounds the log even against a stalled one. Projections whose history was
+    /// removed are marked [`adb_projection_runtime::ProjectionState::NeedsRebuild`].
+    pub fn prune_change_log(&self, policy: &ChangeRetentionPolicy) -> Result<PruneReport, DbError> {
+        self.inner.health.check()?;
+        let head = self.inner.tx_manager.lock().latest_commit_seq();
+        let frontier = self.inner.projection_registry.retention_frontier(head);
+        let report = self.inner.change_log.prune(frontier, policy)?;
+        if let Some(earliest) = report.earliest_after {
+            self.inner.projection_registry.mark_overtaken(earliest);
+        }
+        Ok(report)
     }
 
     /// Abandons `tx`. (Dropping it has the same effect.)
@@ -331,6 +505,13 @@ impl Database {
     /// Latest commit visible to new snapshots.
     pub fn latest_committed_ts(&self) -> CommitTs {
         self.inner.tx_manager.lock().latest_committed_ts()
+    }
+
+    /// The canonical head: the sequence number of the latest published commit, data or catalog
+    /// (0 on an empty database). A session that read `head` before a query has seen every
+    /// commit up to it; see [`CommitSeq`].
+    pub fn latest_commit_seq(&self) -> CommitSeq {
+        self.inner.tx_manager.lock().latest_commit_seq()
     }
 
     /// Runs a plan made at catalog epoch `schema_epoch` (plan wire v4) at `snapshot` (the latest
@@ -552,13 +733,23 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         check_index_columns(self.inner.projections.read().registry(), &spec)?;
-        let created_at = self.inner.tx_manager.lock().last_allocated_commit_ts();
+        let created = self.inner.tx_manager.lock().last_allocated_commit();
+        let created_at = created.commit_ts;
         let lsn = self.inner.log.end()?;
         let definition = self.inner.projections.write().build_index(
             spec,
             created_at,
             lsn,
             self.inner.options.buffer_pages,
+        )?;
+        register_index(
+            &self.inner.projection_registry,
+            &definition,
+            self.inner
+                .tx_manager
+                .lock()
+                .last_allocated_commit()
+                .commit_seq,
         )?;
         // Plans made before the index existed must be planned again (they may now use it).
         self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
@@ -567,7 +758,7 @@ impl Database {
         self.checkpoint_locked()?;
         // Every commit up to `created_at` is applied and, after the checkpoint's log sync,
         // durable: it may be published, so a query planned right now can use the index.
-        self.inner.tx_manager.lock().publish_commit(created_at);
+        self.publish(created);
         Ok(definition)
     }
 
@@ -581,6 +772,9 @@ impl Database {
         let _commit = self.inner.commit_lock.lock();
         self.inner.health.check()?;
         let (definition, files) = self.inner.projections.write().drop_index(name)?;
+        self.inner
+            .projection_registry
+            .remove(index_projection_id(definition.id));
         // Plans that scan the index must be planned again.
         self.commit_catalog_locked(|_, _| Ok((CatalogEvent::Epoch, ())))?;
         self.checkpoint_locked()?;
@@ -784,15 +978,17 @@ impl Database {
             probe.apply(epoch, &event)?;
             (epoch, event, value)
         };
-        let (tx_id, snapshot_ts, commit_ts) = {
+        let (tx_id, snapshot_ts, commit) = {
             let mut tx_manager = self.inner.tx_manager.lock();
             let tx = tx_manager.begin(IsolationLevel::Serializable);
-            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit_ts())
+            (tx.id(), tx.snapshot_ts(), tx_manager.allocate_commit())
         };
         let committed = CommittedTx {
             tx_id,
             snapshot_ts,
-            commit_ts,
+            commit_ts: commit.commit_ts,
+            commit_seq: commit.commit_seq,
+            schema_epoch: epoch,
             before_images: Vec::new(),
             mutations: Vec::new(),
             catalog: vec![(epoch, event)],
@@ -806,6 +1002,10 @@ impl Database {
                     .projections
                     .write()
                     .apply(&committed, appended.commit_lsn)?;
+                self.inner.change_log.append(&envelope_of(&committed))?;
+                self.inner
+                    .projection_registry
+                    .advance_synchronous(committed.commit_seq);
                 Ok(appended.end)
             })
             .map_err(DbError::CommitOutcomeUnknown)?;
@@ -813,7 +1013,7 @@ impl Database {
             .health
             .guard(|| Ok(self.inner.log.sync_through(end)?))
             .map_err(DbError::CommitOutcomeUnknown)?;
-        self.inner.tx_manager.lock().publish_commit(commit_ts);
+        self.publish(commit);
         Ok(value)
     }
 
@@ -845,11 +1045,16 @@ impl Database {
             .guard(|| {
                 let end = self.inner.log.end()?;
                 self.inner.log.sync_through(end)?;
+                // The change log is fsynced lazily, here: it is derived from the log, so a
+                // crash before this point only costs a rebuild of its tail.
+                self.inner.change_log.sync()?;
+                self.inner.projection_registry.checkpoint()?;
                 let checkpoint = {
                     let tx_manager = self.inner.tx_manager.lock();
                     Checkpoint {
                         replay_from: end,
-                        last_commit_ts: tx_manager.last_allocated_commit_ts(),
+                        last_commit_ts: tx_manager.last_allocated_commit().commit_ts,
+                        last_commit_seq: tx_manager.last_allocated_commit().commit_seq,
                         last_tx_id: tx_manager.last_tx_id(),
                         vacuumed_through: CommitTs(
                             self.inner.vacuumed_through.load(Ordering::Acquire),
@@ -961,11 +1166,14 @@ impl Database {
         })?;
         outcome.map_err(DbError::TransactionConflict)?;
 
-        let commit_ts = self.inner.tx_manager.lock().allocate_commit_ts();
+        let commit = self.inner.tx_manager.lock().allocate_commit();
+        let commit_ts = commit.commit_ts;
         Ok(CommittedTx {
             tx_id: tx.id(),
             snapshot_ts: tx.snapshot_ts(),
             commit_ts,
+            commit_seq: commit.commit_seq,
+            schema_epoch: projections.registry().epoch(),
             before_images: before
                 .into_iter()
                 .filter_map(|(row_id, record)| {
@@ -984,6 +1192,13 @@ impl Database {
             mutations,
             catalog: Vec::new(),
         })
+    }
+
+    /// Publishes a durable commit: readers may see it from now on, and the projection runtime
+    /// learns the new head (the reference point of every projection's lag).
+    fn publish(&self, commit: CommitResult) {
+        self.inner.tx_manager.lock().publish_commit(commit);
+        self.inner.projection_registry.set_head(commit.commit_seq);
     }
 
     /// Starts a checkpoint once the dirty-page budget is exceeded. A failure poisons the

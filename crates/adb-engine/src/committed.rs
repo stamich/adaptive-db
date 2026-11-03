@@ -4,7 +4,7 @@
 //! recovery and change-data capture turn log records back into [`CommittedTx`] values
 //! ([`TxAssembler`]). Both directions live here so the log format has exactly one owner.
 
-use adb_core::{CommitTs, Lsn, RowId, SchemaEpoch, TxId};
+use adb_core::{CommitSeq, CommitTs, Lsn, Row, RowId, SchemaEpoch, TxId};
 use adb_storage::HistoricalVersion;
 use adb_tx::Mutation;
 use adb_wal::{CatalogEvent, LogEntry, WalError, WalRecord};
@@ -18,6 +18,12 @@ pub struct CommittedTx {
     pub snapshot_ts: CommitTs,
     /// Commit timestamp.
     pub commit_ts: CommitTs,
+    /// Position in the global commit order (logs written before sequence numbers existed are
+    /// numbered by commit timestamp, see [`TxAssembler`]).
+    pub commit_seq: CommitSeq,
+    /// Catalog epoch in force after the commit (the epoch of its last catalog change for a
+    /// DDL transaction, the current epoch for a data transaction).
+    pub schema_epoch: SchemaEpoch,
     /// Before-images of overwritten rows (closed at `commit_ts`).
     pub before_images: Vec<(RowId, HistoricalVersion)>,
     /// New row states in row order.
@@ -28,6 +34,27 @@ pub struct CommittedTx {
 }
 
 impl CommittedTx {
+    /// Before and after image of every row the commit changed, in row order.
+    ///
+    /// The before image is the version the commit closed (`None` for an insert), the after image
+    /// the new state (`None` for a delete). A delete of a row that did not exist changes
+    /// nothing and is left out. Change-data capture and the change log both derive their row
+    /// changes from this one function, so the two feeds cannot disagree.
+    pub fn row_images(&self) -> impl Iterator<Item = (RowId, Option<Row>, Option<Row>)> + '_ {
+        self.mutations.iter().filter_map(|(row_id, mutation)| {
+            let before = self
+                .before_images
+                .iter()
+                .find(|(id, _)| id == row_id)
+                .and_then(|(_, version)| version.value.clone());
+            let after = match mutation {
+                Mutation::Put(row) => Some(row.clone()),
+                Mutation::Delete => None,
+            };
+            (before.is_some() || after.is_some()).then_some((*row_id, before, after))
+        })
+    }
+
     /// The contiguous run of log records describing this commit.
     pub fn to_records(&self) -> Vec<WalRecord> {
         let tx_id = self.tx_id;
@@ -67,9 +94,11 @@ impl CommittedTx {
                 },
             });
         }
-        records.push(WalRecord::Commit {
+        records.push(WalRecord::CommitV2 {
             tx_id,
             commit_ts: self.commit_ts,
+            commit_seq: self.commit_seq,
+            schema_epoch: self.schema_epoch,
         });
         records
     }
@@ -128,6 +157,8 @@ impl TxAssembler {
                     tx_id,
                     snapshot_ts,
                     commit_ts: CommitTs(0),
+                    commit_seq: CommitSeq(0),
+                    schema_epoch: SchemaEpoch(0),
                     before_images: Vec::new(),
                     mutations: Vec::new(),
                     catalog: Vec::new(),
@@ -191,18 +222,47 @@ impl TxAssembler {
                 Ok(None)
             }
             WalRecord::Commit { tx_id, commit_ts } => {
-                if self.open_for(tx_id, lsn)?.is_none() {
-                    return Ok(None);
-                }
-                let mut tx = self.open.take().expect("checked by open_for");
-                tx.commit_ts = commit_ts;
-                Ok(Some(LoggedTx {
-                    tx,
-                    commit_lsn: lsn,
-                    end: next,
-                }))
+                // Logs of Milestones before 2.5.0 carry no sequence numbers; their commits are
+                // numbered by timestamp, which is unique and increasing. New commits continue
+                // above the highest of them. The epoch is the one of the last catalog change
+                // seen so far in the transaction (0 when it changed none).
+                self.finish(tx_id, lsn, next, commit_ts, CommitSeq(commit_ts.0), None)
             }
+            WalRecord::CommitV2 {
+                tx_id,
+                commit_ts,
+                commit_seq,
+                schema_epoch,
+            } => self.finish(tx_id, lsn, next, commit_ts, commit_seq, Some(schema_epoch)),
         }
+    }
+
+    /// Closes the open transaction at its commit record and hands it out.
+    fn finish(
+        &mut self,
+        tx_id: TxId,
+        lsn: Lsn,
+        next: Lsn,
+        commit_ts: CommitTs,
+        commit_seq: CommitSeq,
+        schema_epoch: Option<SchemaEpoch>,
+    ) -> Result<Option<LoggedTx>, WalError> {
+        if self.open_for(tx_id, lsn)?.is_none() {
+            return Ok(None);
+        }
+        let mut tx = self.open.take().expect("checked by open_for");
+        tx.commit_ts = commit_ts;
+        tx.commit_seq = commit_seq;
+        if let Some(epoch) = schema_epoch {
+            tx.schema_epoch = epoch;
+        } else if let Some((epoch, _)) = tx.catalog.last() {
+            tx.schema_epoch = *epoch;
+        }
+        Ok(Some(LoggedTx {
+            tx,
+            commit_lsn: lsn,
+            end: next,
+        }))
     }
 
     /// The open transaction if `tx_id` matches it; `None` for a tolerated orphan.
@@ -252,6 +312,8 @@ mod tests {
             tx_id: TxId(id),
             snapshot_ts: CommitTs(1),
             commit_ts: CommitTs(2),
+            commit_seq: CommitSeq(2),
+            schema_epoch: SchemaEpoch(1),
             before_images: vec![(
                 RowId(1),
                 HistoricalVersion {
@@ -327,5 +389,26 @@ mod tests {
         for entry in entries(records, 0) {
             assert!(tolerant.push(entry).unwrap().is_none());
         }
+    }
+
+    /// A commit record of a log written before sequence numbers existed is numbered by its
+    /// timestamp and takes the epoch of its last catalog change.
+    #[test]
+    fn legacy_commits_are_numbered_by_timestamp() {
+        let mut tx = sample(4);
+        tx.catalog = vec![(SchemaEpoch(6), CatalogEvent::Epoch)];
+        let mut records = tx.to_records();
+        let last = records.len() - 1;
+        records[last] = WalRecord::Commit {
+            tx_id: tx.tx_id,
+            commit_ts: tx.commit_ts,
+        };
+        let mut assembler = TxAssembler::strict();
+        let mut out = Vec::new();
+        for entry in entries(records, 0) {
+            out.extend(assembler.push(entry).unwrap());
+        }
+        assert_eq!(out[0].tx.commit_seq, CommitSeq(tx.commit_ts.0));
+        assert_eq!(out[0].tx.schema_epoch, SchemaEpoch(6));
     }
 }

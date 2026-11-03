@@ -1,13 +1,60 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.4.0. Hardened patch releases preserve the functional scope of
+Milestone 2.5.0. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
 **Version numbers.** Up to 2.2.3 the patch number counted iterations of a milestone's plan
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
-for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, and Milestone 2.4 is 2.4.0.
+for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
+Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.0 — Semantic consistency and the change log
+
+Milestone 2.5: a global commit order, a change log derived from the canonical log, a registry of
+projections with their freshness, and session-level consistency. Indexes are still maintained
+inside the commit, so no existing statement changes meaning. Design and adaptations:
+`docs/change-log.md`, `docs/consistency.md`, `docs/milestone-2.5.0.md`,
+`docs/security-review-2.5.0.md`.
+
+### Breaking changes
+- **C ABI 8**: `NativeLibrary` refuses any other version. Plan wire stays v4, batch format v2.
+- **Data format 4**. A format-3 directory is upgraded in place on open (nothing is rewritten; the
+  commits of the old log are numbered by their timestamps); a newer format is refused.
+- `Database::commit` returns a `CommitResult { commit_ts, commit_seq }` instead of a timestamp.
+- DML messages of the SQL gateway end with `commitSeq=<n>`; `QueryResult` has a `commitSeq`.
+
+### Added (Rust)
+- `adb-core`: `CommitSeq`, `CommitResult`, `ProjectionId`, `ProjectionEpoch`.
+- `adb-tx`/`adb-wal`/engine: one commit order for data and catalog commits, `CommitV2` log
+  records, `latest_commit_seq`, recovery refuses a non-increasing sequence.
+- New crate `adb-change-log`: envelopes, CRC-framed segments with rollover and torn-tail recovery,
+  idempotent append, cursors with commit and byte budgets, retention (consumer frontier, size, age
+  and lag limits). The engine appends one envelope per commit before publishing its number, syncs
+  at checkpoint and close, and rebuilds a missing or damaged log from the WAL.
+- New crate `adb-projection-runtime`: projection descriptors, states, frontiers, lag, smoothed
+  consumption rate, `wait_until`, durable checkpoints; the current rows and indexes are
+  synchronous projections; `register_consumer_projection`/`feed_projection` for asynchronous ones.
+- CDC events carry `commit_seq`.
+- C ABI 8: `adb_latest_commit_seq`, `adb_insert_row_commit_json`, `adb_update_fields_commit_json`,
+  `adb_delete_row_commit`, `adb_change_cursor_*`, `adb_projection_*`.
+- Workload benchmark: consistency section (workloads I–O) and its checks.
+
+### Added (JVM)
+- New module `adb-consistency`: `SessionConsistencyToken`, `ReadConsistency`, `StalenessBound`,
+  `SemanticReadContext`, projection model and JSON codec, `FreshnessResolver`.
+- `adb-optimizer`: `SemanticFreshnessPlanner`.
+- SQL: `SET SESSION CONSISTENCY STRONG | READ_YOUR_WRITES | EVENTUAL | BOUNDED n MS | BOUNDED n COMMITS`.
+- Gateway: `AdaptiveSession`, `AdaptiveDatabase.session()`, tokens from DML and DDL, waits and
+  fallbacks, EXPLAIN **Read context**; shell commands `\session`, `\projections`, `\changes`.
+- Java FFM: commit results, change-log cursors, projections, `waitForProjection`.
+- `examples/jvm-consistency-smoke` (real engine, no Gradle) and demo phase 2.5.0.
+
+### Notes
+- `BOUNDED n MS` is estimated from a projection's lag and observed consumption rate; it is not a
+  measured wall-clock age.
+- Benchmark results on the reference machine (Ryzen 9 5950X) are in `examples/results/2.5.0-*.json`.
 
 ## 2.4.0 — Schema evolution
 

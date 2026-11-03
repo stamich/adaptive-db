@@ -35,11 +35,11 @@ fn historical_versions_survive_restart_via_persistent_version_store() {
         let db = Database::open(dir.path()).unwrap();
         let mut first = db.begin();
         first.put(RowId(1), row_with_i64(100));
-        t1 = db.commit(first).unwrap();
+        t1 = db.commit(first).unwrap().commit_ts;
 
         let mut second = db.begin();
         second.put(RowId(1), row_with_i64(200));
-        t2 = db.commit(second).unwrap();
+        t2 = db.commit(second).unwrap().commit_ts;
     }
     {
         let db = Database::open(dir.path()).unwrap();
