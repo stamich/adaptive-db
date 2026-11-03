@@ -55,8 +55,10 @@ Each is one commit.
 | 14 | Benchmark section and its check | `advisor` in the JVM report, `check-benchmarks.py` |
 | 15 | Feature tour phase | `demo/sql/2.5.3-advisor.sql` |
 | 16 | `docs/advisor.md` | design document |
-| 17 | This note, README, CHANGELOG, roadmap, invariants, architecture, telemetry | documentation |
-| 18 | Validation records | `VALIDATION-2.5.3.txt`, `MILESTONE-2.5.3.json` |
+| 17 | This note | `docs/milestone-2.5.3.md` |
+| 18 | Complete the Scaladoc of the module | parameters of `Advisor`, `AdvisorScheduler.close` |
+| 19 | README, CHANGELOG, roadmap, invariants 69 to 73, architecture, telemetry note, results README | documentation |
+| 20 | Validation records | `VALIDATION-2.5.3.txt`, `MILESTONE-2.5.3.json` |
 
 ## Invariants
 
