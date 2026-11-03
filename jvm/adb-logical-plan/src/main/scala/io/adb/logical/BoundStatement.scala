@@ -38,6 +38,9 @@ final case class BoundSetPlanCache(enabled: Boolean) extends BoundStatement
 /** `SET telemetry = off | sampled | full` (2.5.2); the mode is validated here, interpreted by the gateway. */
 final case class BoundSetTelemetry(mode: String) extends BoundStatement
 
+/** `SET advisor = on | off` (2.5.3): starts or stops the advisor's background evaluation. */
+final case class BoundSetAdvisor(enabled: Boolean) extends BoundStatement
+
 /** `SET SESSION CONSISTENCY ...`. */
 final case class BoundSetConsistency(level: io.adb.consistency.ReadConsistency) extends BoundStatement
 

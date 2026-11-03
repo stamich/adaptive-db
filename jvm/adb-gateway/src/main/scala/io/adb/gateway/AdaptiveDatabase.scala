@@ -3,6 +3,7 @@ package io.adb.gateway
 import io.adb.consistency.*
 import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.plancache.*
+import io.adb.advisor.{Advisor, AdvisorReport, AdvisorScheduler, EntityDesign, PhysicalDesign}
 import io.adb.telemetry.*
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
@@ -70,6 +71,10 @@ final class AdaptiveDatabase(
   private val planCache = new PlanCache[CachedQuery](math.max(1L, planCacheBytes), 8, 4096, _.weight)
   /** Query telemetry (off until `SET telemetry = sampled | full`); see [[io.adb.telemetry.TelemetryRuntime]]. */
   val telemetry: TelemetryRuntime = new TelemetryRuntime()
+  /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. */
+  val advisor: Advisor = Advisor.forTelemetry(telemetry)
+  /** The advisor's timer; created on the first `SET advisor = on`. */
+  private var advisorTimer: Option[AdvisorScheduler] = None
   /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
   @volatile private var cacheEnabled: Boolean = planCacheBytes > 0
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
@@ -299,6 +304,10 @@ final class AdaptiveDatabase(
         case _ => TelemetryMode.Full
       QueryResult(Vector.empty, Vector.empty, Some(s"SET telemetry = $name"))
 
+    case BoundSetAdvisor(enabled) =>
+      if enabled then startAdvisor() else stopAdvisor()
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET advisor = ${if enabled then "on" else "off"}"))
+
     case BoundSetConsistency(level) =>
       session.consistency = level
       QueryResult(Vector.empty, Vector.empty, Some(s"SET SESSION CONSISTENCY ${level.sql}"))
@@ -398,6 +407,60 @@ final class AdaptiveDatabase(
         Vector[Any](java.lang.Long.toHexString(s.shapeId), s.executions, s.cacheHits, s.failures,
           f"${s.meanNanos / 1000.0}%.1f", s.maxNanos / 1000, s.totalActualRows / n, s.totalRowsRead / n, f"${s.maxQError}%.1f")
       })
+
+  /** The physical design the advisor judges: names, row counts, statistics and indexes, read from
+    * the catalog and the engine now and returned as immutable values.
+    */
+  def physicalDesign(): PhysicalDesign =
+    PhysicalDesign.of(catalog.entities.map { entity =>
+      val stats = statistics.statistics(entity.id)
+      EntityDesign(
+        entity.id.value,
+        entity.name,
+        entity.fields.map(f => f.id.value.toLong -> f.name).toMap,
+        stats.fold(0L)(_.table.rowCount),
+        stats,
+        indexCatalog.indexes(entity.id)
+      )
+    })
+
+  /** Starts evaluating the advisor in the background every `periodMillis` (`SET advisor = on`).
+    * Turns nothing else on: without `SET telemetry = sampled | full` the advisor sees no queries.
+    */
+  def startAdvisor(periodMillis: Long = AdaptiveDatabase.AdvisorPeriodMillis): Unit = synchronized {
+    if advisorTimer.isEmpty then advisorTimer = Some(new AdvisorScheduler(advisor, () => physicalDesign(), periodMillis))
+    advisorTimer.foreach(_.start())
+  }
+
+  /** Stops the background evaluation (`SET advisor = off`); recommendations and the audit log stay. */
+  def stopAdvisor(): Unit = synchronized(advisorTimer.foreach(_.stop()))
+
+  /** Whether the advisor's timer runs. */
+  def advisorRunning: Boolean = synchronized(advisorTimer.exists(_.running))
+
+  /** The advisor's current advice (the shell's `\\advice`): `(kind, advice, sql)` rows.
+    *
+    * With the timer off, each call evaluates once (so the shell can be used by hand, and the
+    * hysteresis counts calls); with the timer on, it shows the latest evaluation.
+    */
+  def showAdvice(): QueryResult =
+    telemetry.drainNow()
+    val report: AdvisorReport = if advisorRunning then advisor.lastReport.getOrElse(advisor.evaluate(physicalDesign())) else advisor.evaluate(physicalDesign())
+    val rows = report.recommendations.map { r =>
+      val kind = r match
+        case _: io.adb.advisor.CreateIndex => "index"
+        case _: io.adb.advisor.RunAnalyze => "analyze"
+        case i: io.adb.advisor.Informational => i.kind
+      Vector[Any](kind, r.summary, r.sql.getOrElse(""))
+    }
+    val note = if !telemetry.enabled then Some("telemetry is off: SET telemetry = sampled so the advisor sees queries") else None
+    QueryResult(Vector("kind", "advice", "sql"), rows, note)
+
+  /** The advisor's audit log (the shell's `\\advice log`): every confirmed, withdrawn and applied advice. */
+  def showAdviceLog(): QueryResult =
+    QueryResult(
+      Vector("seq", "event", "advice", "sql"),
+      advisor.auditLog.entries.map(e => Vector[Any](e.sequence, e.kind.label, e.summary, e.sql.getOrElse(""))))
 
   /** What a plan for `select` is valid for, read now. */
   private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
@@ -502,6 +565,9 @@ final class AdaptiveDatabase(
 
 /** Planning pipeline, EXPLAIN rendering and limits of the gateway. */
 object AdaptiveDatabase:
+  /** Time between the advisor's background evaluations after `SET advisor = on` (10 s). */
+  val AdvisorPeriodMillis: Long = 10_000L
+
   /** Whether the statement is a schema change, which commits to the catalog. */
   def isDdl(statement: BoundStatement): Boolean = statement match
     case _: BoundCreateTable | _: BoundAlterTable | _: BoundDropTable | _: BoundCreateIndex | _: BoundDropIndex => true
