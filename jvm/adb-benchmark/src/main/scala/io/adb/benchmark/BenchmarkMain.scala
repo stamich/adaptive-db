@@ -11,7 +11,10 @@ import io.adb.telemetry.*
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 
+import io.adb.ffm.NativeQuery
+
 import java.nio.file.{Files, Path}
+import java.util.Optional
 import scala.annotation.tailrec
 
 /** JVM benchmark (Milestone 2.5.2.1) separating JVM planning cost from native end-to-end execution.
@@ -219,6 +222,7 @@ object BenchmarkMain:
       report("gateway_point_telemetry_skip", telemetryRuns, tSkip)
       report("gateway_point_telemetry_capture", telemetryRuns, tCapture)
       println(f"telemetry overhead vs off (median of $rounds rounds): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
+      benchmarkCaptureBreakdown(db, native, iterations)
       println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
       // The native calls a cache hit makes before it runs the plan (2.5.2 baseline for the
       // telemetry budgets): the schema epoch, the statistics generation of one table, the
@@ -232,6 +236,71 @@ object BenchmarkMain:
       report("gateway_scan_filter_limit_sql_to_rust", scanIterations, scanNs)
       report("gateway_join_aggregate_top_k_sql_to_rust", relationalIterations, relationalNs)
     finally native.close()
+
+  /** Splits the cost of a captured query into the steps the capture path adds to the engine run
+    * (Milestone 2.5.2.1): the native execution alone, the same plus fetching the profile document,
+    * and the same plus scanning it for the rows read. It also reports the bytes the calling thread
+    * allocates per execution with telemetry off, skipped and captured.
+    *
+    * The steps are timed in alternating rounds and the median of each is reported, as for the
+    * telemetry modes, so a drift of the machine does not look like a difference between steps.
+    */
+  private def benchmarkCaptureBreakdown(db: AdaptiveDatabase, native: NativeDatabase, iterations: Int): Unit =
+    val sql = "SELECT * FROM account WHERE id = 500;"
+    val bound = new Binder(db.catalog).bind(new SqlParser().parse(sql)).asInstanceOf[BoundSelect]
+    val plans = db.plan(bound)
+    val json = PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch)
+    val snapshot = Optional.empty[java.lang.Long]()
+    /** Runs the plan to the end of the stream and returns the number of rows. */
+    def drain(query: NativeQuery): Int =
+      var rows = 0
+      var next = query.nextBatch()
+      while next.isPresent do
+        rows += next.get().rowCount()
+        next = query.nextBatch()
+      rows
+    val runs = iterations * 2
+    def execOnly(): Int =
+      val query = native.execute(json, snapshot)
+      try drain(query) finally query.close()
+    def execProfile(): Int =
+      val query = native.execute(json, snapshot)
+      try drain(query) + query.profileJson().length finally query.close()
+    def execProfileScan(): Long =
+      val query = native.execute(json, snapshot)
+      try
+        drain(query)
+        io.adb.gateway.ProfileRenderer.rowsScanned(query.profileJson())
+      finally query.close()
+    for _ <- 0 until 2000 do { execOnly(); execProfile(); execProfileScan() }
+    val rounds = 7
+    val a, b, c = Array.fill(rounds)(0L)
+    for r <- 0 until rounds do
+      a(r) = time(runs) { execOnly() }; b(r) = time(runs) { execProfile() }; c(r) = time(runs) { execProfileScan() }
+    def median(x: Array[Long]): Long = x.sorted.apply(x.length / 2)
+    val (tExec, tProfile, tScan) = (median(a), median(b), median(c))
+    report("capture_native_execute_only", runs, tExec)
+    report("capture_native_execute_profile", runs, tProfile)
+    report("capture_native_execute_profile_scan", runs, tScan)
+    println(f"capture steps (ns/op): profile fetch ${(tProfile - tExec).toDouble / runs}%.0f, row scan ${(tScan - tProfile).toDouble / runs}%.0f")
+
+    val threads = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    /** Bytes the calling thread allocates per execution of `sql` in telemetry `mode`. */
+    def allocated(mode: String): Double =
+      db.execute(s"SET telemetry = $mode")
+      for _ <- 0 until 2000 do db.execute(sql)
+      val before = threads.getCurrentThreadAllocatedBytes
+      var i = 0
+      while i < runs do { db.execute(sql); i += 1 }
+      (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
+    val policy = db.telemetry.policy
+    db.telemetry.policy = TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
+    val (off, skip, capture) = (allocated("off"), allocated("sampled"), allocated("full"))
+    db.execute("SET telemetry = off")
+    db.telemetry.policy = policy
+    println(f"gateway_point_alloc_bytes_off      $off%10.0f B/op")
+    println(f"gateway_point_alloc_bytes_skip     $skip%10.0f B/op (+${skip - off}%.0f vs off)")
+    println(f"gateway_point_alloc_bytes_capture  $capture%10.0f B/op (+${capture - off}%.0f vs off)")
 
   /** Runs `body` `iterations` times, keeping its result alive so the JIT cannot elide it.
     *
