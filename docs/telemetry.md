@@ -158,6 +158,9 @@ are worth revisiting if the reference-machine run shows contention under many qu
 **Done in 2.5.3:** the workload model with time windows, the four detectors, candidates,
 cost-benefit scoring, the advisor and its audit log ([advisor.md](advisor.md)).
 
-**Later:** persisted snapshots; any automatic action; telemetry for DML and DDL; failed events for
+**Done in 2.5.4:** per-entity write counters (above) and the actuator that acts on the
+advisor's advice ([actuator.md](actuator.md)).
+
+**Later:** persisted snapshots; telemetry for DDL; failed events for
 statements that fail before a shape exists; a cached-plan hit/miss rate per shape beyond the
 `cache_hits` count.

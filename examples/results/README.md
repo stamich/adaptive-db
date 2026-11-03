@@ -4,6 +4,19 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+## Milestone 2.5.4 actuator
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.5.4-database.json, 2.5.4-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.4-database.json examples/results/2.5.4-ffi.json
+```
+
+The JVM report has a new `actuator` section (two 5 000-row tables). `check-benchmarks.py` checks its
+counts exactly: no action while off or advisory, one index kept and one rolled back, the rolled-back
+target refused during its cooldown, no failed action, at least 4x fewer rows read per execution on
+the helped query, and the user's indexes unchanged. The mean tick time is for information. The
+telemetry section also reports `write_alloc_extra_counted` (budget 64 bytes).
+
 ## Milestone 2.5.3 workload advisor
 
 ```bash

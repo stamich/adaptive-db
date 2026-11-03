@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.3
+# Adaptive DB — Milestone 2.5.4
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -15,7 +15,47 @@ cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.
 evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
 projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
-2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1) and, since 2.5.3, a workload advisor that recommends indexes and `ANALYZE` from that telemetry (it never acts).
+2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1) and, since 2.5.3, a workload advisor that recommends indexes and `ANALYZE` from that telemetry and, since 2.5.4, an opt-in `auto_safe` actuator that carries a recommendation out, measures it and keeps or undoes it.
+
+## What 2.5.4 adds
+
+2.5.4 adds an **actuator** in a new JVM module, `adb-actuator`. With `SET adaptive = auto_safe` the
+database creates the index the advisor recommends, measures whether queries now read fewer rows,
+keeps it if they do and drops it again if they do not. It changes nothing in the engine: the
+**C ABI stays 9**, plan wire v4 and data format 4 are the same, and no data migration is needed.
+
+| Area | 2.5.3 | 2.5.4 |
+|---|---|---|
+| Acting | never: recommends only | **opt-in**: `SET adaptive = off \| advisory \| auto_safe` (default `off`) |
+| Statements it may run | none | `CREATE INDEX`, `ANALYZE`, `DROP INDEX` of its own indexes, nothing else |
+| Decision | hysteresis only | **policy gate**: 11 rejection reasons (evidence, ratio, cooldowns, index count, table size, bytes, builds in flight), a budget and cooldowns |
+| Measuring | — | rows read per execution before and after (exact engine counter); time can only veto beyond 2x; write cost against per-entity **write counters** |
+| Undo | — | rollback of an index that did not help; the rollback cooldown doubles per rollback of the same target |
+| Ownership | — | only `adv_*` indexes it created can be dropped (two guards); idle ones are retired; a person's drop is respected |
+| History | audit log of advice | **action log**: applied, kept, rolled_back, rejected, failed, externally_dropped, adopted |
+| SQL / shell | `SET advisor`, `\advice` | `SET adaptive`; `\actions`, `\actions log` |
+| Version | 2.5.3 | engine, crates, JVM build and scripts **2.5.4** |
+| Tests | 417 Rust, 279 JVM | **417 Rust, 405 JVM**, plus the six JVM smoke tests |
+
+```sql
+SET adaptive = auto_safe;        -- telemetry goes to `full` while this is on
+-- ... run the workload ...
+\actions
+-- id | target | action       | state | sql                                             | reason
+-- 1  | index:7:5 | create_index | kept  | CREATE INDEX adv_ledger_currency ON ledger (currency) | rows read fell 2002.0x, time x0.05
+```
+
+The design, the defaults and the safety rules are in [docs/actuator.md](docs/actuator.md); what was
+done and left out is in [docs/milestone-2.5.4.md](docs/milestone-2.5.4.md).
+
+**Limits to know before turning it on:** `CREATE INDEX` blocks the database while it builds (about
+30 µs per row), so the actuator builds only on tables of up to 50 000 rows; larger tables still get
+advice. The default stays `off`.
+
+**Upgrading from 2.5.3:** rebuild the JVM modules; the native library is unchanged except for its
+version string. Nothing happens until `SET adaptive = auto_safe`.
+
+**Numbering:** 2.5.4 has three components, so the Cargo crates are `2.5.4`.
 
 ## What 2.5.3 adds
 
@@ -102,7 +142,7 @@ Cost on a cached point lookup in the validation VM (noisy): telemetry on but ski
 (within noise), captured +12 % to +18 %; the shape is computed once per plan, not per execution.
 Details, the sampling rules and the measurements: [docs/telemetry.md](docs/telemetry.md); how the
 proposal was implemented and adapted: [docs/milestone-2.5.2.md](docs/milestone-2.5.2.md).
-The workload model and the physical-design advisor that read this data are planned as 2.5.3.
+The workload model and the advisor that read this data arrived in 2.5.3 (the actuator in 2.5.4).
 
 **Upgrading from 2.5.1:** nothing to do; there is no format change and telemetry is off until you
 run `SET telemetry = sampled`.
@@ -338,9 +378,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.3.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.4.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.3 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.4 through the JVM CLI
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
@@ -359,7 +399,8 @@ needs access to Maven Central. The Java FFM → Rust path is also checked withou
 checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
 and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`
 and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`
-and (advisor, 2.5.3, [docs/advisor.md](docs/advisor.md)) `examples/jvm-advisor-smoke/run.sh`.
+and (advisor, 2.5.3, [docs/advisor.md](docs/advisor.md)) `examples/jvm-advisor-smoke/run.sh`
+and (actuator, 2.5.4, [docs/actuator.md](docs/actuator.md)) `examples/jvm-actuator-smoke/run.sh`.
 
 ## Repository layout
 
@@ -368,11 +409,11 @@ crates/        Rust engine (core, journal, page, buffer, btree, storage, schema,
                execution, plan-wire, stats, change-log, projection-runtime, engine, ffi) and the adb-migrate tool
 include/adb.h  C ABI v9
 jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), plan cache, telemetry,
-               advisor, SQL, binder, optimizer (estimation, cost, join order, access paths), physical planning, FFM,
+               advisor, actuator, SQL, binder, optimizer (estimation, cost, join order, access paths), physical planning, FFM,
                gateway, CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC, consistency, plan-cache, telemetry and advisor smoke tests, results
+examples/      Rust demo and benchmark, JVM CDC, consistency, plan-cache, telemetry, advisor and actuator smoke tests, results
 demo/          feature tour through the JVM CLI
 docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap
