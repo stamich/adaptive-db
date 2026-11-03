@@ -13,8 +13,8 @@ use crate::{
         scan::ScanOperator, sort::SortOperator, top_k::TopKOperator, Operator,
     },
     profile::QueryProfile,
-    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, QueryTelemetry, RecordBatch,
-    SlotId,
+    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, QueryTelemetry,
+    RecordBatch, SlotId,
 };
 
 /// Plan validation and operator-tree construction.

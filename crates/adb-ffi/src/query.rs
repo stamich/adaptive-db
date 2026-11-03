@@ -182,7 +182,10 @@ pub extern "C" fn adb_query_telemetry(
 ) -> AdbStatus {
     ffi_guard(|| {
         if out.is_null() {
-            return Err((AdbStatus::InvalidArgument, "null telemetry output pointer".into()));
+            return Err((
+                AdbStatus::InvalidArgument,
+                "null telemetry output pointer".into(),
+            ));
         }
         unsafe { *out = AdbQueryTelemetry::default() };
         if query.is_null() {
