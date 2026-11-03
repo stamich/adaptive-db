@@ -45,6 +45,12 @@ migration is needed. Design and limits: `docs/actuator.md`, `docs/milestone-2.5.
   tables) keeps the helpful index (5 000 -> 250 rows read per execution), rolls back the useless one
   and leaves the user's indexes alone.
 
+### Benchmarking
+- Set the CPU governor to `performance` before benchmarking: with the default governor the same code
+  wrote 5.1k rows/s (no index) and committed 78 ops/s on one thread; with `performance`, 42.0k and
+  658. The two benchmark scripts now warn when the governor is not `performance`; the README and
+  `examples/results/README.md` say so.
+
 ### Not done
 - JVM `BenchmarkMain` on the reference machine, persistence of the registry and the log, online index builds,
   and any action beyond the three statements.

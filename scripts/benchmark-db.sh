@@ -10,7 +10,19 @@
 #   ADB_BENCH_ITERATIONS  timed iterations per workload (default 100)
 #   ADB_BENCH_WARMUP_MS   minimum warm-up per workload (default 200)
 #   ADB_BENCH_OUT         report (default examples/results/2.5.4-database[-sfN].json)
+#
+# Before you run it on Linux: set the CPU governor to performance
+# (`sudo cpupower frequency-set -g performance`). With the default governor the write and commit
+# rates measured on the reference machine were 2 to 8 times lower for identical code
+# (examples/results/README.md). The script warns when the governor is not `performance`.
 set -euo pipefail
+
+# Warn (never fail) when the CPU governor would distort the write and commit rates.
+GOV_FILE=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+if [ -r "$GOV_FILE" ] && [ "$(cat "$GOV_FILE")" != "performance" ]; then
+  echo "WARNING: CPU governor is '$(cat "$GOV_FILE")', not 'performance'; write and commit rates will be" \
+       "too low. Run: sudo cpupower frequency-set -g performance" >&2
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCALE="${ADB_BENCH_SCALE:-1}"
 ITERATIONS="${ADB_BENCH_ITERATIONS:-100}"

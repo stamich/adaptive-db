@@ -4,6 +4,13 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+**Set the CPU governor to `performance` before benchmarking** (Linux:
+`sudo cpupower frequency-set -g performance`, check with
+`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`) and record it with the results. On the
+reference machine the same 2.5.4 code wrote 5.1k rows/s (no index) with the default governor and
+42.0k with `performance`, and committed 78 ops/s against 658 on one thread. Compare runs only when
+they used the same governor. The two benchmark scripts print a warning when it is not `performance`.
+
 ## Milestone 2.5.4 actuator
 
 ```bash

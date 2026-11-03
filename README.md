@@ -381,6 +381,8 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ./build-milestone-2.5.4.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
 ./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.4 through the JVM CLI
+# Benchmarks on Linux: first `sudo cpupower frequency-set -g performance`. With the default governor
+# write and commit rates were 2 to 8 times lower for identical code (examples/results/README.md).
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
