@@ -72,6 +72,7 @@ final class TelemetryRuntimeTest:
   @Test def workerDrainsInTheBackground(): Unit =
     val r = new TelemetryRuntime(16, TelemetrySamplingPolicy(), 4, startWorker = true)
     try
+      r.mode = TelemetryMode.Sampled // the worker starts with the first non-Off mode
       r.offer(event(5)); r.offer(event(5))
       val deadline = System.nanoTime() + 5_000_000_000L
       while r.stats(5).forall(_.executions < 2) && System.nanoTime() < deadline do Thread.sleep(5)

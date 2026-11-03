@@ -9,6 +9,7 @@ import io.adb.logical.BoundSelect
   * @param outputs   result columns as `(name, slot)` in select-list order
   * @param mode      optimizer mode the plan was made under (for the feedback log)
   * @param estimates the planner's per-operator estimates (for the feedback log)
+  * @param schemaEpoch catalog epoch the plan was made at
   * @param shape     the statement's semantic shape, computed once at planning time so telemetry
   *                  on a cache hit only reads it
   */
@@ -17,7 +18,8 @@ final case class CachedQuery(
     outputs: Vector[(String, Int)],
     mode: io.adb.logical.OptimizerMode,
     estimates: Map[Int, io.adb.physical.NodeEstimate],
-    shape: io.adb.telemetry.QueryShape
+    shape: io.adb.telemetry.QueryShape,
+    schemaEpoch: Long
 ):
   /** The planner's estimate of the rows the statement returns (-1 if there is none). */
   def estimatedRows: Long = estimates.get(0).fold(-1L)(e => math.round(e.rows))
@@ -38,5 +40,6 @@ object CachedQuery:
       outputs(select),
       plans.mode,
       plans.physical.estimates,
-      QueryShapeExtractor.extract(select)
+      QueryShapeExtractor.extract(select),
+      plans.schemaEpoch
     )

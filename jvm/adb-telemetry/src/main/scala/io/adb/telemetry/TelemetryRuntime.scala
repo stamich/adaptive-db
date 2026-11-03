@@ -18,7 +18,8 @@ import java.util.concurrent.atomic.{AtomicLong, LongAdder}
   * @param capacity    queue length; events beyond it are dropped
   * @param policy      sampling rules for [[TelemetryMode.Sampled]]
   * @param maxShapes   bound of the shape registry and of the per-shape statistics
-  * @param startWorker whether to start the background worker now
+  * @param startWorker whether the background worker may run (it starts when telemetry is first
+  *                    switched on, so a database that never uses telemetry has no extra thread)
   */
 final class TelemetryRuntime(
     capacity: Int = 4096,
@@ -44,20 +45,27 @@ final class TelemetryRuntime(
   /** Set by [[close]] to stop the worker. */
   @volatile private var closed = false
 
-  /** The background worker, if started. */
-  private val worker: Thread =
-    if startWorker then
-      val t = new Thread(() => runWorker(), "adb-telemetry")
-      t.setDaemon(true)
-      t.start()
-      t
-    else null
+  /** The background worker; started the first time telemetry is switched on. */
+  @volatile private var worker: Thread = null
+
+  /** Starts the worker once (if allowed). */
+  private def ensureWorker(): Unit =
+    if startWorker && worker == null then
+      synchronized {
+        if worker == null && !closed then
+          val t = new Thread(() => runWorker(), "adb-telemetry")
+          t.setDaemon(true)
+          t.start()
+          worker = t
+      }
 
   /** The current mode. */
   def mode: TelemetryMode = currentMode
 
   /** Changes the mode; takes effect for queries that finish afterwards. */
-  def mode_=(next: TelemetryMode): Unit = currentMode = next
+  def mode_=(next: TelemetryMode): Unit =
+    currentMode = next
+    if next != TelemetryMode.Off then ensureWorker()
 
   /** True unless the mode is [[TelemetryMode.Off]]. */
   def enabled: Boolean = currentMode != TelemetryMode.Off
@@ -115,7 +123,8 @@ final class TelemetryRuntime(
   /** Stops the worker (events still queued are discarded). */
   def close(): Unit =
     closed = true
-    if worker != null then worker.interrupt()
+    val w = worker
+    if w != null then w.interrupt()
 
   /** Adds one event to its shape's accumulator, unless the per-shape bound is reached. */
   private def fold(event: QueryTelemetry): Unit =
