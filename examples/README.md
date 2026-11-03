@@ -77,6 +77,13 @@ examples/jvm-telemetry-smoke/run.sh     # off by default, full/sampled capture, 
                                         # allocation budget and the engine counters of C ABI 9
 ```
 
+## JVM advisor smoke test (2.5.3)
+
+```bash
+examples/jvm-advisor-smoke/run.sh       # off by default, hysteresis, index advice for a wasteful scan,
+                                        # the advisor never acts, advice applied, audit log, SET advisor
+```
+
 ## JVM plan cache smoke test (2.5.1)
 
 ```bash
