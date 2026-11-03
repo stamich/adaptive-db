@@ -5,7 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v8
+/** Loads the Adaptive DB shared library through the Java FFM API, binds every C ABI v9
  * function as a downcall handle, and translates native status codes into exceptions. */
 final class NativeLibrary implements AutoCloseable {
     /** Upper bound on the length of a native error message. */
@@ -13,7 +13,7 @@ final class NativeLibrary implements AutoCloseable {
     /** Whether {@link #close()} already released the arena. */
     private boolean closed;
     /** C ABI version this binding was written against; any other version is rejected. */
-    static final int EXPECTED_ABI = 8;
+    static final int EXPECTED_ABI = 9;
 
     /** Shared arena that keeps the library mapped until {@link #close()}. */
     final Arena arena = Arena.ofShared();
@@ -76,6 +76,8 @@ final class NativeLibrary implements AutoCloseable {
     final MethodHandle queryClose;
     /** {@code adb_query_profile_json}: per-operator runtime profile of a query (ABI 4). */
     final MethodHandle queryProfile;
+    /** {@code adb_query_telemetry}: query counters written into a caller-owned struct (ABI 9). */
+    final MethodHandle queryTelemetry;
     /** {@code adb_batch_data}: data pointer of a native byte buffer. */
     final MethodHandle batchData;
     /** {@code adb_batch_len}: length of a native byte buffer. */
@@ -187,6 +189,8 @@ final class NativeLibrary implements AutoCloseable {
         projectionSetState = downcall("adb_projection_set_state", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
         projectionWaitUntil = downcall("adb_projection_wait_until", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
 
+        queryTelemetry = downcall("adb_query_telemetry", FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
         int abi = invokeInt(abiVersion);
         if (abi != EXPECTED_ABI) throw new IllegalStateException("Expected adb ABI " + EXPECTED_ABI + " but got " + abi);
     }
@@ -213,6 +217,22 @@ final class NativeLibrary implements AutoCloseable {
      */
     int invokeInt(MethodHandle handle, Object... args) {
         try { return (int) handle.invokeWithArguments(args); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /**
+     * Invokes {@code adb_query_telemetry} through {@link MethodHandle#invokeExact}.
+     *
+     * <p>Unlike {@link #invokeInt}, this does not box its arguments into an {@code Object[]} or go
+     * through the generic {@code invokeWithArguments} path, so the call allocates nothing; the
+     * signature is fixed, so the exact invocation is possible.</p>
+     *
+     * @param query native query handle
+     * @param out   native segment of at least {@link NativeQueryTelemetry#byteSize()} bytes
+     * @return the native status code
+     */
+    int invokeQueryTelemetry(MemorySegment query, MemorySegment out) {
+        try { return (int) queryTelemetry.invokeExact(query, out); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 

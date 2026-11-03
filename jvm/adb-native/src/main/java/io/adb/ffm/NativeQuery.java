@@ -51,6 +51,21 @@ public final class NativeQuery implements AutoCloseable {
         }
     }
 
+    /**
+     * Reads the query's counters into {@code into} without building a profile (C ABI 9).
+     *
+     * <p>This is the cheap alternative to {@link #profileJson()} for callers that only need totals
+     * (rows returned and read, batches, peak memory), such as query telemetry: the engine writes
+     * four integers into native memory that {@code into} owns and reuses, so nothing is serialized,
+     * decoded or allocated. The counters are complete once {@link #nextBatch()} returned empty.</p>
+     *
+     * @param into holder to fill; not shared between threads
+     */
+    public synchronized void readTelemetry(NativeQueryTelemetry into) {
+        ensureOpen();
+        library.check(library.invokeQueryTelemetry(handle, into.segment()));
+    }
+
     /** Requests cooperative cancellation of this live query. */
     public synchronized void cancel() { ensureOpen(); library.check(library.invokeInt(library.queryCancel, handle)); }
 
