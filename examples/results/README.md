@@ -34,7 +34,7 @@ were recorded on an AMD Ryzen 9 5950X (32 threads, release build), scale 1, 100 
 
 ## Milestone 2.4.0 schema evolution
 
-(These runs used the 2.4.0 file names; the scripts now write `2.5.0-*.json` unless
+(These runs used the 2.4.0 file names; the scripts now write `2.5.1-*.json` unless
 `ADB_BENCH_OUT` says otherwise.)
 
 ```bash

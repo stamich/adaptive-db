@@ -1,46 +1,40 @@
-Adaptive DB Milestone 2.5.0 — validation record
-Date: 2026-11-02
-Base: 2.4.0 (master)
+Adaptive DB Milestone 2.5.1 — validation record
+Date: 2026-11-03
+Base: 2.5.0 (branch milestone-2-5-0-implementation, PR #111)
 
 Environment
-  rustc 1.97.0 (2d8144b78 2026-07-07)
-  cargo 1.97.0 (c980f4866 2026-06-30)
+  rustc 1.97.0, cargo 1.97.0
   openjdk 22 (JDK 22), Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
-  OS: Linux 6.18.44, cloud VM (2 vCPU); this is a development machine, not the reference machine
+  OS: Linux 6.18.44, cloud VM (2 vCPU); a development machine, not the reference machine
 
-Rust (equivalent of the cargo steps of ./build-milestone-2.5.0.sh)
+Rust (cargo steps of ./build-milestone-2.5.1.sh; the engine is unchanged except the version string)
   cargo fmt --check .............................................. OK
   cargo clippy --all-targets -D warnings -W missing_docs
                -W clippy::missing_docs_in_private_items ............ OK
   cargo test --workspace ......................................... 413 passed, 0 failed
   rustdoc -D warnings ............................................ OK
-  release build of libadb_ffi and adb-migrate ...................... OK
-  cargo run -p adb-rust-demo ...................................... OK
-  include/adb.h compiled from C with -Wall -Wextra -Werror ........ OK
 
 Java / JVM
-  examples/jvm-cdc-smoke (Java FFM -> ABI v8, incl. commit sequence numbers,
-    change-log cursors and projections) ............................ PASS
-  examples/jvm-consistency-smoke (Scala gateway -> real engine: tokens,
-    sessions, SET SESSION CONSISTENCY, EXPLAIN read context,
-    projections, change log, token beyond the head) ................. PASS
   JVM modules compiled with scalac 3.3.8 and javac 22 (-Werror) ... OK
-  JVM tests (Scala + Java) ........................................ 201 passed, 0 failed
-  feature tour (io.adb.cli.DemoMain) against libadb_ffi ........... OK (1.0.1 -> 2.5.0)
+  JVM tests (Scala + Java) ........................................ 214 passed, 0 failed
+  examples/jvm-consistency-smoke (2.5.0 behaviour still holds) ..... PASS
+  examples/jvm-plan-cache-smoke (hits after the second execution; stale after ALTER,
+    ANALYZE, CREATE INDEX and DDL from another handle; DML does not invalidate; one entry
+    per optimizer mode; AS OF never stored; token beyond the head refused on a hit;
+    SET plan_cache) ............................................... PASS
 
 Benchmarks
-  Recorded by the author on an AMD Ryzen 9 5950X (32 threads, release build), scale 1, 100
-  iterations: examples/results/2.5.0-{rust-local,database,ffi}.json;
-  scripts/check-benchmarks.py: "benchmark results agree". Summary in examples/results/README.md:
-  workloads A-E within 1-2 % of 2.4.0, change-log streaming 511,000 commits/s, a following
-  projection reached in 0.11 ms (p50), open with a rebuilt change log 69 ms vs 20 ms intact.
-  (The runs made in the validation VM were not recorded.)
+  JVM benchmark with a live engine (BenchmarkMain, plan cache off vs on), one run each in the
+  validation VM, noisy: point lookup 118-155 us off, 13-14 us on; join/aggregate 13.6-14.5 ms off,
+  11.8-12.5 ms on. Not a reference measurement.
+  The workload benchmark scripts now write 2.5.1-*.json. The committed Ryzen results
+  (examples/results/2.5.0-*.json) are from 2.5.0, whose engine and workloads are unchanged; no
+  2.5.1 workload run was made, and the plan-cache benchmark prints to the console and has no
+  check in scripts/check-benchmarks.py.
 
-  Not run in the validation VM: the Gradle steps; Gradle could not be run (Maven Central is not reachable from the
-  validation environment). The JVM modules were compiled and tested with the Scala 3.3.8 compiler and javac
-  directly. CI runs the Gradle steps.
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them),
+  the Java FFM smoke test examples/jvm-cdc-smoke and the feature-tour demo at 2.5.1.
 
 Commits
-  One commit per task of the 2.5.0 plan (docs/milestone-2.5.0.md), each authored by
-  Michal Stawarski; the Rust checks and the JVM build were run at the end of every phase and
-  before the commits that changed code.
+  One commit per task, each authored by Michal Stawarski, without co-authors.

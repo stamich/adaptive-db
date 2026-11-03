@@ -4,6 +4,10 @@
   "engineVersion": "2.5.1",
   "nativeAbi": 8,
   "scope": "plan-cache",
+  "docs": [
+    "docs/milestone-2.5.1.md",
+    "docs/plan-cache.md"
+  ],
   "changesEngine": false,
   "versioning": "numbered 2.5.1 at the owner's request; the usual rule keeps patch numbers for fixes",
   "newGatewayFeatures": [
@@ -15,6 +19,9 @@
     "explain-plan-cache-line",
     "shell-cache-command"
   ],
-  "notCached": ["as-of", "plans-over-asynchronous-projections", "explain"],
-  "docs": "docs/plan-cache.md"
+  "notCached": [
+    "as-of",
+    "plans-over-asynchronous-projections",
+    "explain"
+  ]
 }

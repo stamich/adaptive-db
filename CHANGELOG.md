@@ -28,7 +28,10 @@ and data format 4 are unchanged. Design, limits and measurements: `docs/plan-cac
 ### Notes
 - Version number: our rule says a patch number is for fixes only, and the roadmap placed a plan
   cache under 2.6+. It was numbered 2.5.1 at the owner's request.
-- Result files keep their `2.5.0-` names: the engine and the workloads are unchanged.
+- Scripts, workflows, benchmark reports and the demo are at 2.5.1 (`build-milestone-2.5.1.sh`,
+  `VALIDATION-2.5.1.txt`, `MILESTONE-2.5.1.json`, demo phase 2.5.1). The committed `2.5.0-*.json`
+  results are from 2.5.0, whose engine and workloads are unchanged.
+- Detailed description: `docs/milestone-2.5.1.md`.
 
 ## 2.5.0 — Semantic consistency and the change log
 
