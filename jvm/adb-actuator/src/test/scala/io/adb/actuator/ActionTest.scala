@@ -30,3 +30,15 @@ final class ActionTest:
   @Test def theSummaryNamesTheIndexOrElseTheTable(): Unit =
     assertEquals("create_index adv_orders_customer_id", action.summary)
     assertEquals("analyze orders", action.copy(kind = ActionKind.Analyze, indexName = None).summary)
+
+  @Test def modesParseCaseInsensitivelyAndOnlyOffNeedsNoTimer(): Unit =
+    assertEquals(Some(AdaptiveMode.AutoSafe), AdaptiveMode.parse("AUTO_SAFE"))
+    assertEquals(Some(AdaptiveMode.Off), AdaptiveMode.parse("off"))
+    assertEquals(None, AdaptiveMode.parse("auto"))
+    assertEquals(Vector(false, true, true), AdaptiveMode.values.toVector.map(_.needsTimer))
+    assertEquals("auto_safe", AdaptiveMode.AutoSafe.sql)
+
+  @Test def theOldAdvisorSwitchMapsToAdvisoryAndOff(): Unit =
+    assertEquals(AdaptiveMode.Advisory, AdaptiveMode.ofAdvisorSwitch(true))
+    assertEquals(AdaptiveMode.Off, AdaptiveMode.ofAdvisorSwitch(false))
+

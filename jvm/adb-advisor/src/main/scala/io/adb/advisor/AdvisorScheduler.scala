@@ -2,25 +2,36 @@ package io.adb.advisor
 
 import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, ThreadFactory, TimeUnit}
 
-/** Runs [[Advisor.evaluate]] on a timer, on one daemon thread of its own.
+/** Runs a periodic task on one daemon thread of its own: by default an [[Advisor.evaluate]], and since
+  * 2.5.4 anything else the gateway hands it (the actuator's controller tick uses the same timer).
   *
   * The thread exists only while the scheduler is started, so a database that never turns the advisor
-  * on carries no extra thread. `designSource` is called on that thread each time; it must return an
-  * immutable [[PhysicalDesign]] (the gateway builds it from the catalog and the statistics
-  * provider). A failure of one evaluation is passed to `onError` and does not stop the timer.
+  * on carries no extra thread. The task runs on that thread each period. A failure of one run is
+  * passed to `onError` and does not stop the timer.
   *
-  * @param advisor      the advisor to run
-  * @param designSource builds the physical design for an evaluation
-  * @param periodMillis time between evaluations
-  * @param onError      receives exceptions thrown by an evaluation (default: ignore)
+  * @param tick         the work of one period
+  * @param periodMillis time between runs
+  * @param onError      receives exceptions thrown by a run (default: ignore)
   */
 final class AdvisorScheduler(
-    advisor: Advisor,
-    designSource: () => PhysicalDesign,
+    tick: () => Unit,
     periodMillis: Long,
     onError: Throwable => Unit = _ => ()
 ) extends AutoCloseable:
   require(periodMillis > 0L, "periodMillis must be positive")
+
+  /** A scheduler that evaluates `advisor` every period.
+    *
+    * @param advisor      the advisor to run
+    * @param designSource builds the immutable [[PhysicalDesign]] for an evaluation; called on the timer thread
+    * @param periodMillis time between evaluations
+    */
+  def this(advisor: Advisor, designSource: () => PhysicalDesign, periodMillis: Long) =
+    this(() => { advisor.evaluate(designSource()); () }, periodMillis, _ => ())
+
+  /** As above, with an error handler for failed evaluations. */
+  def this(advisor: Advisor, designSource: () => PhysicalDesign, periodMillis: Long, onError: Throwable => Unit) =
+    this(() => { advisor.evaluate(designSource()); () }, periodMillis, onError)
 
   /** The timer thread, created by [[start]]. */
   private var executor: Option[ScheduledExecutorService] = None
@@ -37,7 +48,7 @@ final class AdvisorScheduler(
           t)
       executor = Some(pool)
       val run: Runnable = () =>
-        try advisor.evaluate(designSource())
+        try tick()
         catch case e: Exception => onError(e)
       task = Some(pool.scheduleWithFixedDelay(run, periodMillis, periodMillis, TimeUnit.MILLISECONDS))
   }

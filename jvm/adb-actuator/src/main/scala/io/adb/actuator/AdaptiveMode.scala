@@ -14,6 +14,9 @@ enum AdaptiveMode derives CanEqual:
     */
   case AutoSafe
 
+  /** Whether the periodic timer has to run in this mode. */
+  def needsTimer: Boolean = this != Off
+
   /** The SQL spelling (`auto_safe`). */
   def sql: String = this match
     case Off => "off"
@@ -21,6 +24,9 @@ enum AdaptiveMode derives CanEqual:
     case AutoSafe => "auto_safe"
 
 object AdaptiveMode:
+  /** What the 2.5.3 switch `SET advisor = on | off` means now: `on` is [[Advisory]], `off` is [[Off]]. */
+  def ofAdvisorSwitch(on: Boolean): AdaptiveMode = if on then Advisory else Off
+
   /** The mode spelled `name` (case-insensitive), if there is one. */
   def parse(name: String): Option[AdaptiveMode] = values.find(_.sql.equalsIgnoreCase(name))
 
