@@ -109,11 +109,15 @@
   allocation-free skip; allocation budgets checked in `check-benchmarks.py`
 - left for the reference-machine run: whether a ring buffer or thread-local counters pay off
 
-## 2.5.3 — workload model and advisor (next)
+## 2.5.3 — workload model and advisor (done)
 - time-windowed aggregation, detectors (hot query, scan amplification, hot join, cardinality
-  error), candidates, heuristic cost-benefit scoring with hysteresis, an audit log, `\advice`
+  error), candidates, heuristic cost-benefit scoring with hysteresis, an audit log, `\advice`,
+  `\advice log`, `SET advisor`; module `adb-advisor`; recommends only, reads immutable snapshots only
 - only `CREATE INDEX` and `ANALYZE` candidates map to actions we have; join-projection and
   partition candidates stay informational until their actuators exist (2.6 and later)
+- follow-ups: persisted snapshots, composite and covering index candidates, dropping unused
+  indexes, write telemetry (so the write cost of an index is measured), tuning the cost model on
+  the reference machine, any automatic action (needs its own safeguards)
 
 ## 2.6 — asynchronous projections
 - asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0

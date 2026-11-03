@@ -1,5 +1,6 @@
 package io.adb.benchmark
 
+import io.adb.advisor.{Advisor, AdvisorConfig, CreateIndex}
 import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.{NativeDatabase, NativeException}
 import io.adb.gateway.{AdaptiveDatabase, QueryResult}
@@ -15,7 +16,7 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.5.2.1 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
+/** Milestone 2.5.3 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
   * the tables are created in the engine catalog, so every row read goes through its schema).
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
@@ -167,7 +168,7 @@ object WorkloadBenchmark:
         points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
       }
       val report = obj(
-        "milestone" -> str("2.5.2.1"),
+        "milestone" -> str("2.5.3"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
@@ -182,7 +183,8 @@ object WorkloadBenchmark:
         "estimation" -> estimationSection(db),
         "planner" -> plannerSection(timer),
         "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights),
-        "telemetry" -> telemetrySection(db)
+        "telemetry" -> telemetrySection(db),
+        "advisor" -> advisorSection(db)
       )
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
@@ -231,6 +233,45 @@ object WorkloadBenchmark:
     finally
       db.execute("SET telemetry = off")
       db.telemetry.policy = policy
+
+  /** What the advisor does with workload E (Milestone 2.5.3): `COUNT(*)` over `ix_account` filtered
+    * by the unindexed `region` reads every row to return one, so after three evaluations (the
+    * hysteresis of the defaults) the advisor must recommend an index on `region`, and it must not
+    * create it: the number of indexes is the same before and after.
+    *
+    * The figures are counts, not times, so `scripts/check-benchmarks.py` can hold them exactly;
+    * the cost of one evaluation is reported for information.
+    */
+  private def advisorSection(db: AdaptiveDatabase): String =
+    val indexesBefore = db.execute("SHOW INDEXES").rows.size
+    val advisor = Advisor.forTelemetry(db.telemetry, AdvisorConfig())
+    db.execute("SET telemetry = full")
+    try
+      val evaluateNanos = Vector.newBuilder[Long]
+      def evaluate() =
+        db.telemetry.drainNow()
+        val start = System.nanoTime()
+        val report = advisor.evaluate(db.physicalDesign())
+        evaluateNanos += System.nanoTime() - start
+        report
+      evaluate() // baseline: the counters of the earlier sections are not one window
+      val reports = (0 until 3).map { _ =>
+        for _ <- 0 until 20 do db.execute(WorkloadE)
+        evaluate()
+      }
+      val indexes = reports.last.recommendations.collect { case c: CreateIndex => c }
+      obj(
+        "query" -> str("E_seq_scan_region_eq"),
+        "evaluations" -> num(reports.size + 1L),
+        "recommended_after_two" -> num(reports(1).recommendations.count(_.isInstanceOf[CreateIndex]).toLong),
+        "recommended_indexes" -> num(indexes.size.toLong),
+        "index_sql" -> str(indexes.headOption.flatMap(_.sql).getOrElse("")),
+        "indexes_before" -> num(indexesBefore.toLong),
+        "indexes_after" -> num(db.execute("SHOW INDEXES").rows.size.toLong),
+        "audit_entries" -> num(advisor.auditLog.size.toLong),
+        "evaluate_us_min" -> num(evaluateNanos.result().min / 1000.0)
+      )
+    finally db.execute("SET telemetry = off")
 
   /** The access path cost mode chose for the first relation of `sql` (`entity_scan` when no
     * index was a candidate, so no access decision was recorded).

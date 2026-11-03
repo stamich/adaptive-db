@@ -82,8 +82,13 @@ final class Binder(catalog: Catalog):
         val mode = value.toLowerCase
         require(Set("off", "sampled", "full").contains(mode), s"telemetry must be off, sampled or full, got $value")
         BoundSetTelemetry(mode)
+      else if name.equalsIgnoreCase("advisor") then
+        value.toLowerCase match
+          case "on" => BoundSetAdvisor(true)
+          case "off" => BoundSetAdvisor(false)
+          case _ => throw new IllegalArgumentException(s"advisor must be on or off, got $value")
       else
-        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache, telemetry)")
+        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache, telemetry, advisor)")
         BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
 
     case SetSessionConsistency(level, bound) =>

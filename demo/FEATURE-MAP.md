@@ -195,3 +195,13 @@ with the cached plan. A background worker folds events into per-shape statistics
 
 Since 2.5.2.1 the *rows read* column of `\telemetry shapes` comes from the engine counters
 (`adb_query_telemetry`, C ABI 9) and not from the query profile; the phase and its SQL are the same.
+
+## 2.5.3 — workload advisor
+
+The last phase runs with `sql/2.5.3-advisor.sql`. With telemetry on, `\advice` closes one window of the
+workload model, runs four detectors (hot query, scan amplification, hot join, cardinality error) and
+shows what survived the hysteresis: a finding appears after three evaluations in a row and leaves
+after three misses, or at once when it was carried out. Only `CREATE INDEX` and `ANALYZE` advice has
+a statement attached; join-projection and partition findings stay informational. The advisor never
+runs a statement. `\advice log` is the audit log; `SET advisor = on | off` runs the evaluation on a
+timer. See [../docs/advisor.md](../docs/advisor.md).

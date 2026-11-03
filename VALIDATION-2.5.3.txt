@@ -1,0 +1,58 @@
+Adaptive DB Milestone 2.5.3 — validation record
+Date: 2026-11-03
+Base: 2.5.2.1 (master, after the merge of PR #115)
+
+Environment
+  rustc / cargo of the validation VM, openjdk 22, Scala 3.3.8 compiler (official release archive),
+  JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44, cloud VM (2 vCPU, shared); a development machine, not the reference machine
+
+Rust (the engine is unchanged; only version strings)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 417 passed, 0 failed
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps ...... OK
+  C ABI 9, plan wire v4, data format 4: unchanged
+
+Java / JVM
+  JVM modules compiled with scalac 3.3.8 (-Werror) and javac 22 ... OK
+  JVM tests (Scala + Java) ........................................ 279 passed, 0 failed
+                                      (2.5.2.1: 237; new: 42 in adb-advisor — PhysicalDesignTest 3,
+                                       WorkloadModelTest 8, CostBenefitModelTest 5, DetectorsTest 11,
+                                       HysteresisTest 7, AdvisorTest 5, AdvisorSchedulerTest 3; the
+                                       SET advisor cases are added to the existing BinderTest)
+  examples/jvm-advisor-smoke (new) ................................ PASS
+  examples/jvm-telemetry-smoke .................................... PASS
+  examples/jvm-plan-cache-smoke ................................... PASS
+  examples/jvm-consistency-smoke .................................. PASS
+  examples/jvm-cdc-smoke .......................................... PASS
+  feature tour (io.adb.cli.DemoMain) with the 2.5.3 phase, ABI 9 .. OK
+  workload report (WorkloadBenchmark, scale 1, 10 iterations) written by the JVM and checked
+    with scripts/check-benchmarks.py together with a database report of the same build
+    (workloads --scale 1) ........................................ "results agree (scale 1)"
+
+Advisor section of the workload report (workload E, counts; exact on any machine)
+  evaluations 4 (baseline + 3), advice after two evaluations: 0, recommended indexes after three: 1
+  index_sql  CREATE INDEX adv_ix_account_region ON ix_account (region)
+  indexes before / after: 2 / 2 (the advisor created nothing), audit entries: 2
+  one evaluation including building the PhysicalDesign from the engine (11 tables): about 6 ms (VM)
+
+Telemetry allocation (unchanged by 2.5.3; workload C in the same report)
+  skipped +0 B, captured +144 B, 10 rows read per capture
+
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.3-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"
+  advisor section: as on the VM; one evaluation 0.76 ms. Telemetry allocation: +0 B / +144 B.
+  ffi report vs 2.5.2.1: median -0.4 % over 45 timings (range -7.2 % to +8.3 %)
+  write path: 6.9k rows/s (0 indexes), 4.0k (3 indexes), 72 commits/s, against 41k, 14k and 205/s
+    in the quiet 2.5.2.1 run: same engine code, different disk state.
+
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
+  The JVM BenchmarkMain on the reference machine (off / skipped / captured timings and the new
+  advisor_evaluate_50_shapes), compare-write-path.sh (2.5.1 vs current on one disk).
+  Advice quality on real workloads; the advisor under hours of concurrent load.
+
+Commits
+  One commit per task, each authored by Michal Stawarski, without co-authors.

@@ -1,4 +1,4 @@
-# Engine invariants (Milestone 2.5.0)
+# Engine invariants (Milestone 2.5.3)
 
 Each invariant names the test that guards it.
 
@@ -211,3 +211,17 @@ Each invariant names the test that guards it.
 68. `adb_query_telemetry` writes exactly the 32 bytes of `AdbQueryTelemetry`, zeroes them first, and
     reports the rows the plan's leaf operators produced; the Java and C layouts are identical.
     *(query_telemetry.rs, NativeQueryTelemetryTest)*
+
+## Workload advisor (2.5.3)
+
+69. The advisor never changes the database: it holds no reference to the engine, the catalog or the
+    gateway, and its only output is a report. *(AdvisorSmoke: the index count is the same before
+    and after; check-benchmarks.py)*
+70. An evaluation reads immutable values only (per-shape counters, shape definitions, a
+    `PhysicalDesign`), never the telemetry queue or a live structure. *(AdvisorTest)*
+71. A finding is shown only after `confirmAfter` evaluations in a row, withdrawn only after
+    `withdrawAfter` misses in a row, and advice that was carried out is withdrawn at once.
+    *(HysteresisTest, AdvisorTest, AdvisorSmoke)*
+72. The first evaluation, and one after a counter reset, are baselines: telemetry counters since the
+    process started are never read as one window. *(WorkloadModelTest)*
+73. With the advisor off (the default) there is no advisor thread. *(AdvisorSchedulerTest, AdvisorSmoke)*

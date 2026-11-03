@@ -37,7 +37,8 @@ class BinderTest:
         "SET optimizer = fast",
         "SET planner = cost",
         "SET plan_cache = maybe",
-        "SET telemetry = loud"
+        "SET telemetry = loud",
+        "SET advisor = auto"
       )
     do assertThrows(classOf[IllegalArgumentException], () => { binder.bind(parser.parse(bad)); () }, bad)
 
@@ -47,3 +48,5 @@ class BinderTest:
     assertEquals(BoundSetPlanCache(true), binder.bind(parser.parse("SET plan_cache = ON")))
     assertEquals(BoundSetPlanCache(false), binder.bind(parser.parse("SET plan_cache TO off")))
     assertEquals(BoundSetTelemetry("sampled"), binder.bind(parser.parse("SET telemetry = SAMPLED")))
+    assertEquals(BoundSetAdvisor(true), binder.bind(parser.parse("SET advisor = ON")))
+    assertEquals(BoundSetAdvisor(false), binder.bind(parser.parse("SET advisor TO off")))

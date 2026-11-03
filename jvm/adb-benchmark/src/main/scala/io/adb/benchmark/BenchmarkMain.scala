@@ -7,6 +7,7 @@ import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
 import io.adb.optimizer.RuleOptimizer
 import io.adb.plancache.StatementKey
 import io.adb.gateway.QueryShapeExtractor
+import io.adb.advisor.{Advisor, AdvisorConfig, EntityDesign, PhysicalDesign}
 import io.adb.telemetry.*
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
@@ -17,7 +18,7 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.5.2.1) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.5.3) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
@@ -63,13 +64,14 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.5.2.1 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.5.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
     benchmarkPlanner("_relational", RelationalSql, catalog, cfg.iterations)
     benchmarkKey(cfg.iterations)
     benchmarkTelemetryParts(catalog, cfg.iterations)
+    benchmarkAdvisor(cfg.iterations)
     (cfg.dataDir, cfg.nativeLib) match
       case (Some(data), Some(lib)) => benchmarkGateway(cfg.gatewayIterations, data, lib)
       case _ => println("gateway/FFM benchmark skipped; pass --data DIR --native-lib FILE to enable it")
@@ -155,6 +157,29 @@ object BenchmarkMain:
       """{"peak_memory_bytes":2048,"memory_limit_bytes":268435456,"root":{"node_id":0,"operator":"project","rows_out":1,"batches_out":1,"elapsed_us":12,"counters":{"rows_in":1},""" +
         """"children":[{"node_id":1,"operator":"filter","rows_out":1,"batches_out":1,"elapsed_us":8,"children":[{"node_id":2,"operator":"entity_scan","rows_out":1000,"batches_out":1,"elapsed_us":40,"counters":{"pages":12}}]}]}}"""
     report("telemetry_profile_rows_scanned", iterations, time(iterations) { io.adb.gateway.ProfileRenderer.rowsScanned(profile) })
+
+  /** Times one advisor evaluation over a workload of 50 shapes on 5 tables (Milestone 2.5.3):
+    * closing a window, the four detectors and the hysteresis. The advisor runs off the query path,
+    * every few seconds, so this is the cost of one tick and not a per-query cost.
+    */
+  private def benchmarkAdvisor(iterations: Int): Unit =
+    val tables = (1L to 5L).toVector
+    val shapes = (0 until 50).map { i =>
+      val table = tables(i % tables.size)
+      QueryShape(Vector(table), Vector(FieldRef(table, 2L + i / 5)), Vector.empty, Vector.empty, i % 3 == 0, false)
+    }.toVector
+    val byId = shapes.map(s => s.id -> s).toMap
+    val design = PhysicalDesign.of(tables.map(t =>
+      EntityDesign(t, s"t$t", (1L to 12L).map(f => f -> s"c$f").toMap, 1_000_000L, None, Vector.empty)))
+    var tick = 0L
+    // Every call of `stats` reports more executions, so each evaluation closes a window with work in it.
+    val stats = () =>
+      tick += 1
+      shapes.map(s => ShapeStats(s.id, tick * 100, 0L, 0L, tick * 100 * 2_000_000L, 4_000_000L, tick * 100 * 10, tick * 100 * 5_000, 1.0))
+    val advisor = new Advisor(stats, byId.get, AdvisorConfig())
+    val n = math.max(100, iterations)
+    for _ <- 0 until math.min(1000, n) do advisor.evaluate(design)
+    report("advisor_evaluate_50_shapes", n, time(n) { advisor.evaluate(design) })
 
   /** Runs the full planning pipeline for one SELECT and returns the native plan JSON. */
   private def pipeline(parser: SqlParser, binder: Binder, optimizer: RuleOptimizer, sql: String): String =
@@ -249,7 +274,7 @@ object BenchmarkMain:
     finally native.close()
 
   /** Splits the cost of a captured query into the steps the capture path adds to the engine run
-    * (Milestone 2.5.2.1): the native execution alone, the same plus fetching the profile document,
+    * (Milestone 2.5.3): the native execution alone, the same plus fetching the profile document,
     * and the same plus scanning it for the rows read. It also reports the bytes the calling thread
     * allocates per execution with telemetry off, skipped and captured.
     *

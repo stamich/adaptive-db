@@ -1,0 +1,38 @@
+{
+  "milestone": "2.5.3",
+  "base": "2.5.2.1",
+  "engineVersion": "2.5.3",
+  "nativeAbi": 9,
+  "scope": "workload-model-and-advisor",
+  "changesEngine": false,
+  "engineChange": "none; version strings only. C ABI 9, plan wire v4 and data format 4 are unchanged",
+  "versioning": "three components, so the Cargo crates are 2.5.3 again (they stayed at 2.5.2 during 2.5.2.1)",
+  "newFeatures": [
+    "workload-model-time-windows",
+    "detector-hot-query",
+    "detector-scan-amplification",
+    "detector-hot-join",
+    "detector-cardinality-error",
+    "heuristic-cost-benefit-scoring",
+    "hysteresis",
+    "audit-log",
+    "advice-shell-command",
+    "set-advisor"
+  ],
+  "notIncluded": [
+    "automatic-actions",
+    "join-projection-actions",
+    "partition-actions",
+    "composite-and-covering-index-candidates",
+    "drop-unused-index-advice",
+    "write-telemetry",
+    "persisted-workload-snapshots",
+    "double-buffered-telemetry-aggregation"
+  ],
+  "docs": [
+    "docs/milestone-2.5.3.md",
+    "docs/advisor.md",
+    "docs/telemetry.md",
+    "docs/invariants.md"
+  ]
+}

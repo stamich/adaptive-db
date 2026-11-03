@@ -2,8 +2,8 @@
 
 2.5.2 lets the SQL gateway observe its own workload at almost no cost. It collects **facts**:
 which shapes of query run, how often, how long they take, how many rows they return and read, and
-how far the planner's estimate was from reality. It does not decide anything yet: the workload
-model and the physical-design advisor are 2.5.3. In 2.5.2 nothing below the gateway changed; 2.5.2.1
+how far the planner's estimate was from reality. It does not decide anything: the workload
+model and the advisor that read these facts are 2.5.3 ([advisor.md](advisor.md)). In 2.5.2 nothing below the gateway changed; 2.5.2.1
 added one engine function, `adb_query_telemetry` (C ABI 9, additive), so that a captured query does
 not need the JSON profile. Plan wire v4 and data format 4 are unchanged.
 
@@ -68,8 +68,8 @@ All in module `adb-telemetry` unless noted.
 - Statements that fail while planning or executing a bound SELECT are captured as failed events.
   Statements that fail earlier (parse or bind errors) have no shape yet and are not recorded.
 - `AS OF`, DDL, DML and `EXPLAIN` are not observed in 2.5.2; only SELECT.
-- Statistics live in memory and are lost on restart. Persistence belongs to the workload model
-  (2.5.3).
+- Statistics live in memory and are lost on restart. The 2.5.3 advisor keeps windows of
+  deltas in memory too; persisting either remains open.
 
 ## A worker that sleeps
 
@@ -142,10 +142,9 @@ support them: a captured query now allocates 144 bytes, the queue offer is 0.3â€
 statement, and the first slowdown in this subsystem (2.5.2) was a parked worker, not the queue. They
 are worth revisiting if the reference-machine run shows contention under many query threads.
 
-**2.5.3 and later:**
+**Done in 2.5.3:** the workload model with time windows, the four detectors, candidates,
+cost-benefit scoring, the advisor and its audit log ([advisor.md](advisor.md)).
 
-Workload model with time windows and persisted snapshots, detectors (hot query, scan
-amplification, hot join, cardinality error), candidate generation, cost-benefit scoring, the
-advisor and its audit log; any automatic action; telemetry for DML and DDL; failed events for
+**Later:** persisted snapshots; any automatic action; telemetry for DML and DDL; failed events for
 statements that fail before a shape exists; a cached-plan hit/miss rate per shape beyond the
 `cache_hits` count.
