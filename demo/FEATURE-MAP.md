@@ -205,3 +205,14 @@ after three misses, or at once when it was carried out. Only `CREATE INDEX` and 
 a statement attached; join-projection and partition findings stay informational. The advisor never
 runs a statement. `\advice log` is the audit log; `SET advisor = on | off` runs the evaluation on a
 timer. See [../docs/advisor.md](../docs/advisor.md).
+
+## 2.5.4 — AUTO_SAFE actuator
+
+The last phase runs with `sql/2.5.4-actuator.sql`. `SET adaptive = off | advisory | auto_safe`
+(default off). In `advisory` nothing is ever run. In `auto_safe` the controller ticks: it evaluates
+the advisor, passes each recommendation through the policy gate (eleven rejection reasons, a budget
+of indexes, bytes and build size, cooldowns), runs at most one `CREATE INDEX` or `ANALYZE` per tick,
+then compares rows read per execution before and after and keeps or rolls back the change. It only
+ever drops an index it created itself. `\actions` shows the actions and `\actions log` the log. The
+demo drives the ticks by hand so the output is the same on every run. See
+[../docs/actuator.md](../docs/actuator.md).
