@@ -2,6 +2,7 @@ package io.adb.advisor
 
 import io.adb.catalog.IndexInfo
 import io.adb.statistics.EntityStatistics
+import io.adb.telemetry.WriteStats
 
 /** What the advisor knows about one entity's physical design at the moment of an evaluation.
   *
@@ -14,6 +15,8 @@ import io.adb.statistics.EntityStatistics
   * @param rowCount   row count of the last `ANALYZE` (0 if never analyzed)
   * @param statistics statistics of the entity, if it was ever analyzed
   * @param indexes    secondary indexes that exist now
+  * @param writes     cumulative write counters of the entity at the moment of the evaluation (2.5.4),
+  *                   or `None` when telemetry has not seen a write to it
   */
 final case class EntityDesign(
     entityId: Long,
@@ -21,7 +24,8 @@ final case class EntityDesign(
     fieldNames: Map[Long, String],
     rowCount: Long,
     statistics: Option[EntityStatistics],
-    indexes: Vector[IndexInfo]
+    indexes: Vector[IndexInfo],
+    writes: Option[WriteStats] = None
 ) derives CanEqual:
   /** Column name of `fieldId`, or `f<id>` when the schema no longer has it. */
   def fieldName(fieldId: Long): String = fieldNames.getOrElse(fieldId, s"f$fieldId")

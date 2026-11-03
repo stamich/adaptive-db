@@ -437,7 +437,8 @@ final class AdaptiveDatabase(
         entity.fields.map(f => f.id.value.toLong -> f.name).toMap,
         stats.fold(0L)(_.table.rowCount),
         stats,
-        indexCatalog.indexes(entity.id)
+        indexCatalog.indexes(entity.id),
+        Some(telemetry.writes.stats(entity.id.value)).filter(_.statements > 0L)
       )
     })
 
