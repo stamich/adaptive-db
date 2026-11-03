@@ -181,11 +181,52 @@ object WorkloadBenchmark:
         "join_order" -> obj(joinOrder*),
         "estimation" -> estimationSection(db),
         "planner" -> plannerSection(timer),
-        "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights)
+        "calibration" -> calibration(points.result(), OptimizerConfig.Default.weights),
+        "telemetry" -> telemetrySection(db)
       )
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
     finally native.close()
+
+  /** Telemetry cost of workload C through the whole SQL path (Milestone 2.5.2.1): the bytes the
+    * calling thread allocates per execution with telemetry off, skipped by the sampler and
+    * captured, and the rows read a capture reports.
+    *
+    * Allocation, unlike time, does not depend on the machine's load, so
+    * `scripts/check-benchmarks.py` can hold the numbers to a budget: a skipped query adds
+    * (almost) nothing and a captured one a few hundred bytes, not the kilobyte of a decoded
+    * profile document.
+    */
+  private def telemetrySection(db: AdaptiveDatabase): String =
+    val runs = 2000
+    val threads = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    val policy = db.telemetry.policy
+    db.telemetry.policy = io.adb.telemetry.TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
+    /** Bytes allocated per execution of workload C in `mode`, after a warm-up. */
+    def allocated(mode: String): Double =
+      db.execute(s"SET telemetry = $mode")
+      for _ <- 0 until 1000 do db.execute(WorkloadC)
+      val before = threads.getCurrentThreadAllocatedBytes
+      var i = 0
+      while i < runs do { db.execute(WorkloadC); i += 1 }
+      (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
+    try
+      val (off, skip, capture) = (allocated("off"), allocated("sampled"), allocated("full"))
+      db.telemetry.drainNow()
+      val perExecution = db.telemetry.allStats().map(s => s.totalRowsRead.toDouble / math.max(1L, s.executions))
+      obj(
+        "query" -> str("C_covering_index_eq"),
+        "runs" -> num(runs.toLong),
+        "alloc_bytes_off" -> num(off),
+        "alloc_bytes_skip" -> num(skip),
+        "alloc_bytes_capture" -> num(capture),
+        "alloc_extra_skip" -> num(skip - off),
+        "alloc_extra_capture" -> num(capture - off),
+        "captured_rows_read_per_execution" -> num(perExecution.headOption.getOrElse(-1.0))
+      )
+    finally
+      db.execute("SET telemetry = off")
+      db.telemetry.policy = policy
 
   /** The access path cost mode chose for the first relation of `sql` (`entity_scan` when no
     * index was a candidate, so no access decision was recorded).
