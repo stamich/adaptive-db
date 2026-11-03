@@ -31,7 +31,7 @@ pub use executor::{Executor, QueryCursor};
 pub use expression::{BinaryOp, Expr};
 pub use limits::ExecutionLimits;
 pub use memory::{MemoryReservation, MemoryTracker};
-pub use metrics::QueryMetrics;
+pub use metrics::{QueryMetrics, QueryTelemetry};
 pub use physical_plan::{
     AggregateFunction, AggregateSpec, JoinKey, JoinType, PhysicalPlan, SortKey,
 };

@@ -1,4 +1,4 @@
-//! C ABI of Adaptive DB (ABI version 8, Milestone 2.5.0). See `include/adb.h`.
+//! C ABI of Adaptive DB (ABI version 9, Milestone 2.5.2.1). See `include/adb.h`.
 //!
 //! Every entry point validates its raw arguments, initializes its output slots first, contains
 //! panics, and reports failures as an [`AdbStatus`] plus a thread-local error message.
@@ -49,7 +49,7 @@ pub use projection::{
 };
 pub use query::{
     adb_execute_plan_json, adb_execute_plan_json_at, adb_query_cancel, adb_query_close,
-    adb_query_next_batch, adb_query_profile_json,
+    adb_query_next_batch, adb_query_profile_json, adb_query_telemetry, AdbQueryTelemetry,
 };
 pub use schema::{
     adb_alter_entity_json, adb_create_entity_json, adb_drop_entity, adb_list_schemas_json,

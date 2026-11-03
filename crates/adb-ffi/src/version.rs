@@ -8,8 +8,10 @@
 /// 7 = Milestone 2.4.0 (entity schemas and DDL, plan wire v4 with the catalog epoch,
 /// `ADB_SCHEMA_CHANGED`, statistics format 3);
 /// 8 = Milestone 2.5.0 (commit sequence numbers: `adb_latest_commit_seq` and the `*_commit`
-/// mutations, change-log cursors, projection registry; plan wire stays v4).
-pub const ABI_VERSION: u32 = 8;
+/// mutations, change-log cursors, projection registry; plan wire stays v4);
+/// 9 = Milestone 2.5.2.1 (`adb_query_telemetry`: query counters without a JSON profile; additive,
+/// every existing function and layout is unchanged).
+pub const ABI_VERSION: u32 = 9;
 /// Engine version reported through the C ABI. Milestone 2.5.2.1 has four components, which Cargo's
 /// semantic versions cannot express, so the crates stay at 2.5.2 and this string is authoritative.
 static ENGINE_VERSION: &[u8] = b"2.5.2.1";
