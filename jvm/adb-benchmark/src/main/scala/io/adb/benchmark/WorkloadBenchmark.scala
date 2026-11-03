@@ -15,7 +15,7 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 
-/** Milestone 2.5.2.1 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
+/** Milestone 2.5.3 workload benchmark over the native engine (the 2.3.0 workloads; since 2.4.0
   * the tables are created in the engine catalog, so every row read goes through its schema).
   *
   * The dataset is loaded by the Rust `workloads --prepare` binary (the only definition of the
@@ -167,7 +167,7 @@ object WorkloadBenchmark:
         points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
       }
       val report = obj(
-        "milestone" -> str("2.5.2.1"),
+        "milestone" -> str("2.5.3"),
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
@@ -188,7 +188,7 @@ object WorkloadBenchmark:
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
     finally native.close()
 
-  /** Telemetry cost of workload C through the whole SQL path (Milestone 2.5.2.1): the bytes the
+  /** Telemetry cost of workload C through the whole SQL path (Milestone 2.5.3): the bytes the
     * calling thread allocates per execution with telemetry off, skipped by the sampler and
     * captured, and the rows read a capture reports.
     *

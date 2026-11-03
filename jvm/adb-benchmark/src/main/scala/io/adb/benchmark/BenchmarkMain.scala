@@ -17,7 +17,7 @@ import java.nio.file.{Files, Path}
 import java.util.Optional
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.5.2.1) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.5.3) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
@@ -63,7 +63,7 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.5.2.1 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.5.3 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
@@ -249,7 +249,7 @@ object BenchmarkMain:
     finally native.close()
 
   /** Splits the cost of a captured query into the steps the capture path adds to the engine run
-    * (Milestone 2.5.2.1): the native execution alone, the same plus fetching the profile document,
+    * (Milestone 2.5.3): the native execution alone, the same plus fetching the profile document,
     * and the same plus scanning it for the rows read. It also reports the bytes the calling thread
     * allocates per execution with telemetry off, skipped and captured.
     *
