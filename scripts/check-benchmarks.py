@@ -19,6 +19,10 @@ write counters add (almost) nothing to it.
 The advisor section (2.5.3) must show the hysteresis at work (no advice after two evaluations,
 an index on the filtered column after three), an unchanged number of indexes and a non-empty
 audit log; these are counts, so they are checked exactly.
+The actuator section (2.5.4) must do nothing in off and advisory mode, keep the index that cuts
+the rows read and roll back the one that does not, refuse the rolled-back target during its
+cooldown, never fail an action, and leave the user's own indexes untouched; these are counts and
+exact engine counters, so they are checked exactly.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -104,6 +108,27 @@ def check_advisor(ffi: dict, check) -> None:
     check(section["audit_entries"] >= 1, "advisor: the audit log is empty although advice was confirmed")
 
 
+def check_actuator(ffi: dict, check) -> None:
+    """Checks the 2.5.4 actuator section of the JVM report with `check(ok, message)`.
+
+    Counts and the engine's rows-read counter only; the mean tick time is informational.
+    """
+    section = ffi.get("actuator")
+    check(section is not None, "the JVM report has no actuator section")
+    if section is None:
+        return
+    check(section["idle_actions"] == 0, f"actuator: {section['idle_actions']} actions or log entries while the mode was off or advisory")
+    check(section["actions_kept"] == 1, f"actuator: {section['actions_kept']} indexes kept (expected the one that helps)")
+    check(section["actions_rolled_back"] == 1, f"actuator: {section['actions_rolled_back']} indexes rolled back (expected the one that does not help)")
+    check(section["actions_rejected"] >= 1, "actuator: the rolled-back target was not refused during its cooldown")
+    check(section["actions_failed"] == 0, f"actuator: {section['actions_failed']} actions failed")
+    check(section["rows_read_per_execution_after"] * 4 <= section["rows_read_per_execution_before"],
+          f"actuator: rows read per execution {section['rows_read_per_execution_before']:.0f} -> "
+          f"{section['rows_read_per_execution_after']:.0f}, not at least 4x fewer")
+    check(section["user_indexes_before"] == section["user_indexes_after"], "actuator: the user's own indexes changed")
+    check(section["advisor_indexes_after"] == 1, f"actuator: {section['advisor_indexes_after']} advisor indexes left (expected 1)")
+
+
 def main(database_path: str, ffi_path: str) -> int:
     """Runs every check; returns the process exit status."""
     with open(database_path) as f:
@@ -182,6 +207,7 @@ def main(database_path: str, ffi_path: str) -> int:
     check_consistency(native, check)
     check_telemetry(ffi, check)
     check_advisor(ffi, check)
+    check_actuator(ffi, check)
     estimation = ffi["estimation"]
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")
