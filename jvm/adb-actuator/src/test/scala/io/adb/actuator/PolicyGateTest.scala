@@ -14,9 +14,9 @@ final class PolicyGateTest:
   private val now = 10_000L * second
 
   private val recommendation = CreateIndex(7L, "orders", Vector(2L), Vector("customer_id"), Some(Score(500.0, 100.0)), Vector(11L))
-  private val design = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 100_000L, None, Vector.empty)))
+  private val design = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 40_000L, None, Vector.empty)))
   /** A workload in which shape 11 ran `executions` times and scanned `rowsRead` rows per execution. */
-  private def workload(executions: Long = 200L, rowsRead: Long = 100_000L) =
+  private def workload(executions: Long = 200L, rowsRead: Long = 40_000L) =
     WorkloadSnapshot(Vector.empty, Map(11L -> ShapeDelta(11L, executions, 0L, executions * 1_000_000L, executions, executions * rowsRead, 1.0)))
   private def decide(r: Recommendation = recommendation, d: PhysicalDesign = design, w: WorkloadSnapshot = workload(),
                      p: Policy = policy, b: Budget = budget, c: GateContext = GateContext(now)) =
@@ -33,7 +33,7 @@ final class PolicyGateTest:
 
   @Test def anIndexThatAlreadyExistsIsRefused(): Unit =
     val info = IndexInfo(IndexId(1), "mine", EntityId(7), Vector(IndexKeyColumn(FieldId(2), descending = false)), Vector.empty, 1L, 1L, 1L)
-    val indexed = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 100_000L, None, Vector(info))))
+    val indexed = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 40_000L, None, Vector(info))))
     assertEquals(Some(RejectReason.AlreadyExists), reason(decide(d = indexed)))
 
   @Test def tooFewExecutionsAreRefused(): Unit =
@@ -62,17 +62,17 @@ final class PolicyGateTest:
     assertEquals(Approve, decide(c = GateContext(now, ownedIndexes = 7)))
 
   @Test def aTableAboveTheBuildCeilingNeedsAPerson(): Unit =
-    val big = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 20_000_000L, None, Vector.empty)))
+    val big = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 200_000L, None, Vector.empty)))
     assertEquals(Some(RejectReason.TableTooLarge), reason(decide(d = big)))
 
   @Test def theNeverAnalyzedTableIsJudgedByTheRowsItsScansRead(): Unit =
     val unknown = PhysicalDesign.of(Seq(EntityDesign(7L, "orders", Map(2L -> "customer_id"), 0L, None, Vector.empty)))
-    assertEquals(Some(RejectReason.TableTooLarge), reason(decide(d = unknown, w = workload(rowsRead = 20_000_000L))))
+    assertEquals(Some(RejectReason.TableTooLarge), reason(decide(d = unknown, w = workload(rowsRead = 200_000L))))
 
   @Test def theByteBudgetIsEnforced(): Unit =
     val tight = Budget(maxIndexBytes = 1_000_000L)
     assertEquals(Some(RejectReason.TooManyBytes), reason(decide(b = tight)))
-    assertEquals(Some(RejectReason.TooManyBytes), reason(decide(b = Budget(maxIndexBytes = 6_000_000L), c = GateContext(now, ownedBytes = 2_000_000L))))
+    assertEquals(Some(RejectReason.TooManyBytes), reason(decide(b = Budget(maxIndexBytes = 6_000_000L), c = GateContext(now, ownedBytes = 5_000_000L))))
     assertEquals(Approve, decide(b = Budget(maxIndexBytes = 6_000_000L)))
 
   @Test def theBuildLimitIsEnforced(): Unit =

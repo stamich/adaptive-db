@@ -37,7 +37,7 @@ final class Rig(
   /** The filter shape on `orders.customer_id` every test starts from. */
   val orders = 7L
   val ordersShape = QueryShape(Vector(orders), Vector(FieldRef(orders, 2L)), Vector.empty, Vector.empty, false, false)
-  val load = new Load(ordersShape, rowsPerRun = 100_000L, nanosPerRun = 100_000_000L)
+  val load = new Load(ordersShape, rowsPerRun = 40_000L, nanosPerRun = 100_000_000L)
   var loads: Vector[Load] = Vector(load)
 
   /** Cumulative write counters of `orders`. */
@@ -60,7 +60,7 @@ final class Rig(
 
   def design: PhysicalDesign =
     PhysicalDesign.of(Seq(
-      EntityDesign(orders, "orders", Map(1L -> "id", 2L -> "customer_id", 3L -> "amount"), 100_000L, None, indexes),
+      EntityDesign(orders, "orders", Map(1L -> "id", 2L -> "customer_id", 3L -> "amount"), 40_000L, None, indexes),
       EntityDesign(8L, "items", Map(1L -> "id", 2L -> "sku"), 0L, None, Vector.empty)))
 
   val advisor = new Advisor(
@@ -94,7 +94,7 @@ final class Rig(
     * serve, different shape); `wantsIndex = false` filters on `amount` instead, which the index does not
     * serve; `entity` picks another table.
     */
-  def Load2(wantsIndex: Boolean = true, entity: Long = 7L, qError: Double = 1.0, rowsPerRun: Long = 100_000L): Load =
+  def Load2(wantsIndex: Boolean = true, entity: Long = 7L, qError: Double = 1.0, rowsPerRun: Long = 40_000L): Load =
     val field = if wantsIndex && entity == 7L then 2L else 3L
     // hasLimit makes it a different shape from the first load even when it filters on the same column.
     val shape = QueryShape(Vector(entity), Vector(FieldRef(entity, field)), Vector.empty, Vector.empty, false, true)

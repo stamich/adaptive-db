@@ -51,14 +51,16 @@ object Policy:
   * @param maxAdvisorIndexes  indexes the advisor may own at once
   * @param maxIndexBytes      total estimated size of the advisor's indexes
   * @param maxConcurrentBuilds index builds that may run at the same time
-  * @param maxBuildRows       largest table the advisor builds an index on by itself; a bigger table needs a person
+  * @param maxBuildRows       largest table the advisor builds an index on by itself. `CREATE INDEX` holds reads and
+  *                          writes of the database for the whole build (measured: about 30 us per row, so 50 000 rows
+  *                          stall for roughly 1.6 s); a bigger table needs a person to choose the moment
   * @param bytesPerEntry      estimated bytes per index entry (key plus row reference), used for the size estimate
   */
 final case class Budget(
     maxAdvisorIndexes: Int = 8,
     maxIndexBytes: Long = 1L << 30,
     maxConcurrentBuilds: Int = 1,
-    maxBuildRows: Long = 10_000_000L,
+    maxBuildRows: Long = 50_000L,
     bytesPerEntry: Long = 48L
 ) derives CanEqual:
   require(maxAdvisorIndexes >= 0, "maxAdvisorIndexes cannot be negative")

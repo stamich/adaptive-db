@@ -134,7 +134,7 @@ final class AdaptiveControllerTest:
     rig.steps(6)                                  // created and kept
     assertEquals(ActionState.Kept, rig.controller.actions.head.state)
     rig.indexes = Vector.empty                    // a person drops it
-    rig.load.rowsPerRun = 100_000L; rig.load.nanosPerRun = 100_000_000L
+    rig.load.rowsPerRun = rig.load.baseRows; rig.load.nanosPerRun = rig.load.baseNanos
     rig.steps(12)
     assertTrue(rig.events.contains(ActionEvent.ExternallyDropped))
     assertEquals(1, rig.fake.applied.count(_.kind == ActionKind.CreateIndex), "not recreated")

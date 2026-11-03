@@ -697,7 +697,8 @@ object AdaptiveDatabase:
       native: NativeDatabase,
       legacyCatalog: Option[Path] = None,
       config: OptimizerConfig = OptimizerConfig.Default,
-      feedbackLog: Option[PlannerFeedbackLog] = None
+      feedbackLog: Option[PlannerFeedbackLog] = None,
+      adaptiveConfig: AdaptiveConfig = AdaptiveConfig()
   ): AdaptiveDatabase =
     val indexes = EngineIndexCatalog(native)
     val catalog = new EngineCatalog(new NativeSchemaBackend(native), () => indexes.indexes.map(dependency))
@@ -705,7 +706,7 @@ object AdaptiveDatabase:
       CatalogImport.importInto(catalog, new FileCatalog(path))
       Files.move(path, path.resolveSibling(path.getFileName.toString + ".imported"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     }
-    new AdaptiveDatabase(catalog, native, config, feedbackLog)
+    new AdaptiveDatabase(catalog, native, config, feedbackLog, adaptiveConfig = adaptiveConfig)
 
   /** The fields an index depends on, for RESTRICT checks of `DROP COLUMN` and `DROP TABLE`. */
   def dependency(index: IndexInfo): IndexDependency =

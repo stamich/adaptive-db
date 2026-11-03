@@ -21,6 +21,7 @@ final class PolicyTest:
     assertEquals(8, b.maxAdvisorIndexes)
     assertEquals(1L << 30, b.maxIndexBytes)
     assertEquals(1, b.maxConcurrentBuilds)
+    assertEquals(50_000L, b.maxBuildRows, "CREATE INDEX stalls reads and writes for the whole build, so the ceiling is low")
 
   @Test def nonsenseValuesAreRefused(): Unit =
     assertThrows(classOf[IllegalArgumentException], () => Policy(minExecutions = 0L))
