@@ -105,8 +105,8 @@ The controller never drops an index it did not create. `OwnershipRegistry.mayDro
 authority; `OwnedOnlyActuator` is a second guard that refuses a `DROP INDEX`, or an undo, of an
 index the registry does not own, before the call reaches the engine. A user's index named like an
 advisor index is protected by one more rule: only `adv_` indexes can be adopted, and only when they
-are in the physical design. Indexes a person dropped by hand are remembered (`externally_dropped`)
-and not recreated until the cooldown has passed.
+are in the physical design. An index a person dropped by hand is remembered
+(`externally_dropped`) and the gate refuses to build that target again: the person's decision stands.
 
 ## Idle indexes
 
@@ -144,8 +144,9 @@ The write cost needs data the 2.5.3 model did not have. While telemetry is on, t
   detector, rollback planner, flap guard, action log.
 - `AdaptiveControllerTest` runs the whole loop against `Rig`, a scripted pretend database.
 - `examples/jvm-actuator-smoke` runs it against the real engine: nothing in advisory mode, a kept
-  index, a rolled-back index, the refusal during the cooldown, a user index left alone, an external
-  drop, restart adoption and the idle rule.
+  index, a rolled-back index, the refusal during the cooldown, switching modes, a user index left
+  alone, the idle rule, an external drop that is not undone and a budget of one index. Adoption after
+  a restart is covered by `OwnershipRegistryTest` and `AdaptiveControllerTest`.
 - The `actuator` section of the JVM workload report, checked exactly by `scripts/check-benchmarks.py`.
 - The feature tour, phase 2.5.4.
 
