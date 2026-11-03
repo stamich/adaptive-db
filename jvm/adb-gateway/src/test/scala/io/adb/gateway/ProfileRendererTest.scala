@@ -55,3 +55,11 @@ final class ProfileRendererTest:
     val plain = """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"operator":"entity_scan","rows_out":0,"batches_out":0,"elapsed_us":0}}"""
     assertFalse(ProfileRenderer.render(plain).contains("index access"))
 
+  /** The rows scanned are the rows the leaf operators produced. */
+  @Test def sumsTheRowsOfTheLeaves(): Unit =
+    val json =
+      """{"peak_memory_bytes":0,"memory_limit_bytes":1024,"root":{"operator":"hash_join","rows_out":7,
+        |"children":[{"operator":"entity_scan","rows_out":40},{"operator":"filter","rows_out":3,
+        |"children":[{"operator":"entity_scan","rows_out":100}]}]}}""".stripMargin
+    assertEquals(140L, ProfileRenderer.rowsScanned(json))
+    assertEquals(9L, ProfileRenderer.rowsScanned("""{"root":{"operator":"point_lookup","rows_out":9}}"""))

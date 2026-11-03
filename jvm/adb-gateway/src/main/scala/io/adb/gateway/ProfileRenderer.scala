@@ -65,6 +65,18 @@ object ProfileRenderer:
       f"index access: $pages pages, $examined entries examined, $returned returned ($visible%.0f%% visible)$fetch"
     }
 
+  /** Rows produced by the leaf operators (the scans) of a profile: the rows the statement read
+    * from storage, before filters and joins above them. Parsing the profile costs microseconds,
+    * so the gateway does it only for sampled queries.
+    */
+  def rowsScanned(json: String): Long =
+    /** Sum of `rows_out` over the leaves under `node`. */
+    def leaves(node: Any): Long =
+      val operator = node.asInstanceOf[Map[String, Any]]
+      val kids = children(operator)
+      if kids.isEmpty then number(operator("rows_out")) else kids.map(leaves).sum
+    leaves(JsonReader.parse(json).asInstanceOf[Map[String, Any]]("root"))
+
   /** Every operator of the profile that has an estimate, in pre-order. */
   def compare(json: String, estimates: Map[Int, NodeEstimate]): Vector[Comparison] =
     val profile = JsonReader.parse(json).asInstanceOf[Map[String, Any]]
