@@ -43,10 +43,19 @@ Timings (validation VM; NOT reference numbers, and not able to resolve a few mic
   The profile fetch and the row scan, which the change removes from a capture, measured 0.5-3.6 us
   and 1.1-2.7 us. A native call through invokeWithArguments measured 300-500 ns (not changed).
 
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.2.1-*.json = second run)
+  check-benchmarks.py: "benchmark results agree (scale 1)" on both runs
+  telemetry allocation: skipped +0 B, captured +144 B, 10 rows read per capture (as on the VM)
+  ffi report vs 2.5.1: median -0.8 % over 31 timings (range -3.7 % to +3.0 %); rust_native point
+    lookup 1000 ns vs 1250 ns
+  write path: the first run (busy disk) and the 2.5.2 run gave about half the 2.5.1 write rates;
+    the second run, quiet disk, same build: writes 41k rows/s (0 indexes), 14k (3 indexes), single-row
+    commit 136/s (1 thread) and 343/s (8 threads). Same code, different disk state: no regression found.
+
 Not run
   The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
-  The reference-machine (Ryzen) run of the JVM benchmark and scripts/benchmark-ffi.sh with the new
-  telemetry section, so there are no reference timings for 2.5.2.1.
+  The JVM BenchmarkMain on the reference machine (off / skipped / captured timings), so there is no
+  reference timing of the capture saving; compare-write-path.sh (2.5.1 vs current on one disk).
   Multi-threaded measurements beyond 2 CPUs.
 
 Commits

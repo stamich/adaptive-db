@@ -94,6 +94,10 @@ executions per mode):
 | skipped by the sampler | +24 B | **+0 B** |
 | captured | +2 344 B | **+144 B** (the event) |
 
+On the reference machine (Ryzen 9 5950X, workload C, JVM workload report) the same allocation was
+measured: skipped +0 bytes, captured +144 bytes, 10 rows read per capture. The timing comparison of
+the modes is not in that report.
+
 `scripts/check-benchmarks.py` holds the workload report to a budget of 64 B (skipped) and 512 B
 (captured); `examples/jvm-telemetry-smoke` checks the same end to end.
 

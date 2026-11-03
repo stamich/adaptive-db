@@ -72,6 +72,31 @@ VM's runs. The runs were too noisy to show it as a stable percentage (see
 [telemetry.md](telemetry.md#measured)); the reference-machine run is where it will be confirmed or
 not, and it should not be assumed.
 
+## Reference-machine results and the 2.5.2 write-path question
+
+Two runs on the Ryzen 9 5950X, same build. Read and planning paths: no change against 2.5.1 (ffi
+median -0.8 % over 31 timings). Allocation as measured on the VM: skipped +0 bytes, captured +144
+bytes. These are in `examples/results/2.5.2.1-*.json` (the quiet run), with a description in
+`examples/results/README.md`.
+
+The 2.5.2 report, and the first 2.5.2.1 report, showed the fsync-bound workloads at about half of
+2.5.1 (commits 659 to 67-83 per second, indexed writes 7.6k to 3.8-4.0k rows/s). The code could not
+account for it: the diff of 2.5.1 and 2.5.2 over the engine, the Rust benchmark and the scripts
+contains only version strings, and the Rust benchmark never loads the JVM, the gateway or
+telemetry. The second run, on a quiet disk, with nothing else changed, gave writes without index
+6.4k to 41k rows/s, three indexes 3.8k to 14k, single-row commit 74 to 136 per second. So the
+variation between two runs of one build is larger than the difference between the builds, and **no
+regression was found in 2.5.2 or 2.5.2.1**.
+
+The disk-bound figures of earlier reports are not a baseline. In particular the 659 commits/s of
+the 2.5.1 report is an outlier: the single-row commit test in the same report gave 73/s. This is
+the most likely reading, not a measured proof; running `compare-write-path.sh` (2.5.1 and the
+current build alternating on one disk, with an `fdatasync` probe) would prove it.
+
+A possible follow-up, not done here: have the Rust benchmark record the filesystem of its data
+directory and a raw `fdatasync` baseline in its report, so a disk effect can be told from a code
+regression by the file alone.
+
 ## Compatibility
 
 - **C ABI 9** is additive: a binding built for ABI 9 refuses an ABI 8 library (and the reverse), as
@@ -89,12 +114,16 @@ not, and it should not be assumed.
 - [x] `adb_query_telemetry` documented in `adb.h`, Rustdoc and Javadoc; layout tested on both sides
 - [x] Allocation held to a budget by `check-benchmarks.py` and by the smoke test
 - [x] No new behaviour visible to SQL users; no format change
-- [ ] Reference-machine run of `BenchmarkMain` and `scripts/benchmark-ffi.sh` with the new report
+- [x] Reference-machine run of `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh` with the new report (`examples/results/2.5.2.1-*.json`, quiet disk)
+- [ ] Reference-machine run of the JVM `BenchmarkMain` (the off / skipped / captured timing comparison)
 
 ## Not verified
 
 - Gradle (Maven Central is not reachable from the validation environment; CI runs it). The JVM
   modules were compiled with `scalac` 3.3.8 and `javac` 22 and the tests run with a JUnit stand-in.
-- Any claim about time on the reference machine.
+- The time a capture saves on the reference machine: the three reports do not contain the telemetry
+  timing comparison, so only allocation is confirmed there.
+- The cause of the 2.5.2 write-path slowdown beyond what the two runs show (see below). The
+  `compare-write-path.sh` comparison of the 2.5.1 and current builds on one disk was not run.
 - Behaviour with many concurrent query threads: each thread has its own counter holder, but the
   contention on the queue and the counters has only been measured on 2 CPUs.

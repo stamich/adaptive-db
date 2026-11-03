@@ -38,7 +38,10 @@ measurements: `docs/milestone-2.5.2.1.md`, `docs/telemetry.md`.
 - Numbered 2.5.2.1 at the owner's request. Cargo cannot express four components: the crates stay
   2.5.2; the engine version string, the JVM build and the reports say 2.5.2.1.
 - Not done, on purpose: a ring buffer, thread-local counters, double-buffered aggregation (2.5.3).
-- The time effect has not been measured on the reference machine; the validation VM is too noisy.
+- Reference-machine reports are in `examples/results/2.5.2.1-*.json` (quiet disk): reads unchanged,
+  allocation as designed. The write rates that looked halved in the 2.5.2 report were disk state,
+  not code (the same build gave up to 6x more on a quiet disk). The time a capture saves has not
+  been measured there (the JVM `BenchmarkMain` was not run).
 
 ## 2.5.2 — Telemetry hot path
 

@@ -36,6 +36,11 @@ What was left out and why (a ring buffer, thread-local counters, double-buffered
 [docs/milestone-2.5.2.1.md](docs/milestone-2.5.2.1.md); the measurements, and why the shared VM's
 timings cannot judge a few microseconds, are in [docs/telemetry.md](docs/telemetry.md#measured).
 
+**Measured on the Ryzen 9 5950X** (`examples/results/2.5.2.1-*.json`, quiet disk): read and planning
+paths unchanged against 2.5.1 (median -0.8 %), telemetry allocation +0 / +144 bytes. The write rates
+of the 2.5.2 report (about half of 2.5.1) were not a regression: the same build gave 6x the rate
+on a quiet disk; see [examples/results/README.md](examples/results/README.md).
+
 **Upgrading from 2.5.2:** rebuild the native library and the JVM modules together; a JVM built for
 ABI 9 refuses an ABI 8 library and the reverse. No data migration.
 
