@@ -51,10 +51,11 @@ final case class AdvisorReport(
   * through [[Hysteresis]] and records state changes in the [[AuditLog]]. Call it on a timer
   * ([[AdvisorScheduler]]) or by hand.
   *
-  * @param stats  returns the cumulative per-shape counters (see [[Advisor.forTelemetry]])
-  * @param shapes looks a shape up by id
-  * @param config knobs
-  * @param clock  monotonic clock in nanoseconds (replaceable for tests)
+  * @param stats     returns the cumulative per-shape counters (see [[Advisor.forTelemetry]])
+  * @param shapes    looks a shape up by id
+  * @param config    knobs; also readable afterwards as `advisor.config`
+  * @param clock     monotonic clock in nanoseconds (replaceable for tests)
+  * @param detectors the detectors to run, in report order (default: all four)
   */
 final class Advisor(
     stats: () => Vector[ShapeStats],

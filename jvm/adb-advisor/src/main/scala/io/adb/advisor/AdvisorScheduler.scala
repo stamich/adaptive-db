@@ -53,4 +53,5 @@ final class AdvisorScheduler(
   /** Whether the timer runs. */
   def running: Boolean = synchronized(task.isDefined)
 
+  /** Same as [[stop]], so the scheduler can be used with `Using`. */
   def close(): Unit = stop()
