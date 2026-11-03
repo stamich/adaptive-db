@@ -1,6 +1,7 @@
 package io.adb.actuator
 
 import io.adb.advisor.PhysicalDesign
+import io.adb.telemetry.{FieldRef, QueryShape}
 
 /** An index the advisor created and may therefore drop.
   *
@@ -29,6 +30,16 @@ final case class OwnedIndex(
     baseline: Option[Baseline] = None,
     appliedAtNanos: Long = 0L
 ) derives CanEqual
+
+/** Helpers of [[OwnedIndex]]. */
+object OwnedIndex:
+  /** Whether `shape` filters on, or joins through, the leading column of `index`. */
+  def wants(index: OwnedIndex, shape: QueryShape): Boolean =
+    index.fields.headOption.exists { lead =>
+      val ref = FieldRef(index.entityId, lead)
+      shape.filterFields.contains(ref) ||
+        shape.joinEdges.exists(e => (e.leftEntity == index.entityId && e.leftField == lead) || (e.rightEntity == index.entityId && e.rightField == lead))
+    }
 
 /** The record of what the advisor owns: the only indexes it may ever drop.
   *
