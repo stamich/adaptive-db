@@ -95,6 +95,7 @@ object DemoMain:
       consistencyPhase(db)
       planCachePhase(db)
       telemetryPhase(db)
+      advisorPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -330,6 +331,32 @@ object DemoMain:
     for _ <- 1 to 5 do tiny.offer(event)
     println(s"queue of capacity 2 after 5 offers: accepted=${tiny.metrics.accepted} dropped=${tiny.metrics.dropped}")
     println("Feature shown: a full queue drops telemetry and returns at once; the query is never delayed.")
+    execute(db, "SET telemetry = off;")
+
+  /** Milestone 2.5.3: the workload advisor (recommends only; the person carries the advice out). */
+  private def advisorPhase(db: AdaptiveDatabase): Unit =
+    phase("2.5.3", "workload advisor")
+    execute(db, "SET telemetry = full;")
+    show(db.showAdvice())
+    println("Feature shown: the first evaluation is only a baseline; the telemetry counters hold everything since the start, not one window.")
+    // `currency` has no index and 1 of 2,001 rows is PLN: every run reads the whole table to return one row.
+    val wasteful = "SELECT id, amount FROM ledger WHERE currency = 'PLN';"
+    for round <- 1 to 3 do
+      for _ <- 1 to 40 do db.execute(wasteful)
+      println(s"evaluation $round after 40 runs of the same query:")
+      show(db.showAdvice())
+    println("Feature shown: the advice appears only after it held for three evaluations in a row (hysteresis); the hot query is reported too.")
+    execute(db, "SHOW INDEXES ON ledger;")
+    println("Feature shown: the advisor only recommends; no index was created. The SQL column is what a person would run.")
+    execute(db, "CREATE INDEX adv_ledger_currency ON ledger (currency);")
+    for _ <- 1 to 40 do db.execute(wasteful)
+    show(db.showAdvice())
+    show(db.showAdviceLog())
+    println("Feature shown: once the index exists the advice is withdrawn as applied, and the audit log keeps the history.")
+    execute(db, "DROP INDEX adv_ledger_currency;")
+    execute(db, "SET advisor = on;")
+    execute(db, "SET advisor = off;")
+    println("Feature shown: SET advisor = on|off starts or stops the background evaluation (a timer thread that exists only while it is on).")
     execute(db, "SET telemetry = off;")
 
   /** Renders a table result without echoing a statement. */
