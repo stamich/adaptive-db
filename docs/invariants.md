@@ -193,3 +193,12 @@ Each invariant names the test that guards it.
 63. The plan cache never exceeds its byte budget, stores a statement only after a second
     sighting, and never stores AS OF statements or plans that read a projection whose use depends
     on the session. *(BoundedLruTest, PlanCacheTest, PlanCacheSmoke)*
+
+## Telemetry (2.5.2)
+
+64. With telemetry off, a query does no telemetry work: no clock read, no counter, no allocation,
+    no profile fetch. *(TelemetrySmoke)*
+65. The telemetry queue is bounded and `offer` never blocks; a full queue drops the event and counts
+    it. *(TelemetryRuntimeTest, TelemetrySmoke)*
+66. A shape contains ids and flags only: never SQL text or a literal value, and two statements that
+    differ only in literals share it. *(QueryShapeExtractorTest, TelemetrySmoke)*

@@ -1,0 +1,39 @@
+Adaptive DB Milestone 2.5.2 — validation record
+Date: 2026-11-03
+Base: 2.5.1 (master)
+
+Environment
+  rustc 1.97.0, cargo 1.97.0
+  openjdk 22 (JDK 22), Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44, cloud VM (2 vCPU); a development machine, not the reference machine
+
+Rust (cargo steps of ./build-milestone-2.5.2.sh; the engine is unchanged except the version string)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 413 passed, 0 failed
+  rustdoc: not re-run for 2.5.2 (no Rust source changed besides the version string)
+
+Java / JVM
+  JVM modules compiled with scalac 3.3.8 and javac 22 (-Werror) ... OK
+  JVM tests (Scala + Java) ........................................ 229 passed, 0 failed
+  examples/jvm-telemetry-smoke (off by default and silent; full and sampled
+    capture; one shape for statements that differ only in literals; rows read
+    and returned; plan-cache flag; switching off; a full queue drops without
+    delaying) ...................................................... PASS
+  examples/jvm-plan-cache-smoke (2.5.1 behaviour still holds) ...... PASS
+  feature tour (io.adb.cli.DemoMain) against libadb_ffi, 2.5.2 phase  OK
+
+Benchmarks (validation VM, one session, noisy; not reference numbers)
+  Cached point lookup, median of 7 alternating rounds: telemetry on but skipped -4 % to +4 %
+  (noise), captured +12 % to +18 % (+162 % to +176 % before the worker stopped waiting on the queue).
+  Parts: sampling decision about 109 ns, shape extraction 2.3-5 us (once per plan), event 33-38 ns,
+  offer 0.32-0.41 us, profile scan 1.1-1.2 us (JSON parse 16.5 us).
+  The Ryzen workload run for 2.5.2 has not been made; the workload scripts now write 2.5.2-*.json.
+
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them),
+  examples/jvm-cdc-smoke and examples/jvm-consistency-smoke at 2.5.2, rustdoc at 2.5.2.
+
+Commits
+  One commit per task, each authored by Michal Stawarski, without co-authors.

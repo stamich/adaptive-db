@@ -285,3 +285,11 @@ The gateway keeps the encoded physical plan of repeated `SELECT`s (module `adb-p
 by the statement's token stream and the optimizer mode and validated on every hit against the
 engine's schema epoch and the statistics generations of the tables read. Nothing below the gateway
 changes. See [plan-cache.md](plan-cache.md).
+
+## Telemetry (Milestone 2.5.2)
+
+The gateway keeps a literal-free shape for each planned SELECT (module `adb-telemetry`, computed
+once when the plan is made and stored in the cached plan). A finished query asks a sampler; only a
+captured one builds a small event and offers it to a bounded queue that never blocks, and a
+sleeping worker folds events into per-shape statistics. Nothing below the gateway changes. See
+[telemetry.md](telemetry.md).
