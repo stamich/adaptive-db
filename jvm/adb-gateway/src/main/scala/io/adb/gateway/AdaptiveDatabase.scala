@@ -3,6 +3,7 @@ package io.adb.gateway
 import io.adb.consistency.*
 import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.plancache.*
+import io.adb.actuator.{AdaptiveConfig, AdaptiveController, AdaptiveMode}
 import io.adb.advisor.{Advisor, AdvisorReport, AdvisorScheduler, EntityDesign, PhysicalDesign}
 import io.adb.telemetry.*
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
@@ -44,6 +45,7 @@ import scala.jdk.CollectionConverters.*
   * @param native      open native database handle
   * @param config      cost-based optimizer configuration
   * @param feedbackLog where executed queries' estimated and actual rows are logged, if anywhere
+  * @param adaptiveConfig policy and budget of `SET adaptive = auto_safe` (2.5.4)
   */
 final class AdaptiveDatabase(
     val catalog: Catalog,
@@ -51,7 +53,8 @@ final class AdaptiveDatabase(
     config: OptimizerConfig = OptimizerConfig.Default,
     feedbackLog: Option[PlannerFeedbackLog] = None,
     consistency: ConsistencyBackend = null,
-    planCacheBytes: Long = AdaptiveDatabase.DefaultPlanCacheBytes
+    planCacheBytes: Long = AdaptiveDatabase.DefaultPlanCacheBytes,
+    adaptiveConfig: AdaptiveConfig = AdaptiveConfig()
 ):
   /** The engine's commit order and projections (the native database unless a test supplies one). */
   private val backend: ConsistencyBackend = if consistency == null then ConsistencyBackend(native) else consistency
@@ -71,14 +74,19 @@ final class AdaptiveDatabase(
   private val planCache = new PlanCache[CachedQuery](math.max(1L, planCacheBytes), 8, 4096, _.weight)
   /** Query telemetry (off until `SET telemetry = sampled | full`); see [[io.adb.telemetry.TelemetryRuntime]]. */
   val telemetry: TelemetryRuntime = new TelemetryRuntime()
-  /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. */
+  /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. Since 2.5.4 the [[controller]] evaluates it. */
   val advisor: Advisor = Advisor.forTelemetry(telemetry)
   /** Serialises schema changes: a user's DDL statement and an action of the actuator (2.5.4) never
     * run at the same time. Re-entrant, so the actuator may hold it around a statement that takes it again.
     */
   private val ddlLock = new java.util.concurrent.locks.ReentrantLock()
-  /** The advisor's timer; created on the first `SET advisor = on`. */
+  /** The actuator's controller (2.5.4): off by default; `SET adaptive = auto_safe` lets it act. */
+  val controller: AdaptiveController =
+    new AdaptiveController(advisor, new GatewayActuator(this), telemetry.registry.get, adaptiveConfig)
+  /** The timer that ticks the controller; created on the first `SET advisor = on` or `SET adaptive = ...`. */
   private var advisorTimer: Option[AdvisorScheduler] = None
+  /** The telemetry mode to restore when `auto_safe` is left, if `auto_safe` switched it on. */
+  private var telemetryToRestore: Option[TelemetryMode] = None
   /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
   @volatile private var cacheEnabled: Boolean = planCacheBytes > 0
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
@@ -312,6 +320,7 @@ final class AdaptiveDatabase(
       QueryResult(Vector.empty, Vector.empty, Some(s"SET plan_cache = ${if cacheEnabled then "on" else "off"}"))
 
     case BoundSetTelemetry(name) =>
+      synchronized { telemetryToRestore = None } // a person's choice wins over what auto_safe set
       telemetry.mode = name match
         case "off" => TelemetryMode.Off
         case "sampled" => TelemetryMode.Sampled
@@ -319,8 +328,12 @@ final class AdaptiveDatabase(
       QueryResult(Vector.empty, Vector.empty, Some(s"SET telemetry = $name"))
 
     case BoundSetAdvisor(enabled) =>
-      if enabled then startAdvisor() else stopAdvisor()
+      setAdaptive(AdaptiveMode.ofAdvisorSwitch(enabled))
       QueryResult(Vector.empty, Vector.empty, Some(s"SET advisor = ${if enabled then "on" else "off"}"))
+
+    case BoundSetAdaptive(name) =>
+      setAdaptive(AdaptiveMode.parse(name).getOrElse(throw new IllegalArgumentException(s"adaptive must be off, advisory or auto_safe, got $name")))
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET adaptive = $name"))
 
     case BoundSetConsistency(level) =>
       session.consistency = level
@@ -460,9 +473,37 @@ final class AdaptiveDatabase(
     * Turns nothing else on: without `SET telemetry = sampled | full` the advisor sees no queries.
     */
   def startAdvisor(periodMillis: Long = AdaptiveDatabase.AdvisorPeriodMillis): Unit = synchronized {
-    if advisorTimer.isEmpty then advisorTimer = Some(new AdvisorScheduler(advisor, () => physicalDesign(), periodMillis))
+    if advisorTimer.isEmpty then advisorTimer = Some(new AdvisorScheduler(() => { controller.tick(physicalDesign()); () }, periodMillis))
     advisorTimer.foreach(_.start())
   }
+
+  /** Sets the adaptive mode (`SET adaptive = off | advisory | auto_safe`).
+    *
+    * - `off` stops the timer and every telemetry-driven action; the previous telemetry mode is
+    *   restored if `auto_safe` had switched it on.
+    * - `advisory` runs the 2.5.3 advisor on the timer and never acts.
+    * - `auto_safe` also lets the controller act inside its policy and budget. It switches telemetry
+    *   to `full` (and restores the earlier mode when left): in `sampled` mode a fast query is mostly
+    *   skipped, so the runs after an index was built would be undercounted and could not be verified.
+    *
+    * Leaving `auto_safe` stops new actions and rollbacks at once; a statement already running
+    * finishes or fails atomically in the engine.
+    */
+  def setAdaptive(mode: AdaptiveMode, periodMillis: Long = AdaptiveDatabase.AdvisorPeriodMillis): Unit = synchronized {
+    controller.mode = mode
+    mode match
+      case AdaptiveMode.AutoSafe =>
+        if telemetryToRestore.isEmpty && telemetry.mode != TelemetryMode.Full then
+          telemetryToRestore = Some(telemetry.mode)
+          telemetry.mode = TelemetryMode.Full
+      case _ =>
+        telemetryToRestore.foreach(telemetry.mode = _)
+        telemetryToRestore = None
+    if mode.needsTimer then startAdvisor(periodMillis) else stopAdvisor()
+  }
+
+  /** The adaptive mode now. */
+  def adaptiveMode: AdaptiveMode = controller.mode
 
   /** Stops the background evaluation (`SET advisor = off`); recommendations and the audit log stay. */
   def stopAdvisor(): Unit = synchronized(advisorTimer.foreach(_.stop()))

@@ -87,8 +87,12 @@ final class Binder(catalog: Catalog):
           case "on" => BoundSetAdvisor(true)
           case "off" => BoundSetAdvisor(false)
           case _ => throw new IllegalArgumentException(s"advisor must be on or off, got $value")
+      else if name.equalsIgnoreCase("adaptive") then
+        val mode = value.toLowerCase
+        require(Set("off", "advisory", "auto_safe").contains(mode), s"adaptive must be off, advisory or auto_safe, got $value")
+        BoundSetAdaptive(mode)
       else
-        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache, telemetry, advisor)")
+        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache, telemetry, advisor, adaptive)")
         BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
 
     case SetSessionConsistency(level, bound) =>
