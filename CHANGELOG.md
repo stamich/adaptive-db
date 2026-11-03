@@ -46,7 +46,7 @@ migration is needed. Design and limits: `docs/actuator.md`, `docs/milestone-2.5.
   and leaves the user's indexes alone.
 
 ### Not done
-- Reference-machine benchmark runs, persistence of the registry and the log, online index builds,
+- JVM `BenchmarkMain` on the reference machine, persistence of the registry and the log, online index builds,
   and any action beyond the three statements.
 
 ## 2.5.3 — Workload model and advisor

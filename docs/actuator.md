@@ -152,8 +152,8 @@ The write cost needs data the 2.5.3 model did not have. While telemetry is on, t
 
 ## Not done
 
-- **Reference-machine timing.** The effect is judged on rows read, which is exact; the time figures
-  need the reference machine.
+- **Time figures of the loop.** The effect is judged on rows read, which is exact. The reference-machine
+  run confirms the counts and a 0.46 ms tick; the JVM `BenchmarkMain` timings are still to be run.
 - **Persisting** the ownership registry and the action log. After a restart the `adv_` prefix is the
   only memory; the log starts empty.
 - **Other actions**: join projections, partitions, dropping a user's index, changing settings. They

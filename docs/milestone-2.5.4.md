@@ -109,8 +109,10 @@ the user's own indexes were the same before and after. The demo's 2 001-row tabl
 effect, 2 002 times fewer rows read.
 
 The write counters add 0 bytes of allocation beyond the existing statement path in the benchmark
-(budget 64). One controller tick (evaluation, gate, verification) took about 1 ms on the validation
-VM, which runs it every 10 s.
+(budget 64). On the reference machine (Ryzen 9 5950X, `examples/results/2.5.4-*.json`) the checks
+agree, the counts are identical to the VM's, a write allocates the same with and without the counters,
+and the read and planning paths are unchanged against 2.5.3 (median -0.5 % over 15 timings). One controller tick (evaluation, gate, verification) took about 1 ms on the validation
+VM and 0.46 ms on the reference machine; it runs every 10 s.
 
 ## Compatibility
 
@@ -132,7 +134,7 @@ VM, which runs it every 10 s.
 - [x] Scaladoc on every public item
 - [x] `check-benchmarks.py` checks the actuator section exactly
 - [x] JVM tests (405) and the three smoke tests pass against the real engine
-- [ ] Reference-machine run of `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh`
+- [x] Reference-machine run of `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh`
       (`examples/results/2.5.4-*.json`)
 - [ ] Reference-machine run of the JVM `BenchmarkMain` and `compare-write-path.sh` (carried over)
 - [ ] Tuning of `Policy` and `Budget` defaults on real workloads

@@ -17,6 +17,20 @@ target refused during its cooldown, no failed action, at least 4x fewer rows rea
 the helped query, and the user's indexes unchanged. The mean tick time is for information. The
 telemetry section also reports `write_alloc_extra_counted` (budget 64 bytes).
 
+Recorded by the author on the AMD Ryzen 9 5950X (release build, scale 1);
+`check-benchmarks.py` reports "benchmark results agree (scale 1)".
+
+* **Actuator section:** 0 actions while off or advisory; 3 applied, 1 kept, 1 rolled back, 1 rejected,
+  0 failed; rows read per execution 5 000 -> 250; 2 user indexes before and after; 1 advisor index
+  left. One controller tick took 0.46 ms on average.
+* **Write counters:** an update of a single row allocates 4 280 bytes with telemetry off and the same
+  counted: +0 bytes (budget 64).
+* **Telemetry allocation unchanged:** skipped +0 bytes, captured +144 bytes.
+* **Read and planning paths against 2.5.3:** the 15 comparable workload timings of the ffi report have
+  a median change of -0.5 % (largest increase +4.8 %), as expected for an unchanged engine.
+* **Other rates of this run:** database load 44.8k rows/s (2.5.3: 48.0k); `adb-benchmark-rust` commit
+  78 ops/s with one thread and 165 with several.
+
 ## Milestone 2.5.3 workload advisor
 
 ```bash

@@ -49,13 +49,17 @@ Measured while building it
   CREATE INDEX stalls reads and writes for the whole build, about 30 us per row; the actuator's
   automatic build ceiling is therefore 50 000 rows (about 1.5 s).
 
-Reference machine (AMD Ryzen 9 5950X)
-  NOT RUN. examples/results/2.5.4-*.json are to be recorded by the author with
-  scripts/benchmark-db.sh and scripts/benchmark-ffi.sh; no numbers are given here.
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.4-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"
+  actuator section: as on the VM (3 applied, 1 kept, 1 rolled back, 1 rejected, 0 failed;
+    rows read per execution 5000 -> 250; user indexes 2 / 2); one controller tick 0.46 ms
+  write counters: +0 B per counted write (4280 B with and without); telemetry +0 B / +144 B
+  ffi report vs 2.5.3: median -0.5 % over 15 workload timings (largest increase +4.8 %)
+  database load 44.8k rows/s (2.5.3: 48.0k)
 
 Not run
   The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
-  The reference-machine benchmarks above, the JVM BenchmarkMain and compare-write-path.sh there.
+  The JVM BenchmarkMain and compare-write-path.sh on the reference machine.
   auto_safe under hours of concurrent load; the quality of its decisions on real workloads.
 
 Commits

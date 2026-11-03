@@ -30,7 +30,7 @@
     "partition-actions",
     "composite-and-covering-index-candidates",
     "dropping-a-users-index",
-    "reference-machine-results"
+    "jvm-benchmarkmain-on-reference-machine"
   ],
   "docs": [
     "docs/milestone-2.5.4.md",
