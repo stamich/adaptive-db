@@ -25,7 +25,7 @@ cargo run --release -p adb-benchmark-rust -- --rows 5000 --iters 1000 --groups 1
   --nested-rows 1000 --relational-iters 5 --output examples/results/2.5.2.1-rust-local.json
 ./scripts/benchmark-db.sh
 
-echo "== Java FFM -> C ABI v8 -> engine smoke test (incl. ANALYZE, statistics, indexes, schemas, commit order, change-log cursors and projections)"
+echo "== Java FFM -> C ABI v9 -> engine smoke test (incl. ANALYZE, statistics, indexes, schemas, commit order, change-log cursors and projections)"
 ./examples/jvm-cdc-smoke/run.sh
 
 if command -v scalac >/dev/null && command -v scala >/dev/null; then

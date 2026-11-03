@@ -159,8 +159,8 @@ Recorded runs and how to read them: [examples/results/README.md](examples/result
 
 ```text
 SQL -> Scala: parse -> bind (slots, engine catalog at epoch E) -> logical plan -> rules -> join order
-              -> physical plan (access paths, estimates, cost, decisions) <- statistics, indexes <- C ABI v8
-    -> plan wire v4 JSON {schema_epoch: E} -> Java FFM -> C ABI v8 -> Rust: check epoch -> validate
+              -> physical plan (access paths, estimates, cost, decisions) <- statistics, indexes <- C ABI v9
+    -> plan wire v4 JSON {schema_epoch: E} -> Java FFM -> C ABI v9 -> Rust: check epoch -> validate
                                                      -> operators (rows adapted to E) -> batch v2
                                                      -> runtime profile JSON (node ids)
 
@@ -299,7 +299,7 @@ and (telemetry, 2.5.2, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-tel
 ```text
 crates/        Rust engine (core, journal, page, buffer, btree, storage, schema, wal, tx, index,
                execution, plan-wire, stats, change-log, projection-runtime, engine, ffi) and the adb-migrate tool
-include/adb.h  C ABI v8
+include/adb.h  C ABI v9
 jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), SQL, binder, optimizer
                (estimation, cost, join order, access paths), physical planning, FFM, gateway,
                CLI, benchmark

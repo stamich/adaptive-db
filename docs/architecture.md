@@ -68,7 +68,7 @@ impossible, and paid several `fsync`s per commit. 2.0.3 reverses it.
 | `adb-plan-wire` | Versioned JSON plan wire format (v4 since 2.4.0, carrying the catalog epoch): bounded, version-checked, strict decoding plus validation. |
 | `adb-stats` | Optimizer statistics: document model, `ANALYZE` options and limits, collector (exact counts, HyperLogLog, reservoir sample, histograms, most common values). |
 | `adb-engine` | `Database`: commit pipeline, recovery, checkpoints, vacuum, change feed, consumer offsets, `ANALYZE`, statistics store, modification counters. |
-| `adb-ffi` | C ABI v8 (`include/adb.h`). |
+| `adb-ffi` | C ABI v9 (`include/adb.h`). |
 
 ## Write path
 
