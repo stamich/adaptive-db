@@ -136,6 +136,9 @@ VM and 0.46 ms on the reference machine; it runs every 10 s.
 - [x] JVM tests (405) and the three smoke tests pass against the real engine
 - [x] Reference-machine run of `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh`
       (`examples/results/2.5.4-*.json`)
+- [x] Write rates explained: with the CPU governor set to `performance`, 2.5.4 writes as fast as the
+      quiet 2.5.2.1 run (42.0k rows/s without index, 14.1k with 3 indexes); the lower rates of the first
+      run came from the default governor (`examples/results/2.5.4-performance-*.json`)
 - [ ] Reference-machine run of the JVM `BenchmarkMain` and `compare-write-path.sh` (carried over)
 - [ ] Tuning of `Policy` and `Budget` defaults on real workloads
 

@@ -28,7 +28,14 @@ Recorded by the author on the AMD Ryzen 9 5950X (release build, scale 1);
 * **Telemetry allocation unchanged:** skipped +0 bytes, captured +144 bytes.
 * **Read and planning paths against 2.5.3:** the 15 comparable workload timings of the ffi report have
   a median change of -0.5 % (largest increase +4.8 %), as expected for an unchanged engine.
-* **Other rates of this run:** database load 44.8k rows/s (2.5.3: 48.0k); `adb-benchmark-rust` commit
+* **Second run, CPU governor `performance`** (`cpupower frequency-set -g performance`;
+  `examples/results/2.5.4-performance-*.json`, same code and checks): writes with no index 42.0k rows/s
+  and with 3 indexes 14.1k, equal to the quiet 2.5.2.1 run (41.4k and 14.1k); database load 87.8k rows/s
+  and Rust load 44.7k; single-row commit 658 ops/s with one thread and 2 439 with several. The first
+  run (default governor) was 5.1k, 4.1k and 78 / 165. The code is identical (see
+  `docs/milestone-2.5.4.md`), so the earlier drop of 2.5.3 and 2.5.4 was the machine's power setting, not
+  the engine. Run the write benchmarks with the `performance` governor.
+* **Other rates of the first run (default governor):** database load 44.8k rows/s (2.5.3: 48.0k); `adb-benchmark-rust` commit
   78 ops/s with one thread and 165 with several.
 
 ## Milestone 2.5.3 workload advisor

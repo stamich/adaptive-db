@@ -57,6 +57,12 @@ Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.4-
   ffi report vs 2.5.3: median -0.5 % over 15 workload timings (largest increase +4.8 %)
   database load 44.8k rows/s (2.5.3: 48.0k)
 
+Reference machine, second run (CPU governor `performance`; examples/results/2.5.4-performance-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"; actuator counts and tick (0.45 ms) as before
+  writes, no index 42.0k rows/s; 3 indexes 14.1k (2.5.2.1 quiet: 41.4k, 14.1k; first 2.5.4 run: 5.1k, 4.1k)
+  load 87.8k rows/s (database report), 44.7k (Rust binary); single-row commit 658 / 2439 ops/s
+  Conclusion: the slow write rates of the 2.5.3 and 2.5.4 first runs were the CPU governor, not the code.
+
 Not run
   The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
   The JVM BenchmarkMain and compare-write-path.sh on the reference machine.
