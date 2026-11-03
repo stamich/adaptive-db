@@ -21,8 +21,10 @@ final class GatewayActuator(database: AdaptiveDatabase) extends Actuator:
   /** The actuator's own session. */
   private val session = database.session()
 
+  /** Runs the action's SQL (`CREATE INDEX`, `ANALYZE` or `DROP INDEX`) through the actuator's own session. */
   def apply(action: Action): ActuationResult = run(action.sql)
 
+  /** Runs the action's inverse statement (`DROP INDEX` for a created index) through the same session. */
   def undo(action: Action): ActuationResult =
     action.undoSql.fold[ActuationResult](ActuationFailed("no undo statement"))(run)
 

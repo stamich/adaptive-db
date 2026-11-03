@@ -35,9 +35,11 @@ object RollbackPlanner:
   * @param registry what the advisor owns
   */
 final class OwnedOnlyActuator(inner: Actuator, registry: OwnershipRegistry) extends Actuator:
+  /** Runs `action` on the inner actuator, except a `DROP INDEX` of an index the advisor does not own, which is refused. */
   def apply(action: Action): ActuationResult =
     if action.kind == ActionKind.DropIndex && !owns(action) then refusal(action) else inner(action)
 
+  /** Undoes `action` on the inner actuator, unless the index it concerns is not owned by the advisor (then refused). */
   def undo(action: Action): ActuationResult =
     if !owns(action) then refusal(action) else inner.undo(action)
 

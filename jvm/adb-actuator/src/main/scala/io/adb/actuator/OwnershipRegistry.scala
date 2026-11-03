@@ -113,7 +113,7 @@ final class OwnershipRegistry:
     * (the advisor created them before a restart; the registry is in memory and starts empty).
     *
     * An adopted index has no baseline, so it is never verified, only subject to the idle rule. A
-    * name is only a hint: the entry is marked [[OwnedIndex.adopted]] so `\actions` shows that
+    * name is only a hint: the entry is marked `OwnedIndex.adopted` so `\actions` shows that
     * the advisor took it over by name. Indexes a person dropped earlier stay blocked.
     *
     * @param design    the physical design now
@@ -142,6 +142,7 @@ final class OwnershipRegistry:
     dropped = Set.empty
   }
 
+/** Constants shared by the ownership rules (see [[OwnershipRegistry]]). */
 object OwnershipRegistry:
   /** `adv_`: the reserved name prefix of advisor indexes. */
   val Prefix: String = "adv_"

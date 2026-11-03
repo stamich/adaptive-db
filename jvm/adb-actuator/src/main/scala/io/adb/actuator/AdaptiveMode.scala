@@ -23,6 +23,7 @@ enum AdaptiveMode derives CanEqual:
     case Advisory => "advisory"
     case AutoSafe => "auto_safe"
 
+/** Helpers for [[AdaptiveMode]]. */
 object AdaptiveMode:
   /** What the 2.5.3 switch `SET advisor = on | off` means now: `on` is [[Advisory]], `off` is [[Off]]. */
   def ofAdvisorSwitch(on: Boolean): AdaptiveMode = if on then Advisory else Off
