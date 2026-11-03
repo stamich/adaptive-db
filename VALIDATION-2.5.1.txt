@@ -1,0 +1,43 @@
+Adaptive DB Milestone 2.5.1 — validation record
+Date: 2026-11-03
+Base: 2.5.0 (branch milestone-2-5-0-implementation, PR #111)
+
+Environment
+  rustc 1.97.0, cargo 1.97.0
+  openjdk 22 (JDK 22), Scala 3.3.8 compiler (official release archive), JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44, cloud VM (2 vCPU); a development machine, not the reference machine
+
+Rust (cargo steps of ./build-milestone-2.5.1.sh; the engine is unchanged except the version string)
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 413 passed, 0 failed
+  rustdoc -D warnings ............................................ OK
+
+Java / JVM
+  JVM modules compiled with scalac 3.3.8 and javac 22 (-Werror) ... OK
+  JVM tests (Scala + Java) ........................................ 214 passed, 0 failed
+  examples/jvm-consistency-smoke (2.5.0 behaviour still holds) ..... PASS
+  examples/jvm-plan-cache-smoke (hits after the second execution; stale after ALTER,
+    ANALYZE, CREATE INDEX and DDL from another handle; DML does not invalidate; one entry
+    per optimizer mode; AS OF never stored; token beyond the head refused on a hit;
+    SET plan_cache) ............................................... PASS
+
+Benchmarks
+  JVM benchmark with a live engine (BenchmarkMain, plan cache off vs on), one run each in the
+  validation VM, noisy: point lookup 118-155 us off, 13-14 us on; join/aggregate 13.6-14.5 ms off,
+  11.8-12.5 ms on. Not a reference measurement.
+  Recorded by the author on an AMD Ryzen 9 5950X (release build, scale 1):
+  examples/results/2.5.1-{rust-local,database,ffi}.json; scripts/check-benchmarks.py: "benchmark
+  results agree (scale 1)". Full SQL path C 0.101 -> 0.028 ms, D 0.226 -> 0.123 ms, A/B about -15 %,
+  E unchanged; engine paths within 1-4 % of 2.5.0. Disk-bound figures (commits/s, write overhead,
+  load, analyze) moved both ways by large factors and are noise, see examples/results/README.md.
+  The plan-cache benchmark of BenchmarkMain prints to the console and has no check in
+  scripts/check-benchmarks.py.
+
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them),
+  the Java FFM smoke test examples/jvm-cdc-smoke and the feature-tour demo at 2.5.1.
+
+Commits
+  One commit per task, each authored by Michal Stawarski, without co-authors.

@@ -35,10 +35,13 @@ class BinderTest:
         "CREATE TABLE o (id BIGINT PRIMARY KEY, c BIGINT REFERENCES o(id) NOT ENFORCED)",
         "ANALYZE nobody",
         "SET optimizer = fast",
-        "SET planner = cost"
+        "SET planner = cost",
+        "SET plan_cache = maybe"
       )
     do assertThrows(classOf[IllegalArgumentException], () => { binder.bind(parser.parse(bad)); () }, bad)
 
     assertEquals(BoundAnalyze(Vector(customer)), binder.bind(parser.parse("ANALYZE customer")))
     assertEquals(BoundAnalyze(catalog.entities), binder.bind(parser.parse("ANALYZE")))
     assertEquals(BoundSetOptimizer(OptimizerMode.Rule), binder.bind(parser.parse("SET optimizer = RULE")))
+    assertEquals(BoundSetPlanCache(true), binder.bind(parser.parse("SET plan_cache = ON")))
+    assertEquals(BoundSetPlanCache(false), binder.bind(parser.parse("SET plan_cache TO off")))

@@ -184,3 +184,12 @@ Each invariant names the test that guards it.
     from a projection only if the freshness resolver allows it. *(FreshnessResolverTest,
     FreshnessAcceptanceTest, ConsistencySmoke)*
 61. Data format 3 upgrades to 4 without rewriting anything. *(format::format_three_directories_are_upgraded_in_place, commit_seq::logs_without_sequence_numbers_are_numbered_by_timestamp)*
+
+## Plan cache (2.5.1)
+
+62. A cached plan is used only if the engine's schema epoch and the statistics generations of the
+    tables it reads equal the ones read before it was planned; otherwise it is dropped and the
+    statement is planned again. *(PlanCacheTest, PlanCacheSmoke)*
+63. The plan cache never exceeds its byte budget, stores a statement only after a second
+    sighting, and never stores AS OF statements or plans that read a projection whose use depends
+    on the session. *(BoundedLruTest, PlanCacheTest, PlanCacheSmoke)*

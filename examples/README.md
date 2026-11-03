@@ -70,6 +70,12 @@ cd jvm
 examples/jvm-consistency-smoke/run.sh   # needs scalac/scala 3.3 and JDK 22 on PATH
 ```
 
+## JVM plan cache smoke test (2.5.1)
+
+```bash
+examples/jvm-plan-cache-smoke/run.sh    # hits, invalidation by DDL/ANALYZE/CREATE INDEX, modes, AS OF
+```
+
 Compiles the Java FFM binding and the Scala 3 JVM modules with plain `javac`/`scalac` and runs
 `ConsistencySmoke.scala` against the real library: DDL and DML move the session token in one order,
 two sessions stay independent, `SET SESSION CONSISTENCY` changes the level, EXPLAIN shows the read

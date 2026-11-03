@@ -6,6 +6,7 @@ include(
     "adb-schema",
     "adb-catalog",
     "adb-consistency",
+    "adb-plan-cache",
     "adb-sql",
     "adb-logical-plan",
     "adb-optimizer",
