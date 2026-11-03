@@ -14,6 +14,9 @@ a slow consumer overtakes it and marks it as needing a rebuild.
 The telemetry section (2.5.2.1) holds the allocation of a skipped and of a captured query to a
 budget (allocation, unlike time, does not depend on the load of the machine) and requires a
 captured query to report the rows read.
+The advisor section (2.5.3) must show the hysteresis at work (no advice after two evaluations,
+an index on the filtered column after three), an unchanged number of indexes and a non-empty
+audit log; these are counts, so they are checked exactly.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -72,6 +75,26 @@ def check_telemetry(ffi: dict, check) -> None:
     check(section["alloc_extra_capture"] <= 512,
           f"telemetry: a captured query allocates {section['alloc_extra_capture']:.0f} extra bytes (budget 512)")
     check(section["captured_rows_read_per_execution"] > 0, "telemetry: a captured query reports no rows read")
+
+
+def check_advisor(ffi: dict, check) -> None:
+    """Checks the 2.5.3 advisor section of the JVM report with `check(ok, message)`.
+
+    Everything checked is a count, which does not depend on the load of the machine: the advice
+    for the wasteful scan of workload E must be held back by the hysteresis for two evaluations and
+    shown on the third, it must name an index on the filtered column, and the advisor must not
+    have created any index itself.
+    """
+    section = ffi.get("advisor")
+    check(section is not None, "the JVM report has no advisor section")
+    if section is None:
+        return
+    check(section["recommended_after_two"] == 0, "advisor: advice was shown before the hysteresis allowed it")
+    check(section["recommended_indexes"] >= 1, "advisor: no index was recommended for the unindexed scan of workload E")
+    check("ix_account" in section["index_sql"] and "region" in section["index_sql"],
+          f"advisor: the advice does not target ix_account(region): {section['index_sql']!r}")
+    check(section["indexes_before"] == section["indexes_after"], "advisor: the advisor changed the number of indexes (it must only recommend)")
+    check(section["audit_entries"] >= 1, "advisor: the audit log is empty although advice was confirmed")
 
 
 def main(database_path: str, ffi_path: str) -> int:
@@ -151,6 +174,7 @@ def main(database_path: str, ffi_path: str) -> int:
         check(all(v == 2 for v in schema["checks"]["schema_versions"]), "the sc_account tables are not at version 2")
     check_consistency(native, check)
     check_telemetry(ffi, check)
+    check_advisor(ffi, check)
     estimation = ffi["estimation"]
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")
