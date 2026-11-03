@@ -6,6 +6,8 @@ import io.adb.gateway.AdaptiveDatabase
 import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
 import io.adb.optimizer.RuleOptimizer
 import io.adb.plancache.StatementKey
+import io.adb.gateway.QueryShapeExtractor
+import io.adb.telemetry.*
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 
@@ -64,6 +66,7 @@ object BenchmarkMain:
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
     benchmarkPlanner("_relational", RelationalSql, catalog, cfg.iterations)
     benchmarkKey(cfg.iterations)
+    benchmarkTelemetryParts(catalog, cfg.iterations)
     (cfg.dataDir, cfg.nativeLib) match
       case (Some(data), Some(lib)) => benchmarkGateway(cfg.gatewayIterations, data, lib)
       case _ => println("gateway/FFM benchmark skipped; pass --data DIR --native-lib FILE to enable it")
@@ -122,6 +125,34 @@ object BenchmarkMain:
     report("plan_cache_key_point", iterations, time(iterations) { StatementKey.of(PointSql, "cost") })
     report("plan_cache_key_relational", iterations, time(iterations) { StatementKey.of(RelationalSql, "cost") })
 
+  /** Times the pieces of the telemetry hot path separately, so a regression can be traced to one
+    * of them: the sampling decision, building the shape (done once per plan, not per execution),
+    * building the event, and the queue offer.
+    */
+  private def benchmarkTelemetryParts(catalog: Catalog, iterations: Int): Unit =
+    val bound = new Binder(catalog).bind(new SqlParser().parse(PointSql)).asInstanceOf[BoundSelect]
+    val policy = TelemetrySamplingPolicy(fastSampleEvery = 128)
+    val runtime = new TelemetryRuntime(capacity = 1 << 16, startWorker = false)
+    runtime.mode = TelemetryMode.Sampled
+    val shape = QueryShapeExtractor.extract(bound)
+    runtime.registry.register(shape)
+    val n = iterations * 10
+    for _ <- 0 until math.min(10000, n) do runtime.decide(shape.id, 1000, failed = false)
+    report("telemetry_sampling_policy", n, time(n) { policy.decide(12345L, 1000, failed = false, knownShape = true) })
+    report("telemetry_sampling_decide", n, time(n) { runtime.decide(shape.id, 1000, failed = false) })
+    report("telemetry_shape_extract", iterations, time(iterations) { QueryShapeExtractor.extract(bound) })
+    val cachedShape = shape
+    report("telemetry_cached_shape_id", n, time(n) { cachedShape.id })
+    report("telemetry_event_construct", n, time(n) { QueryTelemetry(shape.id, 1, 1, 1, 10, 1000, true, false) })
+    val event = QueryTelemetry(shape.id, 1, 1, 1, 10, 1000, true, false)
+    val offerNs = time(n) { runtime.offer(event); if (runtime.metrics.queueSize >= 60000) runtime.drainNow() }
+    report("telemetry_queue_offer_with_drain", n, offerNs)
+    // A profile of the size a point lookup or a small join produces (the parse is paid by captured queries only).
+    val profile =
+      """{"peak_memory_bytes":2048,"memory_limit_bytes":268435456,"root":{"node_id":0,"operator":"project","rows_out":1,"batches_out":1,"elapsed_us":12,"counters":{"rows_in":1},""" +
+        """"children":[{"node_id":1,"operator":"filter","rows_out":1,"batches_out":1,"elapsed_us":8,"children":[{"node_id":2,"operator":"entity_scan","rows_out":1000,"batches_out":1,"elapsed_us":40,"counters":{"pages":12}}]}]}}"""
+    report("telemetry_profile_rows_scanned", iterations, time(iterations) { io.adb.gateway.ProfileRenderer.rowsScanned(profile) })
+
   /** Runs the full planning pipeline for one SELECT and returns the native plan JSON. */
   private def pipeline(parser: SqlParser, binder: Binder, optimizer: RuleOptimizer, sql: String): String =
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
@@ -165,6 +196,29 @@ object BenchmarkMain:
       report("gateway_point_lookup_cache_on", iterations, pointOn)
       report("gateway_join_aggregate_cache_off", rel, relOff)
       report("gateway_join_aggregate_cache_on", rel, relOn)
+      // Telemetry (2.5.2) on the cached point lookup: off (one volatile read), on but skipped
+      // (sampler only) and captured (compact event; the worker thread drains it).
+      val telemetryRuns = iterations * 2
+      val pointSql = "SELECT * FROM account WHERE id = 500;"
+      /** Time of `telemetryRuns` cached point lookups in `mode`, after a warm-up. */
+      def measure(mode: String): Long =
+        db.execute(s"SET telemetry = $mode")
+        for _ <- 0 until 1000 do db.execute(pointSql)
+        time(telemetryRuns) { db.execute(pointSql) }
+      db.telemetry.policy = TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
+      // The modes are measured in alternating rounds and the median of each is reported, because
+      // a single pass is dominated by drift (JIT, CPU frequency, the other threads of the VM).
+      val rounds = 7
+      val off, skip, capture = Array.fill(rounds)(0L)
+      for r <- 0 until rounds do
+        off(r) = measure("off"); skip(r) = measure("sampled"); capture(r) = measure("full")
+      db.execute("SET telemetry = off")
+      def median(a: Array[Long]): Long = a.sorted.apply(a.length / 2)
+      val (tOff, tSkip, tCapture) = (median(off), median(skip), median(capture))
+      report("gateway_point_telemetry_off", telemetryRuns, tOff)
+      report("gateway_point_telemetry_skip", telemetryRuns, tSkip)
+      report("gateway_point_telemetry_capture", telemetryRuns, tCapture)
+      println(f"telemetry overhead vs off (median of $rounds rounds): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
       println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
       // The native calls a cache hit makes before it runs the plan (2.5.2 baseline for the
       // telemetry budgets): the schema epoch, the statistics generation of one table, the
