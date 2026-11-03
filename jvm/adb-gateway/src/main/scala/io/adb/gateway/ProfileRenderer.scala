@@ -76,6 +76,10 @@ object ProfileRenderer:
     * whole document costs about 16 µs for a small profile, which would triple the cost of a
     * captured point query; the scan is a small fraction of that. [[rowsScannedExact]] is the
     * reference implementation the tests compare it with.
+    *
+    * Since Milestone 2.5.2.1 the gateway's telemetry no longer calls this: a captured query reads
+    * the same total from the engine as an integer (`NativeQuery.readTelemetry`, C ABI 9). It
+    * remains for a caller that only has a profile document.
     */
   def rowsScanned(json: String): Long =
     val marker = "\"operator\":\""
