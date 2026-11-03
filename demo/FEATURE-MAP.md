@@ -182,3 +182,13 @@ its first run, stores the physical plan on the second and answers the third from
 `ANALYZE` of the table moves its statistics generation, so the next run finds the entry stale and
 plans again. EXPLAIN reports whether a statement would be cached. See
 [../docs/plan-cache.md](../docs/plan-cache.md).
+
+## 2.5.2 — telemetry hot path
+
+The last phase runs with `sql/2.5.2-telemetry.sql`. Telemetry is off by default. `SET telemetry =
+sampled | full` turns it on: a finished query asks the sampler (a counter test, plus always-capture
+rules for failures, slow queries and unseen shapes) and only a captured one builds a small event
+and offers it to a bounded queue that never blocks. The shape of a statement (entities, filter
+columns, join edges, order, flags; no literals) is computed once when the plan is made and kept
+with the cached plan. A background worker folds events into per-shape statistics. See
+[../docs/telemetry.md](../docs/telemetry.md).
