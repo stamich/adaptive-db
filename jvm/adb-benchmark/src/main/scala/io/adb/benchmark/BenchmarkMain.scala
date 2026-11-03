@@ -211,17 +211,28 @@ object BenchmarkMain:
       db.telemetry.policy = TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
       // The modes are measured in alternating rounds and the median of each is reported, because
       // a single pass is dominated by drift (JIT, CPU frequency, the other threads of the VM).
-      val rounds = 7
+      val rounds = 9
       val off, skip, capture = Array.fill(rounds)(0L)
+      val modes = Array("off", "sampled", "full")
+      val results = Array(off, skip, capture)
+      // The order rotates every round: a fixed order would charge whatever the machine does
+      // between the first and the last measurement (a frequency step, a noisy neighbour) to the
+      // mode that always runs last.
       for r <- 0 until rounds do
-        off(r) = measure("off"); skip(r) = measure("sampled"); capture(r) = measure("full")
+        for k <- 0 until 3 do
+          val m = (r + k) % 3
+          results(m)(r) = measure(modes(m))
       db.execute("SET telemetry = off")
       def median(a: Array[Long]): Long = a.sorted.apply(a.length / 2)
       val (tOff, tSkip, tCapture) = (median(off), median(skip), median(capture))
       report("gateway_point_telemetry_off", telemetryRuns, tOff)
       report("gateway_point_telemetry_skip", telemetryRuns, tSkip)
       report("gateway_point_telemetry_capture", telemetryRuns, tCapture)
-      println(f"telemetry overhead vs off (median of $rounds rounds): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
+      // The fastest round of each mode is the least disturbed by the machine, so it is the
+      // steadier estimate of the cost the mode itself adds; the median is kept for continuity.
+      val (mOff, mSkip, mCapture) = (off.min, skip.min, capture.min)
+      println(f"telemetry overhead vs off (fastest of $rounds rounds): skip ${100.0 * (mSkip - mOff) / mOff}%.1f%% capture ${100.0 * (mCapture - mOff) / mOff}%.1f%%")
+      println(f"telemetry overhead vs off (median of $rounds rounds, rotating order): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
       benchmarkCaptureBreakdown(db, native, iterations)
       println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
       // The native calls a cache hit makes before it runs the plan (2.5.2 baseline for the
@@ -273,10 +284,15 @@ object BenchmarkMain:
         io.adb.gateway.ProfileRenderer.rowsScanned(query.profileJson())
       finally query.close()
     for _ <- 0 until 2000 do { execOnly(); execProfile(); execProfileScan() }
-    val rounds = 7
+    val rounds = 9
     val a, b, c = Array.fill(rounds)(0L)
     for r <- 0 until rounds do
-      a(r) = time(runs) { execOnly() }; b(r) = time(runs) { execProfile() }; c(r) = time(runs) { execProfileScan() }
+      // Rotating order, as for the telemetry modes.
+      for k <- 0 until 3 do
+        (r + k) % 3 match
+          case 0 => a(r) = time(runs) { execOnly() }
+          case 1 => b(r) = time(runs) { execProfile() }
+          case _ => c(r) = time(runs) { execProfileScan() }
     def median(x: Array[Long]): Long = x.sorted.apply(x.length / 2)
     val (tExec, tProfile, tScan) = (median(a), median(b), median(c))
     report("capture_native_execute_only", runs, tExec)
