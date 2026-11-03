@@ -4,6 +4,34 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+## Milestone 2.5.1 plan cache
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.5.1-database.json, 2.5.1-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.1-database.json examples/results/2.5.1-ffi.json
+```
+
+Recorded by the author on the same AMD Ryzen 9 5950X as the 2.5.0 files (release build, scale 1);
+`scripts/check-benchmarks.py` reports "benchmark results agree (scale 1)". The engine and the
+workloads are unchanged, so only the paths that go through the SQL gateway should move.
+
+* **Full SQL path (`scala_cbo_ffi_rust`, ffi report), 2.5.0 -> 2.5.1:** C (covering index point
+  read) 0.101 -> 0.028 ms (3.6x faster), D (index range, order, limit) 0.226 -> 0.123 ms (1.8x),
+  A 0.622 -> 0.526 ms (-15 %), B 0.651 -> 0.539 ms (-17 %), E (sequential scan, 48 ms) unchanged.
+  The cached statement no longer pays parse, bind, plan and metadata work, so the gain is
+  largest where the engine is fastest and vanishes where the engine dominates.
+* **Engine paths are unchanged:** `rust_native` workloads A-E are within 1-4 % of 2.5.0 (A 0.468 ->
+  0.475 ms, C 0.0197 -> 0.0197 ms, D 0.104 -> 0.101 ms, E 35.3 -> 33.9 ms) and `ffi_prepared_plan`
+  within 3 %; `planning_only` is unchanged (it measures the planner, not the cache).
+* **Not comparable, disk-bound:** commit throughput (I: 63 -> 659 single-row commits/s, 60 -> 170
+  commits/s of 100 rows) is set by the disk's fsync, which differs between runs; `write_overhead`
+  (15.9k -> 9.6k rows/s), `load` and `analyze` also moved by -45 % to -28 %, and the schema-evolution
+  write validation by +90 %, in directions that have nothing to do with a JVM cache (those paths
+  do not use the gateway). They show the run-to-run noise of this machine's storage, not a
+  regression or a gain of 2.5.1.
+* Change log, cursors, projection wait (L: 0.11 -> 0.17 ms p50, still sub-millisecond) and
+  rebuild workloads J-O are otherwise as in 2.5.0.
+
 ## Milestone 2.5.0 consistency
 
 ```bash
@@ -34,7 +62,7 @@ were recorded on an AMD Ryzen 9 5950X (32 threads, release build), scale 1, 100 
 
 ## Milestone 2.4.0 schema evolution
 
-(These runs used the 2.4.0 file names; the scripts now write `2.5.0-*.json` unless
+(These runs used the 2.4.0 file names; the scripts now write `2.5.1-*.json` unless
 `ADB_BENCH_OUT` says otherwise.)
 
 ```bash

@@ -5,13 +5,14 @@ import io.adb.ffm.NativeDatabase
 import io.adb.gateway.AdaptiveDatabase
 import io.adb.logical.{Binder, BoundCreateTable, BoundSelect, LogicalPlanner}
 import io.adb.optimizer.RuleOptimizer
+import io.adb.plancache.StatementKey
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 
 import java.nio.file.{Files, Path}
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.5.0) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.5.1) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
@@ -57,11 +58,12 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.5.0 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.5.1 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
     benchmarkPlanner("_relational", RelationalSql, catalog, cfg.iterations)
+    benchmarkKey(cfg.iterations)
     (cfg.dataDir, cfg.nativeLib) match
       case (Some(data), Some(lib)) => benchmarkGateway(cfg.gatewayIterations, data, lib)
       case _ => println("gateway/FFM benchmark skipped; pass --data DIR --native-lib FILE to enable it")
@@ -112,6 +114,14 @@ object BenchmarkMain:
     report(s"plan_json_encode$suffix", iterations, wireNs)
     report(s"planner_pipeline$suffix", iterations, totalNs)
 
+  /** Times building the plan-cache key of both benchmark statements: the lexing every cached
+    * statement pays on every execution, hit or miss.
+    */
+  private def benchmarkKey(iterations: Int): Unit =
+    for _ <- 0 until math.min(1000, iterations) do StatementKey.of(PointSql, "cost")
+    report("plan_cache_key_point", iterations, time(iterations) { StatementKey.of(PointSql, "cost") })
+    report("plan_cache_key_relational", iterations, time(iterations) { StatementKey.of(RelationalSql, "cost") })
+
   /** Runs the full planning pipeline for one SELECT and returns the native plan JSON. */
   private def pipeline(parser: SqlParser, binder: Binder, optimizer: RuleOptimizer, sql: String): String =
     val bound = binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect]
@@ -138,6 +148,24 @@ object BenchmarkMain:
       val scanNs = time(scanIterations) { db.execute("SELECT id, balance FROM account WHERE balance >= 9000 LIMIT 100;") }
       val relationalIterations = math.max(1, iterations / 100)
       val relationalNs = time(relationalIterations) { db.execute(RelationalSql) }
+      // Plan cache (2.5.1): the same statements with the cache off (every execution is parsed,
+      // bound and planned, as in 2.5.0) and on (after admission, a hit). The difference is the
+      // planning cost the cache removes; the remainder is the engine and the fixed gateway cost.
+      val rel = math.max(1, iterations / 100)
+      db.execute("SET plan_cache = off")
+      for _ <- 0 until math.min(100, iterations) do db.execute("SELECT * FROM account WHERE id = 500;")
+      val pointOff = time(iterations) { db.execute("SELECT * FROM account WHERE id = 500;") }
+      val relOff = time(rel) { db.execute(RelationalSql) }
+      db.execute("SET plan_cache = on")
+      for _ <- 0 until math.min(100, iterations) do db.execute("SELECT * FROM account WHERE id = 500;")
+      db.execute(RelationalSql); db.execute(RelationalSql)
+      val pointOn = time(iterations) { db.execute("SELECT * FROM account WHERE id = 500;") }
+      val relOn = time(rel) { db.execute(RelationalSql) }
+      report("gateway_point_lookup_cache_off", iterations, pointOff)
+      report("gateway_point_lookup_cache_on", iterations, pointOn)
+      report("gateway_join_aggregate_cache_off", rel, relOff)
+      report("gateway_join_aggregate_cache_on", rel, relOn)
+      println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
       report("gateway_point_lookup_sql_to_rust", iterations, pointNs)
       report("gateway_scan_filter_limit_sql_to_rust", scanIterations, scanNs)
       report("gateway_join_aggregate_top_k_sql_to_rust", relationalIterations, relationalNs)

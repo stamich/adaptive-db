@@ -32,6 +32,9 @@ final case class BoundShowIndexes(entity: Option[Entity]) extends BoundStatement
 /** `SET optimizer = cost | rule`. */
 final case class BoundSetOptimizer(mode: OptimizerMode) extends BoundStatement
 
+/** `SET plan_cache = on | off` (2.5.1). */
+final case class BoundSetPlanCache(enabled: Boolean) extends BoundStatement
+
 /** `SET SESSION CONSISTENCY ...`. */
 final case class BoundSetConsistency(level: io.adb.consistency.ReadConsistency) extends BoundStatement
 

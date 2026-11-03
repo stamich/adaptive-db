@@ -2,6 +2,7 @@ package io.adb.gateway
 
 import io.adb.consistency.*
 import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
+import io.adb.plancache.*
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
@@ -47,7 +48,8 @@ final class AdaptiveDatabase(
     native: NativeDatabase,
     config: OptimizerConfig = OptimizerConfig.Default,
     feedbackLog: Option[PlannerFeedbackLog] = None,
-    consistency: ConsistencyBackend = null
+    consistency: ConsistencyBackend = null,
+    planCacheBytes: Long = AdaptiveDatabase.DefaultPlanCacheBytes
 ):
   /** The engine's commit order and projections (the native database unless a test supplies one). */
   private val backend: ConsistencyBackend = if consistency == null then ConsistencyBackend(native) else consistency
@@ -63,6 +65,10 @@ final class AdaptiveDatabase(
   private val statistics = EngineStatisticsProvider(native)
   /** Index definitions of the native engine. */
   private val indexCatalog = EngineIndexCatalog(native)
+  /** Planned SELECTs by statement; empty and unused when `planCacheBytes` is 0. */
+  private val planCache = new PlanCache[CachedQuery](math.max(1L, planCacheBytes), 8, 4096, _.weight)
+  /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
+  @volatile private var cacheEnabled: Boolean = planCacheBytes > 0
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
   @volatile private var mode: OptimizerMode = OptimizerMode.Cost
 
@@ -89,13 +95,59 @@ final class AdaptiveDatabase(
     * its reads honour the session's consistency level.
     */
   private[gateway] def executeIn(sql: String, session: AdaptiveSession): QueryResult =
-    val ast = parser.parse(sql)
-    try executeOnce(ast, sql, session)
-    catch
-      case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
-        // The catalog changed between binding and execution (the engine checks before running,
-        // so nothing was returned yet): bind against the new schemas and plan again, once.
-        executeOnce(ast, sql, session)
+    val key = cacheKey(sql)
+    key.flatMap(k => cachedResult(k, sql, session)).getOrElse {
+      val ast = parser.parse(sql)
+      try executeOnce(ast, sql, session, key)
+      catch
+        case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
+          // The catalog changed between binding and execution (the engine checks before running,
+          // so nothing was returned yet): bind against the new schemas and plan again, once.
+          executeOnce(ast, sql, session, key)
+    }
+
+  /** The cache key of `sql` if it may use the plan cache: the cache is on and the text starts with
+    * `SELECT` (a leading comment opts a statement out, which is harmless).
+    */
+  private def cacheKey(sql: String): Option[StatementKey] =
+    if cacheEnabled && sql.dropWhile(_.isWhitespace).regionMatches(true, 0, "select", 0, 6)
+    then StatementKey.of(sql, mode.toString.toLowerCase)
+    else None
+
+  /** Answers `sql` from the plan cache, or `None` to take the full path.
+    *
+    * A cached plan is used only if the engine's schema epoch and the statistics generations of
+    * the entities it reads are unchanged, and the session's token is not beyond the head (the full
+    * path then reports that). If the engine nevertheless refuses the plan as outdated, the entry
+    * is dropped and the full path re-plans.
+    */
+  private def cachedResult(key: StatementKey, sql: String, session: AdaptiveSession): Option[QueryResult] =
+    planCache.lookup(key, native.currentSchemaEpoch(), native.statisticsGeneration) match
+      case Lookup.Hit(cached) =>
+        val context = session.readContext()
+        if context.consistency != ReadConsistency.Eventual && context.tokenIsAhead then None
+        else
+          try Some(runCached(cached, sql)._1)
+          catch
+            case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
+              planCache.invalidate(key)
+              None
+      case _ => None
+
+  /** The plan-cache counters (the shell's `\\cache`). */
+  def planCacheStats: CacheStats = planCache.stats
+
+  /** The plan-cache counters as a result set of `(metric, value)`. */
+  def showPlanCache(): QueryResult =
+    val s = planCache.stats
+    QueryResult(Vector("metric", "value"), Vector[(String, Any)](
+      "enabled" -> cacheEnabled, "entries" -> s.entries, "bytes" -> s.bytes, "hits" -> s.hits,
+      "misses" -> s.misses, "stale" -> s.stale, "inserts" -> s.inserts, "deferred" -> s.deferred,
+      "rejected" -> s.rejected, "evictions" -> s.evictions, "hit_ratio" -> f"${s.hitRatio}%.3f"
+    ).map((k, v) => Vector[Any](k, v)))
+
+  /** Drops every cached plan; returns how many there were. */
+  def clearPlanCache(): Int = planCache.clear()
 
   /** Every projection with its state and lag (the shell's `\\projections`). */
   def showProjections(): QueryResult =
@@ -121,10 +173,10 @@ final class AdaptiveDatabase(
   def plan(select: BoundSelect): AdaptiveDatabase.Plans = planAt(select, currentEpoch())
 
   /** Binds and executes one parsed statement at the current catalog epoch. */
-  private def executeOnce(ast: io.adb.sql.Statement, sql: String, session: AdaptiveSession): QueryResult =
+  private def executeOnce(ast: io.adb.sql.Statement, sql: String, session: AdaptiveSession, key: Option[StatementKey]): QueryResult =
     val epoch = currentEpoch()
     val statement = binder.bind(ast)
-    val result = executeBound(statement, sql, epoch, session)
+    val result = executeBound(statement, sql, epoch, session, key)
     if AdaptiveDatabase.isDdl(statement) then
       // A schema change is a commit of its own; the head read now covers it (and, under
       // concurrency, possibly a few later commits, which only makes the token safer).
@@ -171,7 +223,7 @@ final class AdaptiveDatabase(
     (plans, context, decisions)
 
   /** Dispatches a bound statement: DDL goes to the catalog, DML to the native row API, SELECT and EXPLAIN through planning. */
-  private def executeBound(statement: BoundStatement, sql: String, epoch: Long, session: AdaptiveSession): QueryResult = statement match
+  private def executeBound(statement: BoundStatement, sql: String, epoch: Long, session: AdaptiveSession, key: Option[StatementKey] = None): QueryResult = statement match
     case BoundCreateTable(name, fields, pk, references, defaults) =>
       val entity = catalog match
         case versioned: SchemaCatalog =>
@@ -229,6 +281,10 @@ final class AdaptiveDatabase(
       mode = newMode
       QueryResult(Vector.empty, Vector.empty, Some(s"SET optimizer = ${newMode.toString.toLowerCase}"))
 
+    case BoundSetPlanCache(enabled) =>
+      cacheEnabled = enabled && planCacheBytes > 0
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET plan_cache = ${if cacheEnabled then "on" else "off"}"))
+
     case BoundSetConsistency(level) =>
       session.consistency = level
       QueryResult(Vector.empty, Vector.empty, Some(s"SET SESSION CONSISTENCY ${level.sql}"))
@@ -248,7 +304,15 @@ final class AdaptiveDatabase(
       val commit = native.deleteCommit(entity.id.value, pk)
       committed("DELETE 1", commit, session)
 
-    case select: BoundSelect => run(select, planFresh(select, epoch, session)._1, sql)._1
+    case select: BoundSelect =>
+      // Generations are read before planning, so a change during planning leaves the stamp older
+      // than the world and the entry is refused on its first lookup.
+      val stamp = key.filter(_ => select.asOfVersion.isEmpty).map(_ => stampFor(select, epoch))
+      val (plans, _, decisions) = planFresh(select, epoch, session)
+      val (result, _) = run(select, plans, sql)
+      for k <- key; s <- stamp if cacheable(plans, decisions) do
+        planCache.offer(k, CachedQuery.of(select, plans), s)
+      result
 
     case BoundExplain(inner: BoundSelect, analyze) =>
       val (plans, context, decisions) = planFresh(inner, epoch, session)
@@ -257,11 +321,39 @@ final class AdaptiveDatabase(
           val (result, profile) = run(inner, plans, sql)
           Vector(s"Executed rows=${result.rows.size}", "Runtime profile:\n" + ProfileRenderer.render(profile, plans.physical.estimates))
         else Vector.empty
-      val sections = AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)
+      val sections = (AdaptiveDatabase.explain(plans) :+ ConsistencyReport.explain(context, decisions)) :+ explainCache(inner, plans, decisions)
       QueryResult(Vector("plan"), (sections ++ analyzed).map(section => Vector[Any](section)))
 
     case BoundExplain(other, _) =>
       QueryResult(Vector("plan"), Vector(Vector(other.toString)))
+
+  /** The plan-cache section of EXPLAIN. EXPLAIN itself never reads or fills the cache (and
+    * EXPLAIN ANALYZE always plans afresh); the section says whether this SELECT, run on its own,
+    * would be cached and how the cache is doing.
+    */
+  private def explainCache(select: BoundSelect, plans: AdaptiveDatabase.Plans, decisions: Vector[IndexDecision]): String =
+    val s = planCache.stats
+    val verdict =
+      if !cacheEnabled then "plan cache is off"
+      else if select.asOfVersion.nonEmpty then "not cached: AS OF reads a snapshot"
+      else if !cacheable(plans, decisions) then "not cached: the plan reads a projection that depends on the session's freshness"
+      else "cacheable: stored on the second execution, valid until DDL or ANALYZE on a table it reads"
+    s"Plan cache: $verdict (entries=${s.entries}, hits=${s.hits}, misses=${s.misses}, stale=${s.stale})"
+
+  /** What a plan for `select` is valid for, read now. */
+  private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
+    PlanStamp(epoch, select.relations.map(_.entity.id.value).distinct.map(id => id -> native.statisticsGeneration(id)))
+
+  /** Whether `plans` is valid for every session: it reads canonical rows and synchronous,
+    * ready indexes only. A plan that reads an asynchronous or lagging projection depends on the
+    * session's level and the projection's progress, so it is made again each time.
+    */
+  private def cacheable(plans: AdaptiveDatabase.Plans, decisions: Vector[IndexDecision]): Boolean =
+    val used = io.adb.physical.PhysicalPlan.preorder(plans.physical.plan).collect { case scan: io.adb.physical.PhysicalPlan.IndexScan => scan.indexId }
+    used.forall { id =>
+      decisions.find(_.index.id == id).exists(d =>
+        d.resolution == FreshnessResolution.Direct && d.projection.forall(_.mode == ProjectionMode.Synchronous))
+    }
 
   /** The result of a DML statement; the session remembers its commit. */
   private def committed(verb: String, commit: NativeCommitResult, session: AdaptiveSession): QueryResult =
@@ -280,8 +372,22 @@ final class AdaptiveDatabase(
     * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
     */
   private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans, sql: String): (QueryResult, String) =
-    val json = PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch)
-    val snapshot: Optional[java.lang.Long] = select.asOfVersion match
+    runJson(PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch), select.asOfVersion, CachedQuery.outputs(select), plans.mode, plans.physical.estimates, sql)
+
+  /** Executes a cached plan (present snapshot only; AS OF statements are not cached). */
+  private def runCached(cached: CachedQuery, sql: String): (QueryResult, String) =
+    runJson(cached.json, None, cached.outputs, cached.mode, cached.estimates, sql)
+
+  /** Sends encoded plan `json` to the engine and materializes `outputs` (name, slot) of every batch. */
+  private def runJson(
+      json: String,
+      asOf: Option[Long],
+      outputs: Vector[(String, Int)],
+      planMode: OptimizerMode,
+      estimates: Map[Int, io.adb.physical.NodeEstimate],
+      sql: String
+  ): (QueryResult, String) =
+    val snapshot: Optional[java.lang.Long] = asOf match
       case Some(v) => Optional.of(java.lang.Long.valueOf(v))
       case None => Optional.empty[java.lang.Long]()
     val query = native.execute(json, snapshot)
@@ -292,7 +398,7 @@ final class AdaptiveDatabase(
       while next.isPresent do
         val batch = next.get()
         val bySlot = batch.columns().asScala.map(c => c.slotId() -> c).toMap
-        val columns = select.output.map(column => bySlot.get(column.attribute.slot.value))
+        val columns = outputs.map((_, slot) => bySlot.get(slot))
         for row <- 0 until batch.rowCount() do
           if materializedRows >= AdaptiveDatabase.MaxMaterializedResultRows then
             throw new IllegalStateException(s"result exceeds ${AdaptiveDatabase.MaxMaterializedResultRows} rows; use LIMIT")
@@ -302,10 +408,10 @@ final class AdaptiveDatabase(
       val profile = query.profileJson()
       // Feedback must never fail a query that already ran.
       feedbackLog.foreach { log =>
-        try log.record(sql, plans.mode.toString.toLowerCase, ProfileRenderer.compare(profile, plans.physical.estimates))
+        try log.record(sql, planMode.toString.toLowerCase, ProfileRenderer.compare(profile, estimates))
         catch case NonFatal(_) => ()
       }
-      (QueryResult(select.output.map(_.name), rows.result()), profile)
+      (QueryResult(outputs.map(_._1), rows.result()), profile)
     finally query.close()
 
 /** Planning pipeline, EXPLAIN rendering and limits of the gateway. */
@@ -314,6 +420,9 @@ object AdaptiveDatabase:
   def isDdl(statement: BoundStatement): Boolean = statement match
     case _: BoundCreateTable | _: BoundAlterTable | _: BoundDropTable | _: BoundCreateIndex | _: BoundDropIndex => true
     case _ => false
+
+  /** Default byte budget of the plan cache: 32 MiB. */
+  val DefaultPlanCacheBytes: Long = 32L << 20
 
   /** Largest page of change-log commits `showChanges` asks the engine for: 1 MiB. */
   val MaxChangePageBytes: Long = 1L << 20

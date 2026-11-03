@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.0
+# Adaptive DB — Milestone 2.5.1
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -14,9 +14,39 @@ change stream, relational query execution (joins, aggregation, sorting), statist
 cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.3.0), schema
 evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
-projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`).
+projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
+2.5.1, a plan cache in the SQL gateway.
 
-## What 2.5.0 adds
+## What 2.5.1 adds
+
+2.5.1 changes only the JVM SQL gateway. The engine, the data format (4), the C ABI (8) and the
+plan wire (v4) are the same as in 2.5.0.
+
+| Area | 2.5.0 | 2.5.1 |
+|---|---|---|
+| Repeated SELECT | parsed, bound, planned and encoded on every execution | the **physical plan is cached** and reused; a hit goes straight to the engine |
+| Cache key | — | the statement's **token stream** plus the optimizer mode (layout and comments do not matter) |
+| Validity | — | the **schema epoch** and the **statistics generation** of each table read, taken from the engine before planning and checked on every hit; DDL, `CREATE INDEX` and `ANALYZE` (from any handle) invalidate, DML does not |
+| Not cached | — | `AS OF`, plans over asynchronous projections, `EXPLAIN` |
+| Memory | — | byte budget (32 MiB), 8 shards, LRU; stored on the **second** sighting so one-off statements do not fill it |
+| SQL / shell | — | `SET plan_cache = on \| off`; `\cache`, `\cache clear`; a `Plan cache:` line in EXPLAIN |
+| Version | 2.5.0 | engine, crates, JVM build and scripts **2.5.1** |
+| Tests | 413 Rust, 201 JVM | **413 Rust, 214 JVM**, plus `examples/jvm-plan-cache-smoke` against the real library |
+
+On the Ryzen (`examples/results/2.5.1-*.json`), through the full SQL path the covering-index point
+read fell from 0.101 to 0.028 ms and the index range query from 0.226 to 0.123 ms; the join queries
+gain about 15 % and the 48 ms scan nothing, because the engine dominates them. Engine paths are
+unchanged (within 1–4 %). Details,
+limits and what was left out: [docs/plan-cache.md](docs/plan-cache.md); how the proposal was
+implemented and adapted: [docs/milestone-2.5.1.md](docs/milestone-2.5.1.md).
+
+**Upgrading from 2.5.0:** nothing to do; there is no format change. To switch the cache off, run
+`SET plan_cache = off` or pass a budget of 0.
+
+**Numbering:** our rule keeps patch numbers for fixes, and the roadmap had a plan cache under 2.6+;
+it is numbered 2.5.1 at the author's request.
+
+## What 2.5.0 added
 
 | Area | 2.4.0 | 2.5.0 |
 |---|---|---|
@@ -215,9 +245,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.0.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.1.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.0 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.1 through the JVM CLI
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
@@ -233,7 +263,8 @@ crates and Gradle dependencies.
 Requirements: Rust (stable) and JDK 22+. The Scala/JVM part uses the Gradle wrapper in `jvm/` and
 needs access to Maven Central. The Java FFM → Rust path is also checked without Gradle by
 `examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
-checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`.
+checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
+and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`.
 
 ## Repository layout
 
@@ -246,7 +277,7 @@ jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engi
                CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC and consistency smoke tests, results
+examples/      Rust demo and benchmark, JVM CDC, consistency and plan-cache smoke tests, results
 demo/          feature tour through the JVM CLI
 docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap
