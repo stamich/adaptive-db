@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.1
+# Adaptive DB — Milestone 2.5.2
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -15,9 +15,36 @@ cost-based optimizer (2.2.3), secondary indexes with cost-based access paths (2.
 evolution (2.4.0: versioned schemas owned by the engine, changed without rewriting rows) and, since
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
 projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
-2.5.1, a plan cache in the SQL gateway.
+2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry.
 
-## What 2.5.1 adds
+## What 2.5.2 adds
+
+2.5.2 changes only the JVM SQL gateway (new module `adb-telemetry`). The engine, the data format
+(4), the C ABI (8) and the plan wire (v4) are the same as in 2.5.1. It observes; it does not decide.
+
+| Area | 2.5.1 | 2.5.2 |
+|---|---|---|
+| Workload visibility | none | **sampled telemetry**: per query, a literal-free **shape** (entities, filter columns, join edges, order, flags), rows returned and read, time, estimate error, plan-cache hit |
+| Hot path | profile fetched on every execution | **off by default**: one volatile read; the sampler decides from values at hand; the shape comes from the cached plan; the profile is fetched only for captured queries |
+| Queue | — | bounded, `offer` never blocks, full queue drops and counts; a background worker folds events into per-shape statistics |
+| Sampling | — | always: failures, slow queries (10 ms), unseen shapes; known fast queries 1 in 128 (deterministic counter) |
+| SQL / shell | `SET plan_cache` | `SET telemetry = off \| sampled \| full`; `\telemetry`, `\telemetry shapes` |
+| Version | 2.5.1 | engine, crates, JVM build and scripts **2.5.2** |
+| Tests | 413 Rust, 214 JVM | **413 Rust, 229 JVM**, plus `examples/jvm-telemetry-smoke` against the real library |
+
+Cost on a cached point lookup in the validation VM (noisy): telemetry on but skipped −4 % to +4 %
+(within noise), captured +12 % to +18 %; the shape is computed once per plan, not per execution.
+Details, the sampling rules and the measurements: [docs/telemetry.md](docs/telemetry.md); how the
+proposal was implemented and adapted: [docs/milestone-2.5.2.md](docs/milestone-2.5.2.md).
+The workload model and the physical-design advisor that read this data are planned as 2.5.3.
+
+**Upgrading from 2.5.1:** nothing to do; there is no format change and telemetry is off until you
+run `SET telemetry = sampled`.
+
+**Numbering:** as for 2.5.1, our rule keeps patch numbers for fixes; it is numbered 2.5.2 at the
+author's request.
+
+## What 2.5.1 added
 
 2.5.1 changes only the JVM SQL gateway. The engine, the data format (4), the C ABI (8) and the
 plan wire (v4) are the same as in 2.5.0.
@@ -245,9 +272,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.1.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.2.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.1 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.2 through the JVM CLI
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
 ./scripts/benchmark-ffi.sh   # workloads, FFI and full SQL paths, selectivity sweep, calibration
 ```
@@ -264,7 +291,8 @@ Requirements: Rust (stable) and JDK 22+. The Scala/JVM part uses the Gradle wrap
 needs access to Maven Central. The Java FFM → Rust path is also checked without Gradle by
 `examples/jvm-cdc-smoke/run.sh`; the JVM modules, sessions and `SET SESSION CONSISTENCY` are
 checked against the real library, also without Gradle, by `examples/jvm-consistency-smoke/run.sh`
-and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`.
+and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-plan-cache-smoke/run.sh`
+and (telemetry, 2.5.2, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`.
 
 ## Repository layout
 
@@ -277,7 +305,7 @@ jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engi
                CLI, benchmark
 scripts/       workload benchmarks
 proto/         target binary plan contract
-examples/      Rust demo and benchmark, JVM CDC, consistency and plan-cache smoke tests, results
+examples/      Rust demo and benchmark, JVM CDC, consistency, plan-cache and telemetry smoke tests, results
 demo/          feature tour through the JVM CLI
 docs/          architecture, execution, statistics, optimizer, indexes, schema, change log, consistency, invariants, CDC, ABI, wire
                formats, milestone notes, roadmap

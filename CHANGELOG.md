@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.1. Hardened patch releases preserve the functional scope of
+Milestone 2.5.2. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,35 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.2 — Telemetry hot path
+
+The SQL gateway records the semantic shape and cost of the queries it runs, sampled and without
+slowing them. JVM only: C ABI 8, plan wire v4 and data format 4 are unchanged. It observes and does
+not decide; the advisor is 2.5.3. Design, limits and measurements: `docs/telemetry.md`,
+`docs/milestone-2.5.2.md`.
+
+### Added
+- New module `adb-telemetry`: `QueryShape` (literal-free, 64-bit id), `TelemetrySamplingPolicy` and
+  allocation-free `SamplingDecision`, compact `QueryTelemetry`, bounded `QueryShapeRegistry`,
+  `TelemetryRuntime` (mode, bounded non-blocking queue, counters, sleeping worker, per-shape
+  statistics).
+- Gateway: `QueryShapeExtractor` (shape computed once at plan time and kept in the cached plan),
+  sample-first hot path, failed-statement events, `SET telemetry = off | sampled | full`,
+  `\telemetry`, `\telemetry shapes`, `showTelemetry`, `showTelemetryShapes`.
+- `ProfileRenderer.rowsScanned` (a scanner, 1.2 µs, instead of a 16.5 µs JSON parse) and
+  `rowsScannedExact`.
+- `examples/jvm-telemetry-smoke/run.sh`; telemetry parts and the off/skip/capture comparison in the
+  JVM benchmark.
+
+### Changed
+- The query profile is no longer fetched on every execution: only when telemetry captures the query,
+  a feedback log needs it, or EXPLAIN ANALYZE asks.
+
+### Notes
+- Numbered 2.5.2 at the owner's request (patch numbers are normally for fixes only).
+- Scripts, workflows, benchmark reports, the demo and the validation files are at 2.5.2. The
+  committed `2.5.0-*` and `2.5.1-*` results are from earlier milestones.
 
 ## 2.5.1 — Plan cache
 

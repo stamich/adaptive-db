@@ -78,8 +78,12 @@ final class Binder(catalog: Catalog):
           case "on" => BoundSetPlanCache(true)
           case "off" => BoundSetPlanCache(false)
           case _ => throw new IllegalArgumentException(s"plan_cache must be on or off, got $value")
+      else if name.equalsIgnoreCase("telemetry") then
+        val mode = value.toLowerCase
+        require(Set("off", "sampled", "full").contains(mode), s"telemetry must be off, sampled or full, got $value")
+        BoundSetTelemetry(mode)
       else
-        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache)")
+        require(name.equalsIgnoreCase("optimizer"), s"unknown setting $name (supported: optimizer, plan_cache, telemetry)")
         BoundSetOptimizer(OptimizerMode.named(value).getOrElse(throw new IllegalArgumentException(s"optimizer must be cost or rule, got $value")))
 
     case SetSessionConsistency(level, bound) =>

@@ -3,6 +3,7 @@ package io.adb.gateway
 import io.adb.consistency.*
 import io.adb.optimizer.access.{IndexDecision, SemanticFreshnessPlanner}
 import io.adb.plancache.*
+import io.adb.telemetry.*
 import io.adb.catalog.{CatalogImport, Catalog, EngineCatalog, FileCatalog, IndexCatalog, IndexInfo, SchemaCatalog}
 import io.adb.ffm.*
 import io.adb.logical.*
@@ -67,6 +68,8 @@ final class AdaptiveDatabase(
   private val indexCatalog = EngineIndexCatalog(native)
   /** Planned SELECTs by statement; empty and unused when `planCacheBytes` is 0. */
   private val planCache = new PlanCache[CachedQuery](math.max(1L, planCacheBytes), 8, 4096, _.weight)
+  /** Query telemetry (off until `SET telemetry = sampled | full`); see [[io.adb.telemetry.TelemetryRuntime]]. */
+  val telemetry: TelemetryRuntime = new TelemetryRuntime()
   /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
   @volatile private var cacheEnabled: Boolean = planCacheBytes > 0
   /** Optimizer mode of this session (`SET optimizer = cost | rule`). */
@@ -127,11 +130,15 @@ final class AdaptiveDatabase(
         val context = session.readContext()
         if context.consistency != ReadConsistency.Eventual && context.tokenIsAhead then None
         else
-          try Some(runCached(cached, sql)._1)
+          val t0 = if telemetry.enabled then System.nanoTime() else 0L
+          try Some(runCached(cached, sql, t0)._1)
           catch
             case stale: NativeException if stale.status() == AdbStatus.SCHEMA_CHANGED =>
               planCache.invalidate(key)
               None
+            case NonFatal(e) =>
+              if t0 != 0L then telemetryFailure(cached.shape, cached.schemaEpoch, cached.estimatedRows, cacheHit = true, t0)
+              throw e
       case _ => None
 
   /** The plan-cache counters (the shell's `\\cache`). */
@@ -285,6 +292,13 @@ final class AdaptiveDatabase(
       cacheEnabled = enabled && planCacheBytes > 0
       QueryResult(Vector.empty, Vector.empty, Some(s"SET plan_cache = ${if cacheEnabled then "on" else "off"}"))
 
+    case BoundSetTelemetry(name) =>
+      telemetry.mode = name match
+        case "off" => TelemetryMode.Off
+        case "sampled" => TelemetryMode.Sampled
+        case _ => TelemetryMode.Full
+      QueryResult(Vector.empty, Vector.empty, Some(s"SET telemetry = $name"))
+
     case BoundSetConsistency(level) =>
       session.consistency = level
       QueryResult(Vector.empty, Vector.empty, Some(s"SET SESSION CONSISTENCY ${level.sql}"))
@@ -308,8 +322,15 @@ final class AdaptiveDatabase(
       // Generations are read before planning, so a change during planning leaves the stamp older
       // than the world and the entry is refused on its first lookup.
       val stamp = key.filter(_ => select.asOfVersion.isEmpty).map(_ => stampFor(select, epoch))
+      val t0 = if telemetry.enabled then System.nanoTime() else 0L
       val (plans, _, decisions) = planFresh(select, epoch, session)
-      val (result, _) = run(select, plans, sql)
+      val (result, _) =
+        try run(select, plans, sql, t0, needProfile = false)
+        catch
+          case NonFatal(e) =>
+            if t0 != 0L && !isSchemaChanged(e) then
+              telemetryFailure(QueryShapeExtractor.extract(select), epoch, plans.physical.estimates.get(0).fold(-1L)(x => math.round(x.rows)), cacheHit = false, t0)
+            throw e
       for k <- key; s <- stamp if cacheable(plans, decisions) do
         planCache.offer(k, CachedQuery.of(select, plans), s)
       result
@@ -339,6 +360,44 @@ final class AdaptiveDatabase(
       else if !cacheable(plans, decisions) then "not cached: the plan reads a projection that depends on the session's freshness"
       else "cacheable: stored on the second execution, valid until DDL or ANALYZE on a table it reads"
     s"Plan cache: $verdict (entries=${s.entries}, hits=${s.hits}, misses=${s.misses}, stale=${s.stale})"
+
+  /** Whether `e` is the engine's "catalog moved" refusal, which is retried, not a failure. */
+  private def isSchemaChanged(e: Throwable): Boolean = e match
+    case n: NativeException => n.status() == AdbStatus.SCHEMA_CHANGED
+    case _ => false
+
+  /** Offers the event of a failed statement if the sampler wants it (failures are always captured
+    * by the default policy). Never throws.
+    */
+  private def telemetryFailure(shape: QueryShape, epoch: Long, estimated: Long, cacheHit: Boolean, t0: Long): Unit =
+    try
+      val elapsed = System.nanoTime() - t0
+      if telemetry.decide(shape.id, elapsed, failed = true) == SamplingDecision.Capture then
+        telemetry.registry.register(shape)
+        telemetry.offer(QueryTelemetry(shape.id, epoch, estimated, 0L, -1L, elapsed, cacheHit, failed = true))
+    catch case NonFatal(_) => ()
+
+  /** The telemetry counters as `(metric, value)` rows (the shell's `\\telemetry`). */
+  def showTelemetry(): QueryResult =
+    val m = telemetry.metrics
+    QueryResult(Vector("metric", "value"), Vector[(String, Any)](
+      "mode" -> m.mode.toString.toLowerCase, "skipped" -> m.skipped, "captured" -> m.captured,
+      "accepted" -> m.accepted, "dropped" -> m.dropped, "drained" -> m.drained,
+      "queue_size" -> m.queueSize, "queue_high_watermark" -> m.queueHighWatermark, "shapes" -> m.shapes
+    ).map((k, v) => Vector[Any](k, v)))
+
+  /** The busiest captured shapes (`\\telemetry shapes`): id, executions, mean and max time, mean
+    * rows returned and read, worst estimate error. Folds the waiting events in first.
+    */
+  def showTelemetryShapes(limit: Int = 20): QueryResult =
+    telemetry.drainNow()
+    QueryResult(
+      Vector("shape", "executions", "cache_hits", "failures", "mean_us", "max_us", "rows_returned", "rows_read", "max_q_error"),
+      telemetry.allStats().take(limit).map { s =>
+        val n = math.max(1L, s.executions)
+        Vector[Any](java.lang.Long.toHexString(s.shapeId), s.executions, s.cacheHits, s.failures,
+          f"${s.meanNanos / 1000.0}%.1f", s.maxNanos / 1000, s.totalActualRows / n, s.totalRowsRead / n, f"${s.maxQError}%.1f")
+      })
 
   /** What a plan for `select` is valid for, read now. */
   private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
@@ -371,12 +430,17 @@ final class AdaptiveDatabase(
     *
     * @throws IllegalStateException if the result exceeds [[AdaptiveDatabase.MaxMaterializedResultRows]]
     */
-  private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans, sql: String): (QueryResult, String) =
-    runJson(PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch), select.asOfVersion, CachedQuery.outputs(select), plans.mode, plans.physical.estimates, sql)
+  private def run(select: BoundSelect, plans: AdaptiveDatabase.Plans, sql: String, t0: Long = 0L, needProfile: Boolean = true): (QueryResult, String) =
+    val shape = if t0 != 0L then QueryShapeExtractor.extract(select) else null
+    runJson(
+      PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch), select.asOfVersion, CachedQuery.outputs(select),
+      plans.mode, plans.physical.estimates, sql, needProfile, t0, shape, cacheHit = false, plans.schemaEpoch,
+      plans.physical.estimates.get(0).fold(-1L)(x => math.round(x.rows)))
 
   /** Executes a cached plan (present snapshot only; AS OF statements are not cached). */
-  private def runCached(cached: CachedQuery, sql: String): (QueryResult, String) =
-    runJson(cached.json, None, cached.outputs, cached.mode, cached.estimates, sql)
+  private def runCached(cached: CachedQuery, sql: String, t0: Long): (QueryResult, String) =
+    runJson(cached.json, None, cached.outputs, cached.mode, cached.estimates, sql, false, t0, if t0 != 0L then cached.shape else null,
+      cacheHit = true, cached.schemaEpoch, cached.estimatedRows)
 
   /** Sends encoded plan `json` to the engine and materializes `outputs` (name, slot) of every batch. */
   private def runJson(
@@ -385,7 +449,13 @@ final class AdaptiveDatabase(
       outputs: Vector[(String, Int)],
       planMode: OptimizerMode,
       estimates: Map[Int, io.adb.physical.NodeEstimate],
-      sql: String
+      sql: String,
+      needProfile: Boolean,
+      t0: Long,
+      shape: QueryShape,
+      cacheHit: Boolean,
+      schemaEpoch: Long,
+      estimatedRows: Long
   ): (QueryResult, String) =
     val snapshot: Optional[java.lang.Long] = asOf match
       case Some(v) => Optional.of(java.lang.Long.valueOf(v))
@@ -405,12 +475,21 @@ final class AdaptiveDatabase(
           rows += columns.map(_.fold(null: Any)(_.values().get(row)))
           materializedRows += 1
         next = query.nextBatch()
-      val profile = query.profileJson()
+      // Telemetry (2.5.2): `shape` is null when it is off, so the whole block is skipped. The
+      // sampler sees only values at hand; the profile is fetched and parsed, and an event built,
+      // for captured queries alone.
+      val elapsed = if shape != null then System.nanoTime() - t0 else 0L
+      val captured = shape != null && telemetry.decide(shape.id, elapsed, failed = false) == SamplingDecision.Capture
+      val profile = if needProfile || captured || feedbackLog.isDefined then query.profileJson() else ""
       // Feedback must never fail a query that already ran.
       feedbackLog.foreach { log =>
         try log.record(sql, planMode.toString.toLowerCase, ProfileRenderer.compare(profile, estimates))
         catch case NonFatal(_) => ()
       }
+      if captured then
+        val scanned = try ProfileRenderer.rowsScanned(profile) catch case NonFatal(_) => -1L
+        telemetry.registry.register(shape)
+        telemetry.offer(QueryTelemetry(shape.id, schemaEpoch, estimatedRows, materializedRows, scanned, elapsed, cacheHit, failed = false))
       (QueryResult(outputs.map(_._1), rows.result()), profile)
     finally query.close()
 

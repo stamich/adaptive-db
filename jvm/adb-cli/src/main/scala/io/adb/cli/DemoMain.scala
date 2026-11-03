@@ -32,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.5.1 - chronological feature tour")
+    banner("Adaptive DB 2.5.2 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -94,6 +94,7 @@ object DemoMain:
       println("Feature shown: the engine catalog is durable with the data; the JVM keeps no catalog file.")
       consistencyPhase(db)
       planCachePhase(db)
+      telemetryPhase(db)
     }
 
     banner("Demo completed successfully")
@@ -299,6 +300,37 @@ object DemoMain:
     execute(db, "SET plan_cache = off;")
     execute(db, "SET plan_cache = on;")
     println("Feature shown: the cache can be switched off and on per database handle in SQL.")
+
+  /** Milestone 2.5.2: the telemetry hot path (off, sampled, full, shapes and a full queue). */
+  private def telemetryPhase(db: AdaptiveDatabase): Unit =
+    phase("2.5.2", "telemetry hot path")
+    val join = "SELECT id, amount FROM ledger WHERE account = 1 AND amount = 4242;"
+    execute(db, "SET telemetry = off;")
+    db.execute(join)
+    show(db.showTelemetry())
+    println("Feature shown: with telemetry off a query touches no counter and does no telemetry work.")
+
+    execute(db, "SET telemetry = full;")
+    for account <- 1 to 5 do db.execute(s"SELECT id, amount FROM ledger WHERE account = $account;")
+    db.execute(join)
+    db.telemetry.drainNow()
+    show(db.showTelemetryShapes())
+    println("Feature shown: five statements that differ only in a literal are one shape; events carry rows returned,")
+    println("rows read and time, and the plan cache supplied the shape (computed once, when the plan was made).")
+
+    execute(db, "SET telemetry = sampled;")
+    val before = db.telemetry.metrics
+    for i <- 1 to 400 do db.execute(s"SELECT id, amount FROM ledger WHERE account = ${1 + i % 5};")
+    val after = db.telemetry.metrics
+    println(s"sampled mode: skipped ${after.skipped - before.skipped}, captured ${after.captured - before.captured} of 400 queries")
+    println("Feature shown: known, fast queries are skipped after one counter test; unknown shapes, failures and slow queries are always captured.")
+
+    val tiny = new io.adb.telemetry.TelemetryRuntime(capacity = 2, startWorker = false)
+    val event = io.adb.telemetry.QueryTelemetry(1, 1, 1, 1, 1, 1, false, false)
+    for _ <- 1 to 5 do tiny.offer(event)
+    println(s"queue of capacity 2 after 5 offers: accepted=${tiny.metrics.accepted} dropped=${tiny.metrics.dropped}")
+    println("Feature shown: a full queue drops telemetry and returns at once; the query is never delayed.")
+    execute(db, "SET telemetry = off;")
 
   /** Renders a table result without echoing a statement. */
   private def show(result: QueryResult): Unit =

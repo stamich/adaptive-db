@@ -70,6 +70,12 @@ cd jvm
 examples/jvm-consistency-smoke/run.sh   # needs scalac/scala 3.3 and JDK 22 on PATH
 ```
 
+## JVM telemetry smoke test (2.5.2)
+
+```bash
+examples/jvm-telemetry-smoke/run.sh     # off by default, full/sampled capture, shapes, dropping queue
+```
+
 ## JVM plan cache smoke test (2.5.1)
 
 ```bash

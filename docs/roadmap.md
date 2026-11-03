@@ -99,7 +99,18 @@
 - follow-ups: literal parameterisation, trimming the per-SELECT index/projection metadata fetch
   that the cache-off path pays
 
-## 2.6 — asynchronous projections (next)
+## 2.5.2 — telemetry hot path (done)
+- sampled, non-blocking collection of query shapes and costs; shape computed once per plan;
+  `SET telemetry`, `\telemetry`; off by default
+- follow-ups: events for DML and DDL, failed events before a shape exists, persisted statistics
+
+## 2.5.3 — workload model and advisor (next)
+- time-windowed aggregation, detectors (hot query, scan amplification, hot join, cardinality
+  error), candidates, heuristic cost-benefit scoring with hysteresis, an audit log, `\advice`
+- only `CREATE INDEX` and `ANALYZE` candidates map to actions we have; join-projection and
+  partition candidates stay informational until their actuators exist (2.6 and later)
+
+## 2.6 — asynchronous projections
 - asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0
 - `DELTA_REPAIR`, delta caches and coalesced row deltas for projections that lag
 - read leases; adaptive plan families, and plan-cache entries keyed on projection freshness (2.5.1 caches only plans that do not depend on it)

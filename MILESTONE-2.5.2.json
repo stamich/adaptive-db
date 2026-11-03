@@ -1,0 +1,30 @@
+{
+  "milestone": "2.5.2",
+  "base": "2.5.1",
+  "engineVersion": "2.5.2",
+  "nativeAbi": 8,
+  "scope": "telemetry-hot-path",
+  "changesEngine": false,
+  "versioning": "numbered 2.5.2 at the owner's request; the usual rule keeps patch numbers for fixes",
+  "newGatewayFeatures": [
+    "literal-free-query-shape",
+    "shape-computed-at-plan-time",
+    "sample-first-hot-path",
+    "bounded-non-blocking-queue",
+    "sleeping-worker",
+    "per-shape-statistics",
+    "profile-fetched-only-when-needed",
+    "set-telemetry",
+    "shell-telemetry-commands"
+  ],
+  "notIncluded": [
+    "workload-model",
+    "advisor",
+    "automatic-actions",
+    "dml-ddl-telemetry"
+  ],
+  "docs": [
+    "docs/milestone-2.5.2.md",
+    "docs/telemetry.md"
+  ]
+}

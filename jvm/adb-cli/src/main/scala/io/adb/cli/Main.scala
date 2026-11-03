@@ -23,6 +23,8 @@ object Main:
     words match
       case "\\projections" :: Nil => Some(db.showProjections())
       case "\\session" :: Nil => Some(db.showSession())
+      case "\\telemetry" :: Nil => Some(db.showTelemetry())
+      case "\\telemetry" :: "shapes" :: Nil => Some(db.showTelemetryShapes())
       case "\\cache" :: Nil => Some(db.showPlanCache())
       case "\\cache" :: "clear" :: Nil =>
         Some(io.adb.gateway.QueryResult(Vector.empty, Vector.empty, Some(s"plan cache cleared (${db.clearPlanCache()} entries)")))
@@ -31,7 +33,7 @@ object Main:
         val max = rest.drop(1).headOption.map(_.toInt).getOrElse(20)
         Some(db.showChanges(after, max))
       case word :: _ if word.startsWith("\\") =>
-        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\cache [clear], \\changes [after] [max], \\q)")
+        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\cache [clear], \\telemetry [shapes], \\changes [after] [max], \\q)")
       case _ => None
 
   /** Runs the interactive SQL shell until EOF or `\\q`. */
@@ -47,7 +49,7 @@ object Main:
     // The engine owns the catalog; a pre-2.4.0 catalog file is imported once.
     val db = AdaptiveDatabase.open(native, Some(dataDir.resolve("catalog.properties")), feedbackLog = Some(feedback))
 
-    println("Adaptive DB 2.5.1 shell. End statements with ';'. Type \\q to quit.")
+    println("Adaptive DB 2.5.2 shell. End statements with ';'. Type \\q to quit.")
     try
       var running = true
       while running do
