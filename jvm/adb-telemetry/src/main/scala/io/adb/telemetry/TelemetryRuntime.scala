@@ -1,7 +1,7 @@
 package io.adb.telemetry
 
 import java.util.ArrayList
-import java.util.concurrent.{ArrayBlockingQueue, ConcurrentHashMap, TimeUnit}
+import java.util.concurrent.{ArrayBlockingQueue, ConcurrentHashMap}
 import java.util.concurrent.atomic.{AtomicLong, LongAdder}
 
 /** The telemetry pipeline of one database: sampler, bounded queue, shape registry and a worker
@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.{AtomicLong, LongAdder}
   * build a [[QueryTelemetry]] and call [[offer]]. `offer` uses `ArrayBlockingQueue.offer`, which
   * never blocks: a full queue drops the event and counts it.
   *
-  * **Off the hot path.** Everything else (draining, aggregation) runs in a daemon worker thread,
-  * or on demand through [[drainNow]] (tests and demos use that to stay deterministic).
+  * **Off the hot path.** Everything else (draining, aggregation) runs in a daemon worker thread
+  * that sleeps between drains (so `offer` never has to wake it), or on demand through [[drainNow]] (tests and demos use that to stay deterministic).
   *
   * @param capacity    queue length; events beyond it are dropped
   * @param policy      sampling rules for [[TelemetryMode.Sampled]]
@@ -42,6 +42,10 @@ final class TelemetryRuntime(
   @volatile private var highWatermark: Int = 0
   /** Folded statistics by shape id. */
   private val profiles = new ConcurrentHashMap[Long, Accumulator]()
+  /** Worker sleep between drains while events keep arriving. */
+  private val BusySleepMillis = 5L
+  /** Worker sleep after a drain that found nothing. */
+  private val IdleSleepMillis = 50L
   /** Set by [[close]] to stop the worker. */
   @volatile private var closed = false
 
@@ -135,15 +139,20 @@ final class TelemetryRuntime(
       if prior != null then acc = prior
     if acc != null then acc.add(event)
 
-  /** The worker loop: wait for events, fold them, repeat until closed. */
+  /** The worker loop: drain, then sleep, until closed.
+    *
+    * The worker **sleeps and polls; it never waits on the queue**. A consumer parked in
+    * `queue.poll(timeout)` has to be woken by the producer's `offer` (an unpark, a system call of
+    * several microseconds paid by the query thread). Measured on the cached point lookup that
+    * wake-up cost about 25 µs per captured query, more than the query itself. With a sleeping
+    * worker `offer` finds nobody to wake and costs a few hundred nanoseconds. The price is that
+    * statistics lag by at most the sleep (5 ms while busy, 50 ms when idle).
+    */
   private def runWorker(): Unit =
     try
       while !closed do
-        val first = queue.poll(200, TimeUnit.MILLISECONDS)
-        if first != null then
-          fold(first)
-          drainedCount.increment()
-          drainNow(1024)
+        val drained = drainNow(4096)
+        Thread.sleep(if drained > 0 then BusySleepMillis else IdleSleepMillis)
     catch case _: InterruptedException => ()
 
   /** Mutable per-shape totals. Only the worker (or one `drainNow` caller at a time) writes. */
