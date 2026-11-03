@@ -37,8 +37,10 @@ if command -v scalac >/dev/null && command -v scala >/dev/null; then
   ./examples/jvm-telemetry-smoke/run.sh
   echo "== JVM modules -> real engine: workload advisor, hysteresis, audit log (plain scalac, no Gradle)"
   ./examples/jvm-advisor-smoke/run.sh
+  echo "== JVM modules -> real engine: AUTO_SAFE actuator, verification, rollback, budget (plain scalac, no Gradle)"
+  ./examples/jvm-actuator-smoke/run.sh
 else
-  echo "== SKIPPED consistency, plan-cache, telemetry and advisor smoke tests: scalac/scala not found"
+  echo "== SKIPPED consistency, plan-cache, telemetry, advisor and actuator smoke tests: scalac/scala not found"
 fi
 
 if [[ -x jvm/gradlew ]]; then GRADLE=(./gradlew); elif command -v gradle >/dev/null; then GRADLE=(gradle); else GRADLE=(); fi
