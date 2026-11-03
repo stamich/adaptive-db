@@ -67,9 +67,22 @@ All in module `adb-telemetry` unless noted.
 - No SQL text and no literal values are kept, in events, shapes or statistics.
 - Statements that fail while planning or executing a bound SELECT are captured as failed events.
   Statements that fail earlier (parse or bind errors) have no shape yet and are not recorded.
-- `AS OF`, DDL, DML and `EXPLAIN` are not observed in 2.5.2; only SELECT.
+- `AS OF`, DDL, DML and `EXPLAIN` are not observed as query shapes; only SELECT.
+  Since 2.5.4 DML is counted separately, per entity, by `WriteCounters` (below).
 - Statistics live in memory and are lost on restart. The 2.5.3 advisor keeps windows of
   deltas in memory too; persisting either remains open.
+
+## Write counters (2.5.4)
+
+`TelemetryRuntime.writes` is a `WriteCounters`: for every entity, the number of `INSERT`, `UPDATE`
+and `DELETE` statements that completed, the rows they changed and their wall-clock time
+(`WriteStats`). The gateway records into it only while telemetry is on; with `SET telemetry = off`
+a write does not even read the clock. A record is one map lookup and three `LongAdder`
+increments and allocates nothing for an entity already seen. No SQL text or value is kept.
+
+The counters are cumulative; a reader takes two snapshots and subtracts them (`WriteStats.since`),
+and a counter that went backwards is read as a fresh start. The 2.5.4 actuator uses them to
+measure what an index costs the writes of its table instead of assuming a flat penalty.
 
 ## A worker that sleeps
 

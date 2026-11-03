@@ -316,15 +316,21 @@ final class AdaptiveDatabase(
       val pk = values.get(entity.primaryKeyField.id) match
         case Some(DbValue.Int64Value(value)) => value
         case _ => throw new IllegalArgumentException("BIGINT primary key value required")
+      val t0 = writeClock()
       val commit = native.insertCommit(entity.id.value, pk, MutationJsonEncoder.row(entity, values))
+      recordWrite(entity.id.value, t0)
       committed("INSERT 1", commit, session)
 
     case BoundUpdate(entity, assignments, pk) =>
+      val t0 = writeClock()
       val commit = native.updateCommit(entity.id.value, pk, MutationJsonEncoder.assignments(assignments))
+      recordWrite(entity.id.value, t0)
       committed("UPDATE 1", commit, session)
 
     case BoundDelete(entity, pk) =>
+      val t0 = writeClock()
       val commit = native.deleteCommit(entity.id.value, pk)
+      recordWrite(entity.id.value, t0)
       committed("DELETE 1", commit, session)
 
     case select: BoundSelect =>
@@ -385,6 +391,17 @@ final class AdaptiveDatabase(
         telemetry.registry.register(shape)
         telemetry.offer(QueryTelemetry(shape.id, epoch, estimated, 0L, -1L, elapsed, cacheHit, failed = true))
     catch case NonFatal(_) => ()
+
+  /** Start time of a write statement, or 0 when telemetry is off (so a write costs nothing extra). */
+  private def writeClock(): Long = if telemetry.enabled then System.nanoTime() else 0L
+
+  /** Counts one finished single-row write into the per-entity write counters (2.5.4).
+    *
+    * @param entityId the entity written
+    * @param t0       the value [[writeClock]] returned before the statement; 0 means "not measured"
+    */
+  private def recordWrite(entityId: Long, t0: Long): Unit =
+    if t0 != 0L then telemetry.writes.record(entityId, 1L, System.nanoTime() - t0)
 
   /** The telemetry counters as `(metric, value)` rows (the shell's `\\telemetry`). */
   def showTelemetry(): QueryResult =
