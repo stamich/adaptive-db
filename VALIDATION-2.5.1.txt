@@ -27,10 +27,13 @@ Benchmarks
   JVM benchmark with a live engine (BenchmarkMain, plan cache off vs on), one run each in the
   validation VM, noisy: point lookup 118-155 us off, 13-14 us on; join/aggregate 13.6-14.5 ms off,
   11.8-12.5 ms on. Not a reference measurement.
-  The workload benchmark scripts now write 2.5.1-*.json. The committed Ryzen results
-  (examples/results/2.5.0-*.json) are from 2.5.0, whose engine and workloads are unchanged; no
-  2.5.1 workload run was made, and the plan-cache benchmark prints to the console and has no
-  check in scripts/check-benchmarks.py.
+  Recorded by the author on an AMD Ryzen 9 5950X (release build, scale 1):
+  examples/results/2.5.1-{rust-local,database,ffi}.json; scripts/check-benchmarks.py: "benchmark
+  results agree (scale 1)". Full SQL path C 0.101 -> 0.028 ms, D 0.226 -> 0.123 ms, A/B about -15 %,
+  E unchanged; engine paths within 1-4 % of 2.5.0. Disk-bound figures (commits/s, write overhead,
+  load, analyze) moved both ways by large factors and are noise, see examples/results/README.md.
+  The plan-cache benchmark of BenchmarkMain prints to the console and has no check in
+  scripts/check-benchmarks.py.
 
 Not run
   The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them),

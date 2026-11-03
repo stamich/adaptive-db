@@ -83,5 +83,7 @@ points to roughly 100 µs of per-SELECT gateway overhead besides planning (the i
 metadata fetched and decoded for every SELECT); a hit skips it, an uncached statement still pays it.
 Building the key costs about 0.8 µs for the point lookup and 2.5 µs for the relational query.
 
+**Author's run on the Ryzen** (`examples/results/2.5.1-*.json`, summary in `examples/results/README.md`): the full SQL path of workload C fell from 0.101 to 0.028 ms, D from 0.226 to 0.123 ms, A and B by about 15 %, E unchanged; engine paths stayed within 1–4 % of 2.5.0.
+
 Tests: `jvm/adb-plan-cache` (key, LRU, admission, validation), `BinderTest` (the setting), and
 `examples/jvm-plan-cache-smoke/run.sh` against the real engine.

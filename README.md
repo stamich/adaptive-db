@@ -33,8 +33,10 @@ plan wire (v4) are the same as in 2.5.0.
 | Version | 2.5.0 | engine, crates, JVM build and scripts **2.5.1** |
 | Tests | 413 Rust, 201 JVM | **413 Rust, 214 JVM**, plus `examples/jvm-plan-cache-smoke` against the real library |
 
-Point lookup by key in the validation VM (one noisy run): about 120–155 µs without the cache,
-13–14 µs with a hit; a join/aggregate gains about 15 % because the engine dominates it. Details,
+On the Ryzen (`examples/results/2.5.1-*.json`), through the full SQL path the covering-index point
+read fell from 0.101 to 0.028 ms and the index range query from 0.226 to 0.123 ms; the join queries
+gain about 15 % and the 48 ms scan nothing, because the engine dominates them. Engine paths are
+unchanged (within 1–4 %). Details,
 limits and what was left out: [docs/plan-cache.md](docs/plan-cache.md); how the proposal was
 implemented and adapted: [docs/milestone-2.5.1.md](docs/milestone-2.5.1.md).
 

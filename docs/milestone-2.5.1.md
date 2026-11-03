@@ -86,12 +86,17 @@ about 14 ms against 12 ms. The cache-off path costs much more than the planner s
 (about 23 µs), which suggests about 100 µs of per-SELECT index and projection metadata work in the
 gateway; hits skip it and uncached statements still pay it. Reducing it is a follow-up.
 
+The author's Ryzen run (`examples/results/2.5.1-*.json`) agrees: through the full SQL path the
+covering-index point read (workload C) fell from 0.101 to 0.028 ms and the index range query (D)
+from 0.226 to 0.123 ms, A and B by about 15 %, and the 48 ms scan (E) did not move; engine paths
+stayed within 1–4 % of 2.5.0. Disk-bound figures differ widely between runs and say nothing about
+the cache.
+
 ## Not verified
 
 - The Gradle build and test run (Maven Central is not reachable from the validation VM).
-- Hardware benchmark runs: the committed Ryzen results are from 2.5.0, whose engine and workloads
-  are unchanged; the plan-cache benchmark prints to the console and has no check in
-  `scripts/check-benchmarks.py`.
+- A `check-benchmarks.py` check for the plan cache: the cache benchmark of `BenchmarkMain` prints to
+  the console. The Ryzen workload run (`examples/results/2.5.1-*.json`) passes the existing checks.
 
 ## Out of scope (2.6 and later)
 
