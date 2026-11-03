@@ -53,3 +53,4 @@ final class TelemetryModelTest:
     assertEquals(Some(b), r.get(b.id))
     r.clear()
     assertEquals(0, r.size)
+    assertFalse(r.contains(a.id), "clear forgets the ids the sampler tests too")
