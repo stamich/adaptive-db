@@ -535,6 +535,24 @@ final class AdaptiveDatabase(
       Vector("seq", "event", "advice", "sql"),
       advisor.auditLog.entries.map(e => Vector[Any](e.sequence, e.kind.label, e.summary, e.sql.getOrElse(""))))
 
+  /** The actuator's actions (the shell's `\\actions`): `(id, target, action, state, sql, reason)` rows,
+    * oldest first. The note names the mode, because outside `auto_safe` nothing is ever added.
+    */
+  def showActions(): QueryResult =
+    val rows = controller.actions.map { a =>
+      Vector[Any](a.id.value, a.target.key, a.kind.label, a.state.label, a.sql, a.reason)
+    }
+    val note = controller.mode match
+      case AdaptiveMode.AutoSafe => None
+      case other => Some(s"adaptive = ${other.sql}: SET adaptive = auto_safe lets the advisor act inside its budget")
+    QueryResult(Vector("id", "target", "action", "state", "sql", "reason"), rows, note)
+
+  /** The actuator's log (the shell's `\\actions log`): everything it applied, kept, rolled back, rejected or refused. */
+  def showActionsLog(): QueryResult =
+    QueryResult(
+      Vector("seq", "event", "action", "detail"),
+      controller.log.entries.map(e => Vector[Any](e.sequence, e.event.label, e.action, e.detail)))
+
   /** What a plan for `select` is valid for, read now. */
   private def stampFor(select: BoundSelect, epoch: Long): PlanStamp =
     PlanStamp(epoch, select.relations.map(_.entity.id.value).distinct.map(id => id -> native.statisticsGeneration(id)))

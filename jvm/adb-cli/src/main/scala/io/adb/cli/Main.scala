@@ -15,7 +15,7 @@ object Main:
   /** Runs a backslash meta-command, or returns `None` for ordinary SQL.
     *
     * `\\projections` lists the projections, `\\session` shows the session's consistency level and
-    * token, `\\advice [log]` shows the advisor's recommendations (or its audit log), `\\cache [clear]` shows or empties the plan cache, `\\changes [after] [max]` lists change-log commits after commit `after` (default 0,
+    * token, `\\advice [log]` shows the advisor's recommendations (or its audit log), `\\actions [log]` shows what the actuator did (or its log), `\\cache [clear]` shows or empties the plan cache, `\\changes [after] [max]` lists change-log commits after commit `after` (default 0,
     * at most `max`, default 20).
     */
   private[cli] def metaCommand(db: AdaptiveDatabase, line: String): Option[io.adb.gateway.QueryResult] =
@@ -27,6 +27,8 @@ object Main:
       case "\\telemetry" :: "shapes" :: Nil => Some(db.showTelemetryShapes())
       case "\\advice" :: Nil => Some(db.showAdvice())
       case "\\advice" :: "log" :: Nil => Some(db.showAdviceLog())
+      case "\\actions" :: Nil => Some(db.showActions())
+      case "\\actions" :: "log" :: Nil => Some(db.showActionsLog())
       case "\\cache" :: Nil => Some(db.showPlanCache())
       case "\\cache" :: "clear" :: Nil =>
         Some(io.adb.gateway.QueryResult(Vector.empty, Vector.empty, Some(s"plan cache cleared (${db.clearPlanCache()} entries)")))
@@ -35,7 +37,7 @@ object Main:
         val max = rest.drop(1).headOption.map(_.toInt).getOrElse(20)
         Some(db.showChanges(after, max))
       case word :: _ if word.startsWith("\\") =>
-        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\cache [clear], \\telemetry [shapes], \\advice [log], \\changes [after] [max], \\q)")
+        throw new IllegalArgumentException(s"unknown command $word (\\projections, \\session, \\cache [clear], \\telemetry [shapes], \\advice [log], \\actions [log], \\changes [after] [max], \\q)")
       case _ => None
 
   /** Runs the interactive SQL shell until EOF or `\\q`. */
