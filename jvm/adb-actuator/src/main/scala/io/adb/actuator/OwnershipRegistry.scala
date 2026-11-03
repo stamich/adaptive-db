@@ -13,6 +13,8 @@ import io.adb.advisor.PhysicalDesign
   * @param createdAtNanos clock reading when it was built or adopted
   * @param estimatedBytes estimated size, counted against the byte budget
   * @param adopted        whether it was found by its name rather than built by this process
+  * @param baseline       the workload figures from before it was built, for verification; `None` when adopted
+  * @param appliedAtNanos clock reading when the build finished, the start of the verification period
   */
 final case class OwnedIndex(
     name: String,
@@ -23,7 +25,9 @@ final case class OwnedIndex(
     createdBy: Option[ActionId],
     createdAtNanos: Long,
     estimatedBytes: Long,
-    adopted: Boolean = false
+    adopted: Boolean = false,
+    baseline: Option[Baseline] = None,
+    appliedAtNanos: Long = 0L
 ) derives CanEqual
 
 /** The record of what the advisor owns: the only indexes it may ever drop.
