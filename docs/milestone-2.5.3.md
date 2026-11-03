@@ -92,7 +92,12 @@ of indexes is the same before and after.
 
 One evaluation, including building the `PhysicalDesign` from the engine for the 11 tables of the
 benchmark, took about 6 ms (smallest of four, VM). The advisor runs every 10 s when on, so this is
-a tick, not a per-query cost. The reference-machine figures are not in this note.
+a tick, not a per-query cost. 
+Reference machine (Ryzen 9 5950X, `examples/results/2.5.3-*.json`): the advisor section agrees
+(one evaluation 0.76 ms), telemetry allocation is still +0 / +144 bytes, and the read and planning
+paths are unchanged against 2.5.2.1 (median -0.4 % over 45 timings). The write rates of this run
+(about 7k rows/s without index, 72 commits/s) are far below the quiet 2.5.2.1 run (41k, 205/s) with
+identical engine code: the disk state again, not a regression.
 
 ## Compatibility
 
@@ -112,6 +117,7 @@ a tick, not a per-query cost. The reference-machine figures are not in this note
 - [x] `\advice`, `\advice log`, `SET advisor` covered by BinderTest, the smoke test and the demo
 - [x] Scaladoc on every public item; Rust unchanged and still strict about `missing_docs`
 - [x] `check-benchmarks.py` checks the advisor section exactly
+- [x] Reference-machine run of `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh` (`examples/results/2.5.3-*.json`)
 - [ ] Reference-machine run of the JVM `BenchmarkMain` (carried over from 2.5.2.1) and `compare-write-path.sh`
 - [ ] Tuning of `CostBenefitModel` defaults on the reference machine's workloads
 

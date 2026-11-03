@@ -13,9 +13,21 @@ python3 scripts/check-benchmarks.py examples/results/2.5.3-database.json example
 
 The JVM report has a new `advisor` section (workload E: an unindexed filter reading every row to
 return one). `check-benchmarks.py` checks its counts exactly: no advice after two evaluations, an
-index on `ix_account(region)` after three, an unchanged index count, a non-empty audit log. No
-reference-machine results of 2.5.3 are kept here yet; the engine is the same as in 2.5.2.1, so the
-files `2.5.2.1-*.json` below still describe it.
+index on `ix_account(region)` after three, an unchanged index count, a non-empty audit log. 
+Recorded by the author on the AMD Ryzen 9 5950X (release build, scale 1);
+`check-benchmarks.py` reports "benchmark results agree (scale 1)".
+
+* **Advisor section:** no advice after two evaluations, `CREATE INDEX adv_ix_account_region ON
+  ix_account (region)` after three, 2 indexes before and after, 2 audit entries. One evaluation,
+  including building the design from the engine, took 0.76 ms (smallest of four).
+* **Telemetry allocation unchanged:** skipped +0 bytes, captured +144 bytes, 10 rows read.
+* **Read, planning and engine paths unchanged against 2.5.2.1:** the 45 timings of the ffi report
+  have a median change of -0.4 % (range -7.2 % to +8.3 %), as expected for an engine that only
+  changed its version string.
+* **Write path, again the disk:** writes without index 6 924 rows/s, three indexes 4 044, load
+  48 020, single-row commit 72/s, against 41 439, 14 111, 60 819 and 205/s in the quiet 2.5.2.1 run.
+  The engine is the same code, so this is the disk state of this run (see the 2.5.2.1 notes below),
+  not a regression; compare disk-bound figures only between runs on a quiet disk.
 
 ## Milestone 2.5.2.1 telemetry capture path
 

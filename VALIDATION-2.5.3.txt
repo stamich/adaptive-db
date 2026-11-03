@@ -41,12 +41,17 @@ Advisor section of the workload report (workload E, counts; exact on any machine
 Telemetry allocation (unchanged by 2.5.3; workload C in the same report)
   skipped +0 B, captured +144 B, 10 rows read per capture
 
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.3-*.json)
+  check-benchmarks.py: "benchmark results agree (scale 1)"
+  advisor section: as on the VM; one evaluation 0.76 ms. Telemetry allocation: +0 B / +144 B.
+  ffi report vs 2.5.2.1: median -0.4 % over 45 timings (range -7.2 % to +8.3 %)
+  write path: 6.9k rows/s (0 indexes), 4.0k (3 indexes), 72 commits/s, against 41k, 14k and 205/s
+    in the quiet 2.5.2.1 run: same engine code, different disk state.
+
 Not run
   The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
   The JVM BenchmarkMain on the reference machine (off / skipped / captured timings and the new
   advisor_evaluate_50_shapes), compare-write-path.sh (2.5.1 vs current on one disk).
-  A reference-machine run of 2.5.3: the engine is the same as in 2.5.2.1, so examples/results/
-  2.5.2.1-*.json still describe it.
   Advice quality on real workloads; the advisor under hours of concurrent load.
 
 Commits
