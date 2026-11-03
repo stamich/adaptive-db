@@ -43,8 +43,8 @@ object ScanAmplificationDetector extends Detector:
   def name: String = "scan-amplification"
 
   def detect(ctx: DetectorContext): Vector[Recommendation] =
-    // (entity, field) -> (summed benefit, shapes)
-    val wanted = Detectors.evidenced(ctx).foldLeft(Map.empty[(Long, Long), (Double, Vector[Long])]) { (acc, d) =>
+    // (entity, field) -> (summed benefit, shapes, most rows one execution scanned)
+    val wanted = Detectors.evidenced(ctx).foldLeft(Map.empty[(Long, Long), (Double, Vector[Long], Double)]) { (acc, d) =>
       ctx.shapes(d.shapeId) match
         case Some(shape) if shape.entities.size == 1 && d.scanAmplification >= ctx.config.scanAmplification =>
           val entity = shape.entities.head
@@ -56,14 +56,17 @@ object ScanAmplificationDetector extends Detector:
           yield (entity, filter.field)
           candidate.fold(acc) { key =>
             val benefit = ctx.model.indexBenefit(d, ctx.workload.spanNanos)
-            val (sum, ids) = acc.getOrElse(key, (0.0, Vector.empty[Long]))
-            acc.updated(key, (sum + benefit, ids :+ d.shapeId))
+            val (sum, ids, scanned) = acc.getOrElse(key, (0.0, Vector.empty[Long], 0.0))
+            acc.updated(key, (sum + benefit, ids :+ d.shapeId, math.max(scanned, d.meanRowsRead)))
           }
         case _ => acc
     }
-    wanted.iterator.flatMap { case ((entity, field), (benefit, ids)) =>
+    wanted.iterator.flatMap { case ((entity, field), (benefit, ids, scanned)) =>
       ctx.design.entity(entity).flatMap { design =>
-        val score = ctx.model.scoreIndex(benefit, design.rowCount)
+        // A table that was never analyzed has no row count; a full scan reads every row, so the most
+        // rows one execution scanned is a floor for the size of the table.
+        val rows = math.max(design.rowCount, math.round(scanned))
+        val score = ctx.model.scoreIndex(benefit, rows)
         if ctx.model.worthIt(score) then
           Some(CreateIndex(entity, design.name, Vector(field), Vector(design.fieldName(field)), Some(score), ids.sorted))
         else None

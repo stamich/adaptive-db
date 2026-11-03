@@ -55,6 +55,13 @@ final class DetectorsTest:
     val w = workload((ordersByCustomer, 20L, 20_000_000L, 20_000L, 20L, 1.0))
     assertTrue(ScanAmplificationDetector.detect(ctx(w)).isEmpty)
 
+  @Test def aNeverAnalyzedTableIsSizedByWhatTheScansRead(): Unit =
+    // Row count 0 (never analyzed): without a floor the build would cost one row and anything would pass.
+    val dear = workload((ordersByCustomer, 20L, 20_000_000L, 100_000_000L, 20L, 1.0))
+    assertTrue(ScanAmplificationDetector.detect(ctx(dear, design(rows = 0L))).isEmpty, "5 million rows scanned per run: the build costs more than 1 ms runs can repay")
+    val big = workload((ordersByCustomer, 500L, 30 * second, 500_000_000L, 5_000L, 1.0))
+    assertEquals(1, ScanAmplificationDetector.detect(ctx(big, design(rows = 0L))).size)
+
   @Test def hotQueryReportsOnlyShapesWithALargeShareOfTime(): Unit =
     val w = workload((ordersByCustomer, 100L, 90 * second, 100L, 100L, 1.0), (joinShape, 100L, 5 * second, 100L, 100L, 1.0))
     val found = HotQueryDetector.detect(ctx(w))
