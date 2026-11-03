@@ -1,4 +1,4 @@
-//! Milestone 2.5.3 workload benchmark (workloads A–H of 2.4.0 plus I–O, the commit order, change
+//! Milestone 2.5.4 workload benchmark (workloads A–H of 2.4.0 plus I–O, the commit order, change
 //! log and projection runtime, in [`consistency`]).
 //!
 //! Two modes:
@@ -569,7 +569,7 @@ fn main() -> Result<()> {
     // Changes balances: runs after every other measurement of ix_account.
     let as_of = as_of_read(&db, balance_index, args.scale, settings)?;
     let report = json!({
-        "milestone": "2.5.3",
+        "milestone": "2.5.4",
         "path": "rust_native",
         "host": {
             "os": env::consts::OS,
