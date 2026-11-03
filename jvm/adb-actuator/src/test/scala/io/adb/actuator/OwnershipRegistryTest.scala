@@ -58,3 +58,28 @@ final class OwnershipRegistryTest:
     assertTrue(r.externallyDropped("index:7:2"))
     r.record(mine)
     assertFalse(r.externallyDropped("index:7:2"))
+
+  @Test def indexesWithThePrefixAreAdoptedAfterARestartAndOthersAreNot(): Unit =
+    val r = new OwnershipRegistry
+    val adopted = r.adopt(design(info(1, "adv_orders_customer_id"), info(2, "ix_orders_user", field = 3)), 99L, Budget())
+    assertEquals(Vector("adv_orders_customer_id"), adopted.map(_.name))
+    assertTrue(adopted.head.adopted && adopted.head.createdBy.isEmpty)
+    assertEquals(ActionTarget(7L, "index:7:2"), adopted.head.target, "the target matches the one CreateIndex produces")
+    assertEquals(1000L * 48L, adopted.head.estimatedBytes)
+    assertTrue(r.mayDrop("adv_orders_customer_id"))
+    assertFalse(r.mayDrop("ix_orders_user"))
+
+  @Test def adoptionIsIdempotentAndKeepsAnIndexThatIsAlreadyRecorded(): Unit =
+    val r = new OwnershipRegistry
+    r.record(mine)
+    assertTrue(r.adopt(design(info(1, "adv_orders_customer_id")), 99L, Budget()).isEmpty)
+    assertFalse(r.get("adv_orders_customer_id").get.adopted, "the original record is kept")
+    val again = new OwnershipRegistry
+    again.adopt(design(info(1, "adv_orders_customer_id")), 1L, Budget())
+    assertTrue(again.adopt(design(info(1, "adv_orders_customer_id")), 2L, Budget()).isEmpty)
+    assertEquals(1, again.count)
+
+  @Test def thePrefixMatchIgnoresCase(): Unit =
+    val r = new OwnershipRegistry
+    assertEquals(1, r.adopt(design(info(1, "ADV_Orders_X")), 1L, Budget()).size)
+

@@ -94,6 +94,33 @@ final class OwnershipRegistry:
     missing
   }
 
+  /** Takes over the indexes named `adv_*` that the design holds and the registry does not know
+    * (the advisor created them before a restart; the registry is in memory and starts empty).
+    *
+    * An adopted index has no baseline, so it is never verified, only subject to the idle rule. A
+    * name is only a hint: the entry is marked [[OwnedIndex.adopted]] so `\actions` shows that
+    * the advisor took it over by name. Indexes a person dropped earlier stay blocked.
+    *
+    * @param design    the physical design now
+    * @param nowNanos  the controller's clock
+    * @param budget    gives the size estimate for the byte budget
+    * @return the indexes adopted
+    */
+  def adopt(design: PhysicalDesign, nowNanos: Long, budget: Budget): Vector[OwnedIndex] = synchronized {
+    val found = for
+      entity <- design.entities.valuesIterator.toVector.sortBy(_.entityId)
+      index <- entity.indexes
+      if index.name.regionMatches(true, 0, Prefix, 0, Prefix.length) && !byName.contains(index.name.toLowerCase)
+    yield
+      val fields = index.columns.map(_.field.value.toLong)
+      OwnedIndex(
+        index.name, entity.entityId, entity.name, fields,
+        ActionTarget(entity.entityId, s"index:${entity.entityId}:${fields.mkString(",")}"),
+        None, nowNanos, budget.estimateBytes(entity.rowCount), adopted = true)
+    found.foreach(o => byName = byName.updated(o.name.toLowerCase, o))
+    found
+  }
+
   /** Forgets everything (tests, `reset`). */
   def clear(): Unit = synchronized {
     byName = Map.empty
