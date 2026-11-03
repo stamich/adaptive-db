@@ -53,6 +53,7 @@ final case class Reject(reason: RejectReason, detail: String) extends GateDecisi
   * @param buildsInFlight      index builds running now
   * @param lastActionNanos     time of the latest action on this target, if any
   * @param lastRollbackNanos   time of the latest rollback of this target, if any
+  * @param rollbacks           how many times this target has been rolled back (the [[FlapGuard]] lengthens the wait with each)
   * @param externallyDropped   whether a person dropped an advisor index on this target
   */
 final case class GateContext(
@@ -62,7 +63,8 @@ final case class GateContext(
     buildsInFlight: Int = 0,
     lastActionNanos: Option[Long] = None,
     lastRollbackNanos: Option[Long] = None,
-    externallyDropped: Boolean = false
+    externallyDropped: Boolean = false,
+    rollbacks: Int = 0
 ) derives CanEqual
 
 /** The decision whether a recommendation may become an action.
@@ -104,10 +106,13 @@ object PolicyGate:
   private def scannedRows(shapeIds: Vector[Long], workload: WorkloadSnapshot): Long =
     shapeIds.iterator.map(id => workload.shapes.get(id).fold(0L)(d => math.round(d.meanRowsRead))).maxOption.getOrElse(0L)
 
-  /** Cooldown checks shared by every kind of action. */
+  /** Cooldown checks shared by every kind of action. A target rolled back more than once waits
+    * longer each time ([[FlapGuard]]).
+    */
   private def cooling(policy: Policy, context: GateContext): Option[Reject] =
-    context.lastRollbackNanos.filter(t => context.nowNanos - t < policy.rollbackCooldownNanos).map { t =>
-      Reject(RejectReason.RollbackCooldown, s"rolled back ${seconds(context.nowNanos - t)} s ago, waits ${seconds(policy.rollbackCooldownNanos)} s")
+    val rollbackWait = math.max(policy.rollbackCooldownNanos, FlapGuard.rollbackCooldown(policy, context.rollbacks))
+    context.lastRollbackNanos.filter(t => context.nowNanos - t < rollbackWait).map { t =>
+      Reject(RejectReason.RollbackCooldown, s"rolled back ${seconds(context.nowNanos - t)} s ago (${context.rollbacks} time(s)), waits ${seconds(rollbackWait)} s")
     }.orElse(context.lastActionNanos.filter(t => context.nowNanos - t < policy.cooldownNanos).map { t =>
       Reject(RejectReason.Cooldown, s"last action ${seconds(context.nowNanos - t)} s ago, waits ${seconds(policy.cooldownNanos)} s")
     })
