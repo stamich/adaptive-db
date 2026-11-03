@@ -73,6 +73,10 @@ final class AdaptiveDatabase(
   val telemetry: TelemetryRuntime = new TelemetryRuntime()
   /** The workload advisor (2.5.3): reads telemetry snapshots and recommends; it never acts. */
   val advisor: Advisor = Advisor.forTelemetry(telemetry)
+  /** Serialises schema changes: a user's DDL statement and an action of the actuator (2.5.4) never
+    * run at the same time. Re-entrant, so the actuator may hold it around a statement that takes it again.
+    */
+  private val ddlLock = new java.util.concurrent.locks.ReentrantLock()
   /** The advisor's timer; created on the first `SET advisor = on`. */
   private var advisorTimer: Option[AdvisorScheduler] = None
   /** Whether the plan cache is consulted (`SET plan_cache = on | off`; off if the budget is 0). */
@@ -188,7 +192,9 @@ final class AdaptiveDatabase(
   private def executeOnce(ast: io.adb.sql.Statement, sql: String, session: AdaptiveSession, key: Option[StatementKey]): QueryResult =
     val epoch = currentEpoch()
     val statement = binder.bind(ast)
-    val result = executeBound(statement, sql, epoch, session, key)
+    val result =
+      if AdaptiveDatabase.isDdl(statement) then withDdlLock(executeBound(statement, sql, epoch, session, key))
+      else executeBound(statement, sql, epoch, session, key)
     if AdaptiveDatabase.isDdl(statement) then
       // A schema change is a commit of its own; the head read now covers it (and, under
       // concurrency, possibly a few later commits, which only makes the token safer).
@@ -196,6 +202,14 @@ final class AdaptiveDatabase(
       session.observe(head)
       result.copy(commitSeq = Some(head))
     else result
+
+  /** Runs `body` while holding the schema-change lock, so it cannot overlap a user's DDL or an
+    * actuator action. Used by the DDL path itself and by [[GatewayActuator]].
+    */
+  private[gateway] def withDdlLock[A](body: => A): A =
+    ddlLock.lock()
+    try body
+    finally ddlLock.unlock()
 
   /** The catalog epoch bound statements are planned with. It is read **before** the schema and
     * index metadata a plan is built from: if DDL commits in between, the plan carries the older
