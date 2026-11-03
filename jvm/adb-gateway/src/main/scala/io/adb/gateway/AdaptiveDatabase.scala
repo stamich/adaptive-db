@@ -476,18 +476,25 @@ final class AdaptiveDatabase(
           materializedRows += 1
         next = query.nextBatch()
       // Telemetry (2.5.2): `shape` is null when it is off, so the whole block is skipped. The
-      // sampler sees only values at hand; the profile is fetched and parsed, and an event built,
-      // for captured queries alone.
+      // sampler sees only values at hand; an event is built for captured queries alone. Since
+      // 2.5.2.1 a captured query reads its counters from the engine as four integers
+      // (`readTelemetry`) instead of fetching, decoding and scanning the JSON profile; that
+      // document is fetched only when EXPLAIN ANALYZE or the feedback log needs it.
       val elapsed = if shape != null then System.nanoTime() - t0 else 0L
       val captured = shape != null && telemetry.decide(shape.id, elapsed, failed = false) == SamplingDecision.Capture
-      val profile = if needProfile || captured || feedbackLog.isDefined then query.profileJson() else ""
+      val profile = if needProfile || feedbackLog.isDefined then query.profileJson() else ""
       // Feedback must never fail a query that already ran.
       feedbackLog.foreach { log =>
         try log.record(sql, planMode.toString.toLowerCase, ProfileRenderer.compare(profile, estimates))
         catch case NonFatal(_) => ()
       }
       if captured then
-        val scanned = try ProfileRenderer.rowsScanned(profile) catch case NonFatal(_) => -1L
+        val scanned =
+          try
+            val counters = AdaptiveDatabase.telemetryBuffer.get()
+            query.readTelemetry(counters)
+            counters.rowsRead()
+          catch case NonFatal(_) => -1L
         telemetry.registry.register(shape)
         telemetry.offer(QueryTelemetry(shape.id, schemaEpoch, estimatedRows, materializedRows, scanned, elapsed, cacheHit, failed = false))
       (QueryResult(outputs.map(_._1), rows.result()), profile)
@@ -499,6 +506,14 @@ object AdaptiveDatabase:
   def isDdl(statement: BoundStatement): Boolean = statement match
     case _: BoundCreateTable | _: BoundAlterTable | _: BoundDropTable | _: BoundCreateIndex | _: BoundDropIndex => true
     case _ => false
+
+  /** One reusable native counter holder per thread (Milestone 2.5.2.1).
+    *
+    * A captured query reads its counters into this holder, so the read allocates neither a
+    * profile document nor a native segment. It is per thread because the holder is not thread safe.
+    */
+  private val telemetryBuffer: ThreadLocal[io.adb.ffm.NativeQueryTelemetry] =
+    ThreadLocal.withInitial[io.adb.ffm.NativeQueryTelemetry](() => new io.adb.ffm.NativeQueryTelemetry)
 
   /** Default byte budget of the plan cache: 32 MiB. */
   val DefaultPlanCacheBytes: Long = 32L << 20

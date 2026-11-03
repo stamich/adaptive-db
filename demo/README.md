@@ -1,6 +1,6 @@
-# Adaptive DB 2.5.2 Demo
+# Adaptive DB 2.5.2.1 Demo
 
-This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.5.2**.
+This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.5.2.1**.
 It runs one current binary and labels each phase with the milestone where the demonstrated capability first became part of the project.
 
 ## Run
@@ -36,6 +36,7 @@ The script builds `adb-ffi`, resets only the repository-local `.demo-data` direc
 | 2.5.0 | the global commit order (`commitSeq` of an `INSERT`), the session token and level (`\session`), the EXPLAIN Read context section, a second session with its own level, `SET SESSION CONSISTENCY STRONG / READ_YOUR_WRITES / BOUNDED / EVENTUAL`, the projection listing and the change log |
 | 2.5.1 | the plan cache: EXPLAIN's `Plan cache:` line, the first/second/third run of one SELECT (remember, store, hit), invalidation by `ANALYZE`, `SET plan_cache = off / on` |
 | 2.5.2 | the telemetry hot path: off (no counters move), full (shapes with rows read and returned), sampled (most queries skipped), a tiny queue that drops events without delaying a query |
+| 2.5.2.1 | the same telemetry phase, now reading the rows a captured query read from the engine's own counters (C ABI 9) instead of the JSON profile; no new SQL |
 
 The demo intentionally performs a real close/reopen between the 1.0.1 and 1.5.1 phases, and again after 2.4.0 (the 2.5.0 phase runs in the reopened database, so its session starts at token 0), to make persistence visible rather than merely describing it. Since 2.4.0 the schemas live in the engine's log: the demo directory has no `catalog.properties`.
 

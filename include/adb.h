@@ -1,5 +1,9 @@
 /*
- * Adaptive DB native C ABI, version 8 (Milestone 2.5.0).
+ * Adaptive DB native C ABI, version 9 (Milestone 2.5.2.1).
+ *
+ * ABI 9 changes (vs. 8): adb_query_telemetry writes the counters of a query (rows returned and read,
+ * batches, peak memory) into a caller-owned AdbQueryTelemetry, so telemetry needs no JSON profile.
+ * Purely additive: every function, struct and status code of ABI 8 is unchanged.
  *
  * ABI 8 changes (vs. 7): commit sequence numbers — every commit (data and DDL) takes the next
  * number of one global order, adb_latest_commit_seq reads the newest published one and the
@@ -70,7 +74,7 @@ typedef enum AdbStatus {
     ADB_INTERNAL = 255
 } AdbStatus;
 
-#define ADB_ABI_VERSION 8
+#define ADB_ABI_VERSION 9
 
 uint32_t adb_abi_version(void);
 const uint8_t* adb_engine_version(size_t* out_len);
@@ -111,6 +115,23 @@ AdbStatus adb_query_next_batch(AdbQueryHandle* query, AdbBatchHandle** out_batch
  * ADB_END_OF_STREAM. (ABI 4)
  */
 AdbStatus adb_query_profile_json(AdbQueryHandle* query, AdbBatchHandle** out_json);
+
+/*
+ * Counters of one query execution. 32 bytes, four little-endian-native uint64 fields in this order
+ * (the layout is part of the ABI). (ABI 9)
+ */
+typedef struct AdbQueryTelemetry {
+    uint64_t output_rows;       /* rows returned to the caller */
+    uint64_t rows_read;         /* rows produced by the plan's leaf operators (read from storage) */
+    uint64_t batches;           /* batches returned to the caller */
+    uint64_t peak_memory_bytes; /* highest memory the blocking operators held at once */
+} AdbQueryTelemetry;
+
+/*
+ * Writes the counters of the query to *out without building a profile. Complete once next_batch
+ * returned ADB_END_OF_STREAM. out is zeroed first; NULL arguments give ADB_INVALID_ARGUMENT. (ABI 9)
+ */
+AdbStatus adb_query_telemetry(AdbQueryHandle* query, AdbQueryTelemetry* out);
 AdbStatus adb_query_cancel(AdbQueryHandle* query);
 AdbStatus adb_query_close(AdbQueryHandle* query);
 const uint8_t* adb_batch_data(const AdbBatchHandle* batch);

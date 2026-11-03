@@ -1,18 +1,19 @@
-# Query telemetry (Milestone 2.5.2)
+# Query telemetry (Milestone 2.5.2, capture path reworked in 2.5.2.1)
 
 2.5.2 lets the SQL gateway observe its own workload at almost no cost. It collects **facts**:
 which shapes of query run, how often, how long they take, how many rows they return and read, and
 how far the planner's estimate was from reality. It does not decide anything yet: the workload
-model and the physical-design advisor are 2.5.3. Nothing below the gateway changes (C ABI 8, plan
-wire v4, data format 4).
+model and the physical-design advisor are 2.5.3. In 2.5.2 nothing below the gateway changed; 2.5.2.1
+added one engine function, `adb_query_telemetry` (C ABI 9, additive), so that a captured query does
+not need the JSON profile. Plan wire v4 and data format 4 are unchanged.
 
 ## The contract
 
 | State | Work done by a query thread |
 |---|---|
 | `off` (default) | one volatile read. No clock, no counter, no allocation, and the query profile is not fetched |
-| `sampled`, query skipped | two `nanoTime` calls and the sampling decision (a counter test; about 0.1 µs) |
-| `sampled`, query captured | the profile is fetched and scanned (about 1 µs), a small event is built and offered to a queue |
+| `sampled`, query skipped | two `nanoTime` calls and the sampling decision (a counter test and an allocation-free id lookup; about 0.1 µs); **0 bytes allocated** since 2.5.2.1 (2.5.2 boxed the shape id: 24 bytes) |
+| `sampled`, query captured | one native call fills four integers (rows returned and read, batches, peak memory), a small event is built and offered to a queue (2.5.2: the whole JSON profile was fetched, decoded and scanned) |
 | `full` | every query is captured (tests, demos, short diagnostic runs) |
 
 The queue is bounded and `offer` never blocks: when it is full the event is dropped and counted
@@ -41,9 +42,16 @@ All in module `adb-telemetry` unless noted.
 - **`TelemetryRuntime`**: mode, sampler, queue, registry, counters and the worker. The worker folds
   events into bounded per-shape `ShapeStats` (executions, cache hits, failures, mean and max time,
   rows returned and read, worst q-error).
-- **Rows read.** `ProfileRenderer.rowsScanned` sums `rows_out` of the scan operators in the
-  engine's query profile. It is a single-pass text scan, not a JSON parse (16.5 µs for a small
-  profile against 1.2 µs); `rowsScannedExact` is the parsing reference the tests compare with.
+- **Rows read** *(2.5.2.1)*. The engine counts the rows its plan's leaf operators produced and
+  reports them with the other counters through `adb_query_telemetry` into a reusable native
+  segment (`NativeQueryTelemetry`, one per thread), read with `NativeQuery.readTelemetry`. In 2.5.2
+  the gateway fetched the whole profile document, decoded it into a `String` and scanned it
+  (`ProfileRenderer.rowsScanned`, 1.1–2.7 µs and about 2 KB of allocation); the document is now
+  fetched only for EXPLAIN ANALYZE and the feedback log. `rowsScanned` stays for callers that only
+  have a profile; `rowsScannedExact` is the parsing reference its tests compare with.
+- **Known-shape test** *(2.5.2.1)*. The sampler asks whether a shape is registered for every query.
+  `ConcurrentHashMap[Long, _].containsKey` boxes the key, so the registry keeps the ids also in a
+  `LongIdSet` (open addressing over an `AtomicLongArray`) that answers without touching an object.
 
 ## Controls
 
@@ -74,30 +82,67 @@ on demand.
 
 ## Measured
 
-`BenchmarkMain` with a live engine in the validation VM (2 vCPU, noisy; the telemetry comparison
-is the median of seven alternating rounds):
+All figures come from the validation VM (2 vCPU, shared, noisy). **Allocation is exact; time is
+not**, and 2.5.2.1 is judged on allocation here. Time needs the reference machine.
+
+Allocation per executed cached point lookup (bytes of the calling thread, `BenchmarkMain`, 20 000
+executions per mode):
+
+| | 2.5.2 | 2.5.2.1 |
+|---|---|---|
+| telemetry off | 8 640 B | 8 456 B (the baseline moves with the JIT) |
+| skipped by the sampler | +24 B | **+0 B** |
+| captured | +2 344 B | **+144 B** (the event) |
+
+On the reference machine (Ryzen 9 5950X, workload C, JVM workload report) the same allocation was
+measured: skipped +0 bytes, captured +144 bytes, 10 rows read per capture. The timing comparison of
+the modes is not in that report.
+
+`scripts/check-benchmarks.py` holds the workload report to a budget of 64 B (skipped) and 512 B
+(captured); `examples/jvm-telemetry-smoke` checks the same end to end.
+
+Pieces of the capture path in 2.5.2 (before the rework, nanoseconds per call, noisy):
 
 | Piece | Time |
 |---|---|
-| sampling policy alone | 14–18 ns |
-| `TelemetryRuntime.decide` (counter, registry lookup, counters) | about 109 ns |
-| shape extraction (once per plan) | 2.3–5 µs |
-| cached shape id | 12–17 ns |
-| event construction | 33–38 ns |
-| queue offer (benchmark also reads the queue size) | 0.32–0.41 µs |
-| profile scan for rows read | 1.1–1.2 µs (the JSON parse: 16.5 µs) |
+| sampling policy alone | 27–127 ns |
+| `TelemetryRuntime.decide` | 86–315 ns |
+| shape extraction (once per plan) | 2.0–8.6 µs |
+| cached shape id | 22–52 ns |
+| event construction | 44–116 ns |
+| queue offer (benchmark also drains) | 0.45–0.76 µs |
+| profile fetch (native JSON + copy + `String`) | 0.5–3.6 µs |
+| profile scan for rows read | 1.1–2.7 µs |
 
-Cached point lookup (about 14.5–18 µs per statement): telemetry on but skipped −4 % to +4 %
-(within noise), captured +12 % to +18 % (before the worker change: +162 % to +176 %). In sampled
-mode the default policy captures about 1 query in 128, so the average cost is a fraction of a
-percent. Run `scripts/benchmark-ffi.sh` and the JVM benchmark on your hardware for reference
-numbers; the sampler decision (109 ns) is slightly above the 100 ns target set for it.
+The spread of each line is the noise of the machine, not a range of behaviours: two runs of the
+same build differ by that much. Overhead on the cached point lookup (about 17–20 µs per
+statement), fastest of nine rounds in rotating order: skipped −1.4 % to +2.3 %, captured +5 % to
++11 % (2.5.2: +12 % to +18 % by the median of seven fixed-order rounds). The medians of the same
+runs moved by ten points between runs, so these percentages cannot confirm or refute a gain of a
+few microseconds. Run the JVM benchmark and `scripts/benchmark-ffi.sh` on the reference machine.
 
-Tests: `jvm/adb-telemetry` (shape ids, sampling rules, event q-error, registry bounds, queue
-drop, aggregation, worker), `QueryShapeExtractorTest`, `ProfileRendererTest`, the `telemetry`
-setting in `BinderTest`, and `examples/jvm-telemetry-smoke/run.sh` against the real engine.
+An observation for later: a native call costs 300–500 ns in the benchmark
+(`native_call_schema_epoch` and the others), far more than the work behind it, because
+`NativeLibrary.invokeInt` goes through `MethodHandle.invokeWithArguments`, which boxes its
+arguments. `adb_query_telemetry` uses `invokeExact` and allocates nothing; the other calls were not
+changed in 2.5.2.1.
 
-## Not done (2.5.3 and later)
+Tests: `jvm/adb-telemetry` (shape ids, sampling rules, event q-error, registry bounds, `LongIdSet`,
+queue drop, aggregation, worker), `NativeQueryTelemetryTest` (the layout that must match
+`adb.h`), `QueryShapeExtractorTest`, `ProfileRendererTest`, the `telemetry` setting in
+`BinderTest`, the Rust tests of `adb_query_telemetry` (`crates/adb-ffi/tests/query_telemetry.rs`,
+the cursor counters in `crates/adb-execution/tests/profile.rs`), and
+`examples/jvm-telemetry-smoke/run.sh` against the real engine.
+
+## Not done
+
+**Considered and left out in 2.5.2.1:** a preallocated MPSC ring buffer in place of
+`ArrayBlockingQueue`, thread-local counters and false-sharing padding. The measurements do not
+support them: a captured query now allocates 144 bytes, the queue offer is 0.3–0.5 µs of a 17–20 µs
+statement, and the first slowdown in this subsystem (2.5.2) was a parked worker, not the queue. They
+are worth revisiting if the reference-machine run shows contention under many query threads.
+
+**2.5.3 and later:**
 
 Workload model with time windows and persisted snapshots, detectors (hot query, scan
 amplification, hot join, cardinality error), candidate generation, cost-benefit scoring, the

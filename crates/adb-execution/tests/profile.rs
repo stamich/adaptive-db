@@ -112,6 +112,14 @@ fn profile_reports_every_operator() {
 
     assert!(profile.peak_memory_bytes > 0);
     assert_eq!(cursor.metrics().source_rows, 24);
+
+    // Milestone 2.5.2.1: the constant-size telemetry counters agree with the profile and the
+    // cursor metrics, without building the operator tree for the caller.
+    let telemetry = cursor.telemetry();
+    assert_eq!(telemetry.source_rows, cursor.metrics().source_rows);
+    assert_eq!(telemetry.output_rows, top_k.rows_out);
+    assert_eq!(telemetry.batches, cursor.metrics().batches);
+    assert_eq!(telemetry.peak_memory_bytes, profile.peak_memory_bytes);
 }
 
 /// Operators are numbered in plan pre-order: TopK 0, Aggregate 1, HashJoin 2, Filter 3,

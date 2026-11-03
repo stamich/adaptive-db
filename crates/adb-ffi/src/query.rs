@@ -144,6 +144,66 @@ pub extern "C" fn adb_query_profile_json(
     })
 }
 
+/// Counters of one query execution, written by [`adb_query_telemetry`] (ABI 9).
+///
+/// A plain C struct of four 64-bit integers (32 bytes, 8-byte alignment, no padding). The JVM
+/// binding reads it from a reused native segment, so recording the telemetry of a query needs no
+/// JSON document and no allocation. The field order is part of the ABI; new fields are only ever
+/// added by a new ABI version.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdbQueryTelemetry {
+    /// Rows returned to the caller.
+    pub output_rows: u64,
+    /// Rows read from storage: the rows produced by the plan's leaf operators.
+    pub rows_read: u64,
+    /// Batches returned to the caller.
+    pub batches: u64,
+    /// Highest number of bytes the query's blocking operators held at once.
+    pub peak_memory_bytes: u64,
+}
+
+/// Writes the telemetry counters of `query` to `out`.
+///
+/// This is the cheap alternative to [`adb_query_profile_json`] for callers that only need totals:
+/// it builds no profile tree and serializes nothing. The counters are complete once
+/// `adb_query_next_batch` returned `ADB_END_OF_STREAM`; they can be read at any time before.
+///
+/// # Safety
+///
+/// `query` must be null or a live handle from `adb_execute_plan_json`, and `out` must be null or
+/// point to writable, 8-byte-aligned memory of at least `size_of::<AdbQueryTelemetry>()` bytes. A
+/// null pointer yields `InvalidArgument`; `out` is zeroed first so a failure never leaves stale
+/// values behind.
+#[no_mangle]
+pub extern "C" fn adb_query_telemetry(
+    query: *mut AdbQueryHandle,
+    out: *mut AdbQueryTelemetry,
+) -> AdbStatus {
+    ffi_guard(|| {
+        if out.is_null() {
+            return Err((
+                AdbStatus::InvalidArgument,
+                "null telemetry output pointer".into(),
+            ));
+        }
+        unsafe { *out = AdbQueryTelemetry::default() };
+        if query.is_null() {
+            return Err((AdbStatus::InvalidArgument, "null query handle".into()));
+        }
+        let counters = unsafe { &*query }.cursor.lock().telemetry();
+        unsafe {
+            *out = AdbQueryTelemetry {
+                output_rows: counters.output_rows,
+                rows_read: counters.source_rows,
+                batches: counters.batches,
+                peak_memory_bytes: counters.peak_memory_bytes,
+            };
+        }
+        Ok(AdbStatus::Ok)
+    })
+}
+
 /// Requests cooperative cancellation of a valid live query handle.
 #[no_mangle]
 pub extern "C" fn adb_query_cancel(query: *mut AdbQueryHandle) -> AdbStatus {

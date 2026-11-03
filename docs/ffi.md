@@ -1,4 +1,4 @@
-# C ABI v8 (Milestone 2.5.0)
+# C ABI v9 (Milestone 2.5.2.1)
 
 The JVM uses the JDK 22+ Foreign Function & Memory API; JNI is not required. The authoritative
 declarations are in `include/adb.h`.
@@ -17,6 +17,7 @@ declarations are in `include/adb.h`.
 |---|---|
 | Lifecycle | `adb_open`, `adb_close` (checkpoints, always releases the handle) |
 | Queries | `adb_execute_plan_json`, `adb_execute_plan_json_at` (plan wire v4, see [plan-wire-format.md](plan-wire-format.md)), `adb_query_next_batch` (batch format v2, see [batch-format.md](batch-format.md)), `adb_query_cancel`, `adb_query_close` |
+| Query counters *(new in 9)* | `adb_query_telemetry`: writes an `AdbQueryTelemetry` (rows returned, rows read from storage, batches, peak memory: four `uint64_t`, 32 bytes) into caller-owned memory, without building or serializing a profile. Complete once `adb_query_next_batch` returned `END_OF_STREAM`; `out` is zeroed first and null arguments give `INVALID_ARGUMENT`. The JVM reads it from a reused native segment (`NativeQueryTelemetry`), which is how query telemetry avoids the JSON profile; see [telemetry.md](telemetry.md) |
 | Profiles *(4)* | `adb_query_profile_json`: the query's per-operator runtime profile, each operator with its pre-order `node_id` *(5)* (see [execution.md](execution.md#runtime-profile)) |
 | Commit order *(new in 8)* | `adb_latest_commit_seq` (newest published commit; 0 before the first), `adb_insert_row_commit_json`, `adb_update_fields_commit_json`, `adb_delete_row_commit` (the mutations, also reporting the commit's timestamp and sequence number; the old functions remain and delegate to them); see [change-log.md](change-log.md) |
 | Change-log cursors *(8)* | `adb_change_cursor_open` (after a commit number; `LOG_TRUNCATED` if that history was pruned), `adb_change_cursor_next_batch` (a JSON batch of commits in an `AdbBatchHandle`, `END_OF_STREAM` when caught up; `max_commits` 1..=10000, `max_bytes` 1..=64 MiB), `adb_change_cursor_position`, `adb_change_cursor_close` |
@@ -98,3 +99,10 @@ listing, scanning and dropping indexes, invalid specs and older data formats;
 `crates/adb-ffi/tests/{commit_seq,change_cursor,projection}.rs` cover the 2.5.0 functions, their
 limits and error codes; `examples/jvm-consistency-smoke/run.sh` drives sessions, tokens and
 `SET SESSION CONSISTENCY` through the real library.
+
+## ABI 9 (Milestone 2.5.2.1)
+
+ABI 9 is **additive**: it adds `adb_query_telemetry` and the `AdbQueryTelemetry` struct and changes
+nothing else (no function, struct, status code, plan wire v4 or data format 4). The version number
+still changes because bindings compare it exactly (`NativeLibrary.EXPECTED_ABI`), which is what
+lets a binding refuse a library that lacks the function instead of failing at the first call.

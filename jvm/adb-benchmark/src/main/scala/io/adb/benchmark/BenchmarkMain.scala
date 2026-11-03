@@ -11,10 +11,13 @@ import io.adb.telemetry.*
 import io.adb.physical.{PhysicalPlanner, PlanJsonEncoder}
 import io.adb.sql.SqlParser
 
+import io.adb.ffm.NativeQuery
+
 import java.nio.file.{Files, Path}
+import java.util.Optional
 import scala.annotation.tailrec
 
-/** JVM benchmark (Milestone 2.5.2) separating JVM planning cost from native end-to-end execution.
+/** JVM benchmark (Milestone 2.5.2.1) separating JVM planning cost from native end-to-end execution.
   *
   * Planner stages are timed for a point lookup and for a relational query (join, GROUP BY,
   * ORDER BY + LIMIT); the optional gateway section runs both through Java FFM against the
@@ -60,7 +63,7 @@ object BenchmarkMain:
           WorkloadBenchmark.run(WorkloadBenchmark.Settings(data, lib, cfg.iterations, cfg.scale, cfg.warmupMs, cfg.out))
         case _ => throw new IllegalArgumentException("--workloads needs --data DIR and --native-lib FILE")
       return
-    println(s"Adaptive DB 2.5.2 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
+    println(s"Adaptive DB 2.5.2.1 JVM benchmark iterations=${cfg.iterations} gatewayIterations=${cfg.gatewayIterations}")
     val catalog = new InMemoryCatalog
     createTables(catalog)
     benchmarkPlanner("", PointSql, catalog, cfg.iterations)
@@ -208,17 +211,29 @@ object BenchmarkMain:
       db.telemetry.policy = TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
       // The modes are measured in alternating rounds and the median of each is reported, because
       // a single pass is dominated by drift (JIT, CPU frequency, the other threads of the VM).
-      val rounds = 7
+      val rounds = 9
       val off, skip, capture = Array.fill(rounds)(0L)
+      val modes = Array("off", "sampled", "full")
+      val results = Array(off, skip, capture)
+      // The order rotates every round: a fixed order would charge whatever the machine does
+      // between the first and the last measurement (a frequency step, a noisy neighbour) to the
+      // mode that always runs last.
       for r <- 0 until rounds do
-        off(r) = measure("off"); skip(r) = measure("sampled"); capture(r) = measure("full")
+        for k <- 0 until 3 do
+          val m = (r + k) % 3
+          results(m)(r) = measure(modes(m))
       db.execute("SET telemetry = off")
       def median(a: Array[Long]): Long = a.sorted.apply(a.length / 2)
       val (tOff, tSkip, tCapture) = (median(off), median(skip), median(capture))
       report("gateway_point_telemetry_off", telemetryRuns, tOff)
       report("gateway_point_telemetry_skip", telemetryRuns, tSkip)
       report("gateway_point_telemetry_capture", telemetryRuns, tCapture)
-      println(f"telemetry overhead vs off (median of $rounds rounds): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
+      // The fastest round of each mode is the least disturbed by the machine, so it is the
+      // steadier estimate of the cost the mode itself adds; the median is kept for continuity.
+      val (mOff, mSkip, mCapture) = (off.min, skip.min, capture.min)
+      println(f"telemetry overhead vs off (fastest of $rounds rounds): skip ${100.0 * (mSkip - mOff) / mOff}%.1f%% capture ${100.0 * (mCapture - mOff) / mOff}%.1f%%")
+      println(f"telemetry overhead vs off (median of $rounds rounds, rotating order): skip ${100.0 * (tSkip - tOff) / tOff}%.1f%% capture ${100.0 * (tCapture - tOff) / tOff}%.1f%%; dropped=${db.telemetry.metrics.dropped}")
+      benchmarkCaptureBreakdown(db, native, iterations)
       println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
       // The native calls a cache hit makes before it runs the plan (2.5.2 baseline for the
       // telemetry budgets): the schema epoch, the statistics generation of one table, the
@@ -232,6 +247,76 @@ object BenchmarkMain:
       report("gateway_scan_filter_limit_sql_to_rust", scanIterations, scanNs)
       report("gateway_join_aggregate_top_k_sql_to_rust", relationalIterations, relationalNs)
     finally native.close()
+
+  /** Splits the cost of a captured query into the steps the capture path adds to the engine run
+    * (Milestone 2.5.2.1): the native execution alone, the same plus fetching the profile document,
+    * and the same plus scanning it for the rows read. It also reports the bytes the calling thread
+    * allocates per execution with telemetry off, skipped and captured.
+    *
+    * The steps are timed in alternating rounds and the median of each is reported, as for the
+    * telemetry modes, so a drift of the machine does not look like a difference between steps.
+    */
+  private def benchmarkCaptureBreakdown(db: AdaptiveDatabase, native: NativeDatabase, iterations: Int): Unit =
+    val sql = "SELECT * FROM account WHERE id = 500;"
+    val bound = new Binder(db.catalog).bind(new SqlParser().parse(sql)).asInstanceOf[BoundSelect]
+    val plans = db.plan(bound)
+    val json = PlanJsonEncoder.encode(plans.physical.plan, plans.schemaEpoch)
+    val snapshot = Optional.empty[java.lang.Long]()
+    /** Runs the plan to the end of the stream and returns the number of rows. */
+    def drain(query: NativeQuery): Int =
+      var rows = 0
+      var next = query.nextBatch()
+      while next.isPresent do
+        rows += next.get().rowCount()
+        next = query.nextBatch()
+      rows
+    val runs = iterations * 2
+    def execOnly(): Int =
+      val query = native.execute(json, snapshot)
+      try drain(query) finally query.close()
+    def execProfile(): Int =
+      val query = native.execute(json, snapshot)
+      try drain(query) + query.profileJson().length finally query.close()
+    def execProfileScan(): Long =
+      val query = native.execute(json, snapshot)
+      try
+        drain(query)
+        io.adb.gateway.ProfileRenderer.rowsScanned(query.profileJson())
+      finally query.close()
+    for _ <- 0 until 2000 do { execOnly(); execProfile(); execProfileScan() }
+    val rounds = 9
+    val a, b, c = Array.fill(rounds)(0L)
+    for r <- 0 until rounds do
+      // Rotating order, as for the telemetry modes.
+      for k <- 0 until 3 do
+        (r + k) % 3 match
+          case 0 => a(r) = time(runs) { execOnly() }
+          case 1 => b(r) = time(runs) { execProfile() }
+          case _ => c(r) = time(runs) { execProfileScan() }
+    def median(x: Array[Long]): Long = x.sorted.apply(x.length / 2)
+    val (tExec, tProfile, tScan) = (median(a), median(b), median(c))
+    report("capture_native_execute_only", runs, tExec)
+    report("capture_native_execute_profile", runs, tProfile)
+    report("capture_native_execute_profile_scan", runs, tScan)
+    println(f"capture steps (ns/op): profile fetch ${(tProfile - tExec).toDouble / runs}%.0f, row scan ${(tScan - tProfile).toDouble / runs}%.0f")
+
+    val threads = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+    /** Bytes the calling thread allocates per execution of `sql` in telemetry `mode`. */
+    def allocated(mode: String): Double =
+      db.execute(s"SET telemetry = $mode")
+      for _ <- 0 until 2000 do db.execute(sql)
+      val before = threads.getCurrentThreadAllocatedBytes
+      var i = 0
+      while i < runs do { db.execute(sql); i += 1 }
+      (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
+    val policy = db.telemetry.policy
+    db.telemetry.policy = TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
+    val (off, skip, capture) = (allocated("off"), allocated("sampled"), allocated("full"))
+    db.execute("SET telemetry = off")
+    db.telemetry.policy = policy
+    println(f"gateway_point_alloc_bytes_off      $off%10.0f B/op")
+    println(f"gateway_point_alloc_bytes_skip     $skip%10.0f B/op (+${skip - off}%.0f vs off)")
+    println(f"gateway_point_alloc_bytes_capture  $capture%10.0f B/op (+${capture - off}%.0f vs off)")
 
   /** Runs `body` `iterations` times, keeping its result alive so the JIT cannot elide it.
     *

@@ -11,6 +11,9 @@ The consistency section (2.5.0) must stream every change exactly once, leave a c
 projection with no lag and no timed-out wait, rebuild the same change-log head after the log is
 deleted, and prune consumed segments without overtaking the consumer while a byte limit against
 a slow consumer overtakes it and marks it as needing a rebuild.
+The telemetry section (2.5.2.1) holds the allocation of a skipped and of a captured query to a
+budget (allocation, unlike time, does not depend on the load of the machine) and requires a
+captured query to report the rows read.
 
 Usage: check-benchmarks.py DATABASE_JSON FFI_JSON
 Exits with status 1 and one line per failure if anything disagrees. Timings are never checked:
@@ -51,6 +54,24 @@ def check_consistency(native: dict, check) -> None:
     slow = work["O_retention_prune"]["slow_consumer_byte_limit"]
     check(slow["overtook_frontier"], "O: the byte limit did not overtake the slow consumer")
     check(slow["consumer_state"] == "NeedsRebuild", f"O: the overtaken consumer is {slow['consumer_state']}")
+
+
+def check_telemetry(ffi: dict, check) -> None:
+    """Checks the 2.5.2.1 telemetry section of the JVM report with `check(ok, message)`.
+
+    Only allocation is held to a budget, because it does not depend on the load of the machine:
+    a query the sampler skips allocates no more than one that telemetry ignores, and a captured
+    query adds a few hundred bytes (its event), not the kilobyte of a decoded profile document.
+    The rows read a capture reports must be those the engine counted.
+    """
+    section = ffi.get("telemetry")
+    check(section is not None, "the JVM report has no telemetry section")
+    if section is None:
+        return
+    check(section["alloc_extra_skip"] <= 64, f"telemetry: a skipped query allocates {section['alloc_extra_skip']:.0f} extra bytes (budget 64)")
+    check(section["alloc_extra_capture"] <= 512,
+          f"telemetry: a captured query allocates {section['alloc_extra_capture']:.0f} extra bytes (budget 512)")
+    check(section["captured_rows_read_per_execution"] > 0, "telemetry: a captured query reports no rows read")
 
 
 def main(database_path: str, ffi_path: str) -> int:
@@ -129,6 +150,7 @@ def main(database_path: str, ffi_path: str) -> int:
               f"ALTER of the large table logged {alter['large']['log_bytes']} bytes, the small one {alter['small']['log_bytes']}")
         check(all(v == 2 for v in schema["checks"]["schema_versions"]), "the sc_account tables are not at version 2")
     check_consistency(native, check)
+    check_telemetry(ffi, check)
     estimation = ffi["estimation"]
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")

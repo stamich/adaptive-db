@@ -14,17 +14,22 @@ final class QueryShapeRegistry(maxShapes: Int):
   require(maxShapes > 0, "maxShapes must be positive")
   /** Registered shapes by id. */
   private val shapes = new ConcurrentHashMap[Long, QueryShape]()
+  /** The ids in `shapes`, for [[contains]]: a `ConcurrentHashMap[Long, _]` boxes its key on every
+    * lookup, and the sampler asks about every query it sees.
+    */
+  private val known = new LongIdSet(maxShapes)
 
   /** Registers `shape` if there is room; true if it is (now) registered. */
   def register(shape: QueryShape): Boolean =
-    if shapes.containsKey(shape.id) then true
+    if known.contains(shape.id) then true
     else if shapes.size >= maxShapes then false
     else
       shapes.putIfAbsent(shape.id, shape)
+      known.add(shape.id)
       true
 
-  /** Whether `shapeId` is registered (the sampler's "known shape" test). */
-  def contains(shapeId: Long): Boolean = shapes.containsKey(shapeId)
+  /** Whether `shapeId` is registered (the sampler's "known shape" test). Allocation free. */
+  def contains(shapeId: Long): Boolean = known.contains(shapeId)
 
   /** The shape registered under `shapeId`. */
   def get(shapeId: Long): Option[QueryShape] = Option(shapes.get(shapeId))
@@ -33,4 +38,6 @@ final class QueryShapeRegistry(maxShapes: Int):
   def size: Int = shapes.size
 
   /** Forgets every shape. */
-  def clear(): Unit = shapes.clear()
+  def clear(): Unit =
+    shapes.clear()
+    known.clear()

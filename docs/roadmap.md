@@ -104,6 +104,11 @@
   `SET telemetry`, `\telemetry`; off by default
 - follow-ups: events for DML and DDL, failed events before a shape exists, persisted statistics
 
+## 2.5.2.1 — telemetry capture path (done)
+- engine counters instead of the JSON profile for a captured query (C ABI 9, additive);
+  allocation-free skip; allocation budgets checked in `check-benchmarks.py`
+- left for the reference-machine run: whether a ring buffer or thread-local counters pay off
+
 ## 2.5.3 — workload model and advisor (next)
 - time-windowed aggregation, detectors (hot query, scan amplification, hot join, cardinality
   error), candidates, heuristic cost-benefit scoring with hysteresis, an audit log, `\advice`

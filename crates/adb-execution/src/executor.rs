@@ -13,7 +13,8 @@ use crate::{
         scan::ScanOperator, sort::SortOperator, top_k::TopKOperator, Operator,
     },
     profile::QueryProfile,
-    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, RecordBatch, SlotId,
+    DataSource, ExecutionContext, ExecutionError, PhysicalPlan, QueryMetrics, QueryTelemetry,
+    RecordBatch, SlotId,
 };
 
 /// Plan validation and operator-tree construction.
@@ -87,6 +88,22 @@ impl QueryCursor {
         let mut metrics = *self.metrics.lock();
         metrics.source_rows = self.root.profile().leaf_rows();
         metrics
+    }
+
+    /// Constant-size counters for query telemetry (Milestone 2.5.2.1).
+    ///
+    /// Everything the workload model reads about one execution, without building or serializing the
+    /// per-operator profile: rows returned, rows read from storage (the rows produced by the plan's
+    /// leaves, as in [`QueryCursor::metrics`]), batches returned and the highest memory the query's
+    /// blocking operators held. Complete once the cursor is exhausted.
+    pub fn telemetry(&self) -> QueryTelemetry {
+        let metrics = self.metrics();
+        QueryTelemetry {
+            output_rows: metrics.output_rows,
+            source_rows: metrics.source_rows,
+            batches: metrics.batches,
+            peak_memory_bytes: self.context.memory.peak() as u64,
+        }
     }
 
     /// Per-operator runtime profile so far (complete once the cursor is exhausted).

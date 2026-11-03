@@ -1,0 +1,62 @@
+Adaptive DB Milestone 2.5.2.1 — validation record
+Date: 2026-11-03
+Base: 2.5.2 (master, after the merge of PR #114)
+
+Environment
+  rustc / cargo of the validation VM, openjdk 22, Scala 3.3.8 compiler (official release archive),
+  JUnit API stand-in for the JVM tests
+  OS: Linux 6.18.44, cloud VM (2 vCPU, shared); a development machine, not the reference machine
+
+Rust
+  cargo fmt --check .............................................. OK
+  cargo clippy --all-targets -D warnings -W missing_docs
+               -W clippy::missing_docs_in_private_items ............ OK
+  cargo test --workspace ......................................... 417 passed, 0 failed
+                                      (2.5.2: 413; new: crates/adb-ffi/tests/query_telemetry.rs, 4 tests,
+                                       and the cursor counters in adb-execution/tests/profile.rs)
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps ...... OK
+  include/adb.h: gcc -fsyntax-only ................................ OK
+
+Java / JVM
+  JVM modules compiled with scalac 3.3.8 (-Werror) and javac 22 ... OK
+  JVM tests (Scala + Java) ........................................ 237 passed, 0 failed
+                                      (2.5.2: 229; new: LongIdSetTest 5, NativeQueryTelemetryTest 3)
+  examples/jvm-telemetry-smoke (adds: allocation budget, engine counters of a join = 20 + 200 rows,
+    EXPLAIN ANALYZE with telemetry on) ............................ PASS
+  examples/jvm-plan-cache-smoke ................................... PASS
+  examples/jvm-consistency-smoke .................................. PASS
+  examples/jvm-cdc-smoke .......................................... PASS
+  feature tour (io.adb.cli.DemoMain) against libadb_ffi, ABI 9 ..... OK
+  workload report (WorkloadBenchmark, scale 1, 30 iterations) written by the JVM and checked
+    with scripts/check-benchmarks.py against the 2.5.2 Ryzen database report ...... "results agree"
+    (the 2.5.2 Ryzen ffi report, which has no telemetry section, is correctly refused)
+
+Allocation per executed cached point lookup (exact; BenchmarkMain, 20 000 executions per mode)
+                              2.5.2        2.5.2.1
+  skipped by the sampler      +24 B        +0 B
+  captured                    +2 344 B     +144 B
+  workload C in the workload report: skipped within noise of 0, captured +31 B (budgets 64 / 512)
+
+Timings (validation VM; NOT reference numbers, and not able to resolve a few microseconds)
+  Two runs of the same build moved the median overhead by ten points. Fastest of nine rounds in
+  rotating order: telemetry skipped -1.4 % to +2.3 %, captured +5 % to +11 %.
+  The profile fetch and the row scan, which the change removes from a capture, measured 0.5-3.6 us
+  and 1.1-2.7 us. A native call through invokeWithArguments measured 300-500 ns (not changed).
+
+Reference machine (AMD Ryzen 9 5950X, run by the author; examples/results/2.5.2.1-*.json = second run)
+  check-benchmarks.py: "benchmark results agree (scale 1)" on both runs
+  telemetry allocation: skipped +0 B, captured +144 B, 10 rows read per capture (as on the VM)
+  ffi report vs 2.5.1: median -0.8 % over 31 timings (range -3.7 % to +3.0 %); rust_native point
+    lookup 1000 ns vs 1250 ns
+  write path: the first run (busy disk) and the 2.5.2 run gave about half the 2.5.1 write rates;
+    the second run, quiet disk, same build: writes 41k rows/s (0 indexes), 14k (3 indexes), single-row
+    commit 136/s (1 thread) and 343/s (8 threads). Same code, different disk state: no regression found.
+
+Not run
+  The Gradle steps (Maven Central is not reachable from the validation environment; CI runs them).
+  The JVM BenchmarkMain on the reference machine (off / skipped / captured timings), so there is no
+  reference timing of the capture saving; compare-write-path.sh (2.5.1 vs current on one disk).
+  Multi-threaded measurements beyond 2 CPUs.
+
+Commits
+  One commit per task, each authored by Michal Stawarski, without co-authors.

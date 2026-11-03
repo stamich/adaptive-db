@@ -1,4 +1,5 @@
-// End-to-end check of the Milestone 2.5.2 telemetry hot path through the real native library:
+// End-to-end check of the Milestone 2.5.2 telemetry hot path (and, since 2.5.2.1, its allocation
+// budget and the engine counters of C ABI 9) through the real native library:
 // off by default and silent, skipped queries leave no event, captured queries are aggregated
 // per literal-free shape, a full queue drops events without failing queries, failures are
 // captured, and telemetry never changes a result.
@@ -46,8 +47,10 @@ object TelemetrySmoke:
       check(stats.size == 2, "five point queries with different literals are one shape, the join another")
       val pointStats = stats.find(_.executions >= 5).get
       check(pointStats.totalRowsRead >= pointStats.totalActualRows && pointStats.maxNanos > 0, "events carry rows returned, rows read and time")
-      check(stats.forall(_.totalRowsRead > 0), "every captured shape reports the rows its scans read (scan operator names match the engine's profile)")
+      check(stats.forall(_.totalRowsRead > 0), "every captured shape reports the rows its scans read (the engine counters of C ABI 9)")
       check(stats.exists(s => s.totalRowsRead > s.totalActualRows * 2), "scan amplification is visible: a join reads more rows than it returns")
+      val joinStats = stats.find(_.executions == 2).get
+      check(joinStats.totalRowsRead == 2 * 220L, "rows read come from the engine counters: both scans of the join, 20 + 200 rows, per execution")
       check(stats.exists(_.cacheHits >= 1), "a repeated statement is recorded as a plan-cache hit")
       check(t.registry.size == 2, "each shape is registered once")
 
@@ -68,7 +71,28 @@ object TelemetrySmoke:
       val ev = io.adb.telemetry.QueryTelemetry(1, 1, 1, 1, 1, 1, false, false)
       check(tiny.offer(ev) && tiny.offer(ev) && !tiny.offer(ev) && tiny.metrics.dropped == 1, "a full queue drops the event and returns at once")
 
+      // Milestone 2.5.2.1: allocation per query. A skipped query allocates what an unobserved one
+      // does, and a captured one adds its event, not a decoded JSON profile (about 2 KB before).
+      val threads = java.lang.management.ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
+      val originalPolicy = t.policy
+      t.policy = io.adb.telemetry.TelemetrySamplingPolicy(fastSampleEvery = 1 << 20, slowQueryNanos = Long.MaxValue)
+      def bytesPerQuery(mode: String): Double =
+        db.execute(s"SET telemetry = $mode")
+        for _ <- 0 until 5000 do db.execute(point(4))
+        val start = threads.getCurrentThreadAllocatedBytes
+        for _ <- 0 until 2000 do db.execute(point(4))
+        (threads.getCurrentThreadAllocatedBytes - start).toDouble / 2000
+      // The JIT removes allocations as it compiles, so a later measurement is lower for reasons that
+      // have nothing to do with telemetry. Every mode is therefore measured in each of six rounds and
+      // compared by its smallest figure, when all of them are equally warm.
+      val figures = (0 until 6).map(_ => (bytesPerQuery("off"), bytesPerQuery("sampled"), bytesPerQuery("full")))
+      val (offBytes, skipBytes, fullBytes) = (figures.map(_._1).min, figures.map(_._2).min, figures.map(_._3).min)
+      check(skipBytes - offBytes < 64, f"a skipped query allocates no more than an unobserved one (${skipBytes - offBytes}%.0f extra bytes)")
+      check(fullBytes - offBytes < 512, f"a captured query allocates its event only (${fullBytes - offBytes}%.0f extra bytes, no JSON profile)")
+      t.policy = originalPolicy
       db.execute("SET telemetry = full")
+      val analyzed = db.execute("EXPLAIN ANALYZE " + point(5))
+      check(analyzed.rows.nonEmpty && analyzed.rows.flatten.mkString(" ").contains("rows"), "EXPLAIN ANALYZE still reports the profile while telemetry is on")
       check(scala.util.Try(db.execute("SELECT id FROM orders WHERE nope = 1")).isFailure, "a statement that fails to bind still fails")
       check(db.showTelemetry().rows.exists(_.head == "mode") && db.showTelemetryShapes().rows.nonEmpty, "\\telemetry and \\telemetry shapes list the counters and the shapes")
       println("telemetry smoke passed")

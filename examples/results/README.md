@@ -4,6 +4,41 @@ Store machine-specific benchmark JSON outputs here. Do not commit fabricated bas
 numbers. For useful comparisons record CPU, memory, storage device/filesystem, OS/kernel,
 Rust version and whether the filesystem/cache state was warm or cold.
 
+## Milestone 2.5.2.1 telemetry capture path
+
+```bash
+./scripts/benchmark-db.sh && ./scripts/benchmark-ffi.sh                       # -> 2.5.2.1-database.json, 2.5.2.1-ffi.json
+python3 scripts/check-benchmarks.py examples/results/2.5.2.1-database.json examples/results/2.5.2.1-ffi.json
+```
+
+Recorded by the author on the same AMD Ryzen 9 5950X (release build, scale 1) after closing other
+applications; `scripts/check-benchmarks.py` reports "benchmark results agree (scale 1)". The kept
+files are the **second** run, made on a quiet disk. The first run (busy disk, same build) is not
+kept; it is why the write-path numbers below must be read with the disk in mind.
+
+* **Telemetry allocation (new `telemetry` section of the ffi report):** a skipped query allocates
+  +0 bytes more than an unobserved one and a captured query +144 bytes (the event); a capture
+  reports 10 rows read for workload C. Allocation does not depend on the machine, so these equal
+  the figures measured on the validation VM. 2.5.2 measured +24 and about +2 340 bytes.
+* **Read, planning and engine paths are unchanged against 2.5.1:** the 31 timings of the ffi report
+  have a median change of -0.8 % (range -3.7 % to +3.0 %), the read workloads of the database report
+  +0.1 %, and `rust_native` point lookup is 1 000 ns against 1 250 ns. C through the full SQL path:
+  0.0270 -> 0.0260 ms.
+* **Write path, same code, different disk state.** Between the first and the second run of this
+  build, with nothing changed but the machine, writes without index went from 6 395 to 41 439
+  rows/s, with three indexes from 3 762 to 14 111, schema-validated writes from 6 358 to 44 198,
+  load from 50 419 to 60 819 rows/s and the single-row commit of the Rust micro-benchmark from 74
+  to 136 (one thread) and 177 to 343 (eight threads) commits/s. The 2.5.2 and the first 2.5.2.1
+  reports (about half the 2.5.1 write rates) therefore did not measure a regression: no code on
+  those paths changed between 2.5.1 and 2.5.2.1 apart from version strings.
+* **Commit workload I is not a baseline.** The 659 single-row commits/s of the 2.5.1 report is the
+  outlier: that run's own single-row commit test gave 73/s, 205/s in this run (136/s in the
+  micro-benchmark), and workload I and the micro-benchmark do the same thing (one fsync per commit).
+  Compare disk-bound figures only from runs on the same disk in the same state; the commit rate is
+  set by the device's flush latency.
+* The `telemetry` timing comparison (off, skipped, captured) belongs to the JVM `BenchmarkMain`,
+  which is not part of these three reports and has not been run on this machine.
+
 ## Milestone 2.5.1 plan cache
 
 ```bash
