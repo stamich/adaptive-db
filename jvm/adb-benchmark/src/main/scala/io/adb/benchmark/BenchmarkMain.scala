@@ -166,6 +166,14 @@ object BenchmarkMain:
       report("gateway_join_aggregate_cache_off", rel, relOff)
       report("gateway_join_aggregate_cache_on", rel, relOn)
       println(f"plan cache: hit ratio ${db.planCacheStats.hitRatio}%.3f entries=${db.planCacheStats.entries} bytes=${db.planCacheStats.bytes}")
+      // The native calls a cache hit makes before it runs the plan (2.5.2 baseline for the
+      // telemetry budgets): the schema epoch, the statistics generation of one table, the
+      // commit head for the session-token check.
+      val entityId = db.catalog.entity("account").get.id.value
+      val nativeIters = iterations * 10
+      report("native_call_schema_epoch", nativeIters, time(nativeIters) { native.currentSchemaEpoch() })
+      report("native_call_statistics_generation", nativeIters, time(nativeIters) { native.statisticsGeneration(entityId) })
+      report("native_call_latest_commit_seq", nativeIters, time(nativeIters) { native.latestCommitSeq() })
       report("gateway_point_lookup_sql_to_rust", iterations, pointNs)
       report("gateway_scan_filter_limit_sql_to_rust", scanIterations, scanNs)
       report("gateway_join_aggregate_top_k_sql_to_rust", relationalIterations, relationalNs)
