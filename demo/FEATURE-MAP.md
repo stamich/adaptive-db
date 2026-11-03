@@ -174,3 +174,11 @@ and `SET SESSION CONSISTENCY` chooses how fresh a read must be. The phase shows 
 with an `INSERT`, the read through the index, EXPLAIN's Read context, an independent second
 session, the four levels, the projection listing and the change-log listing. See
 [../docs/consistency.md](../docs/consistency.md) and [../docs/change-log.md](../docs/change-log.md).
+
+## 2.5.1 — plan cache
+
+The last phase runs with `sql/2.5.1-plan-cache.sql`. The gateway remembers a repeated SELECT on
+its first run, stores the physical plan on the second and answers the third from the cache; an
+`ANALYZE` of the table moves its statistics generation, so the next run finds the entry stale and
+plans again. EXPLAIN reports whether a statement would be cached. See
+[../docs/plan-cache.md](../docs/plan-cache.md).

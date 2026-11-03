@@ -32,7 +32,7 @@ object DemoMain:
     requireEmptyDemoDirectory(dataDir)
     Files.createDirectories(dataDir)
 
-    banner("Adaptive DB 2.4.0 - chronological feature tour")
+    banner("Adaptive DB 2.5.1 - chronological feature tour")
     println(s"data directory : $dataDir")
     println(s"native library : $nativeLib")
 
@@ -93,6 +93,7 @@ object DemoMain:
       execute(db, "SELECT id, amount, currency FROM ledger WHERE id <= 3;")
       println("Feature shown: the engine catalog is durable with the data; the JVM keeps no catalog file.")
       consistencyPhase(db)
+      planCachePhase(db)
     }
 
     banner("Demo completed successfully")
@@ -281,6 +282,23 @@ object DemoMain:
     val head = db.currentSession.readContext().headCommitSeq
     show(db.showChanges(head - 2, 10))
     println("Feature shown: the change log lists data and schema commits in one order; consumers resume from any commit.")
+
+  /** Milestone 2.5.1: the plan cache of the SQL gateway. */
+  private def planCachePhase(db: AdaptiveDatabase): Unit =
+    phase("2.5.1", "plan cache")
+    val sql = "SELECT id, amount FROM ledger WHERE account = 1 AND amount = 4242;"
+    execute(db, "EXPLAIN " + sql)
+    println("Feature shown: EXPLAIN says whether the statement would be cached; EXPLAIN itself never uses the cache.")
+    for _ <- 1 to 3 do db.execute(sql)
+    show(db.showPlanCache())
+    println("Feature shown: a statement is remembered on its first sighting, stored on the second and answered from the cache afterwards (the 2.5.0 phase already ran this one once).")
+    execute(db, "ANALYZE ledger;")
+    db.execute(sql)
+    show(db.showPlanCache())
+    println("Feature shown: ANALYZE changed the statistics, so the cached plan was dropped (stale) and made again.")
+    execute(db, "SET plan_cache = off;")
+    execute(db, "SET plan_cache = on;")
+    println("Feature shown: the cache can be switched off and on per database handle in SQL.")
 
   /** Renders a table result without echoing a statement. */
   private def show(result: QueryResult): Unit =
