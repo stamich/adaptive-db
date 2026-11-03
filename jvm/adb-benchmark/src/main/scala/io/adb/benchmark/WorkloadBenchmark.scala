@@ -211,7 +211,11 @@ object WorkloadBenchmark:
       while i < runs do { db.execute(WorkloadC); i += 1 }
       (threads.getCurrentThreadAllocatedBytes - before).toDouble / runs
     try
-      val (off, skip, capture) = (allocated("off"), allocated("sampled"), allocated("full"))
+      // The JIT removes allocations as it compiles, so a later measurement is lower for reasons
+      // unrelated to telemetry: each mode is measured in six rounds and compared by its smallest
+      // figure, when all of them are equally warm.
+      val figures = (0 until 6).map(_ => (allocated("off"), allocated("sampled"), allocated("full")))
+      val (off, skip, capture) = (figures.map(_._1).min, figures.map(_._2).min, figures.map(_._3).min)
       db.telemetry.drainNow()
       val perExecution = db.telemetry.allStats().map(s => s.totalRowsRead.toDouble / math.max(1L, s.executions))
       obj(
