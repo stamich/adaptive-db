@@ -56,10 +56,7 @@ def spread_percent(values) -> float:
 
 def case_value(case):
     """The headline time of a case in milliseconds, or None for an untimed case."""
-    timing = case.get("timing") if isinstance(case, dict) else None
-    if isinstance(timing, dict) and isinstance(timing.get("median_of_medians_ms"), (int, float)):
-        return float(timing["median_of_medians_ms"])
-    return None
+    return bench_lib.headline(case)[0]
 
 
 def deterministic_of(case) -> dict:
@@ -81,12 +78,14 @@ def condense(documents, limit=DEFAULT_LIMIT_PERCENT):
         raise ValueError("no runs to condense")
     result = json.loads(json.dumps(documents[0]))
     problems, statuses = [], []
-    names = list(result.get("cases", {}))
+    result_cases = bench_lib.cases(result)
+    names = list(result_cases)
     for doc in documents[1:]:
-        if list(doc.get("cases", {})) != names:
+        if list(bench_lib.cases(doc)) != names:
             problems.append("the runs disagree on the set of cases")
+    all_cases = [bench_lib.cases(d) for d in documents]
     for name in names:
-        runs = [d.get("cases", {}).get(name) for d in documents]
+        runs = [c.get(name) for c in all_cases]
         reference = deterministic_of(runs[0])
         for index, run in enumerate(runs[1:], start=2):
             other = deterministic_of(run)
@@ -98,7 +97,7 @@ def condense(documents, limit=DEFAULT_LIMIT_PERCENT):
         spread = spread_percent(values)
         stability = "stable" if spread <= limit else "unstable"
         statuses.append(bench_lib.PASS if stability == "stable" else bench_lib.UNSTABLE)
-        result["cases"][name]["repeat"] = {
+        result_cases[name]["repeat"] = {
             "runs": len(values), "values_ms": values, "median_ms": median(values),
             "spread_percent": spread, "stability": stability,
         }

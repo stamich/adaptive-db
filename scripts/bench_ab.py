@@ -79,13 +79,14 @@ def compare(a_docs, b_docs, c_docs, limit=DEFAULT_LIMIT_PERCENT):
     c, problems_c, _ = bench_repeat.condense(c_docs, 1e9)
     problems = [f"A: {p}" for p in problems_a] + [f"B: {p}" for p in problems_b] + [f"A2: {p}" for p in problems_c]
     cases, statuses = {}, []
-    for name in a.get("cases", {}):
-        ra = a["cases"][name].get("repeat")
-        rb = b.get("cases", {}).get(name, {}).get("repeat")
-        rc = c.get("cases", {}).get(name, {}).get("repeat")
-        reference = bench_repeat.deterministic_of(a["cases"][name])
-        if name in b.get("cases", {}) and bench_repeat.deterministic_of(b["cases"][name]) != reference:
-            problems.append(f"case `{name}`: B {bench_repeat.deterministic_of(b['cases'][name])} differs from A {reference}")
+    ca, cb, cc = bench_lib.cases(a), bench_lib.cases(b), bench_lib.cases(c)
+    for name in ca:
+        ra = ca[name].get("repeat")
+        rb = cb.get(name, {}).get("repeat")
+        rc = cc.get(name, {}).get("repeat")
+        reference = bench_repeat.deterministic_of(ca[name])
+        if name in cb and bench_repeat.deterministic_of(cb[name]) != reference:
+            problems.append(f"case `{name}`: B {bench_repeat.deterministic_of(cb[name])} differs from A {reference}")
         if not (ra and rb and rc) or ra["median_ms"] == 0:
             continue
         ratio = rb["median_ms"] / ra["median_ms"]

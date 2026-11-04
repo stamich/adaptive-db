@@ -46,6 +46,18 @@ class RepeatTest(unittest.TestCase):
         _, problems, status = bench_repeat.condense([run(10.0), run(10.0, value=101)])
         self.assertEqual(status, bench_lib.FAIL)
 
+    def test_cases_outside_the_cases_object_are_found(self):
+        """rust-local keeps its 2.5.4 layout: top-level and nested cases with p50_ms."""
+        def layout(ms):
+            return {"entity_scan": {"p50_ms": ms, "checksum": 3}, "relational": {"hash_join": {"p50_ms": ms * 2}},
+                    "environment": {"p50_ms": 1.0}, "cases": {}}
+        self.assertEqual(sorted(bench_lib.cases(layout(1.0))), ["entity_scan", "relational.hash_join"])
+        doc, _, status = bench_repeat.condense([layout(10.0), layout(10.1)])
+        self.assertEqual(status, bench_lib.PASS)
+        self.assertAlmostEqual(doc["relational"]["hash_join"]["repeat"]["median_ms"], 20.1)
+        self.assertIn("repeat", doc["entity_scan"])
+        self.assertNotIn("repeat", doc["environment"])
+
     def test_a_changed_case_set_fails(self):
         other = run(10.0)
         del other["cases"]["rows"]
