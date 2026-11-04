@@ -31,7 +31,7 @@ object BenchmarkMain:
   )
 
   /** The families that need no prepared dataset. */
-  private val Families = Vector("sql-path", "telemetry")
+  private val Families = Vector("sql-path", "telemetry", "actuator")
 
   /** Runs the chosen family. */
   def main(args: Array[String]): Unit =
@@ -53,6 +53,7 @@ object BenchmarkMain:
     val text = family match
       case "sql-path" => SqlPathFamily.run(settings)
       case "telemetry" => TelemetryFamily.run(settings)
+      case "actuator" => ActuatorFamily.run(settings)
       case _ => SqlPathFamily.run(settings)
     println(s"family $family: ${text.length} bytes${out.fold("")(p => s" -> $p")}")
 
