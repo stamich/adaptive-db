@@ -17,5 +17,6 @@ include(
     "adb-native",
     "adb-gateway",
     "adb-cli",
+    "adb-bench",
     "adb-benchmark",
 )

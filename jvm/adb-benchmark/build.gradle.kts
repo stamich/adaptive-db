@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":adb-physical-plan"))
     implementation(project(":adb-native"))
     implementation(project(":adb-gateway"))
+    implementation(project(":adb-bench"))
 }
 
 application {
