@@ -7,6 +7,7 @@
 //!
 //! | module | responsibility |
 //! |---|---|
+//! | [`context`] | [`Context`]: where the data directory lives, the environment, the probe |
 //! | [`plan`] | [`MeasurementPlan`]: warm-up, calibration, batches and samples per batch |
 //! | [`runner`] | [`measure`]: the measurement loop; returns raw per-invocation samples |
 //! | [`stats`] | [`SampleStats`]: median of medians, batch MAD, outliers, stability verdict |
@@ -18,6 +19,7 @@
 //! The crate has no dependency on the engine; it only times closures.
 #![forbid(unsafe_code)]
 
+pub mod context;
 pub mod environment;
 pub mod plan;
 pub mod probe;
@@ -26,10 +28,11 @@ pub mod runner;
 pub mod stats;
 pub mod storage;
 
+pub use context::Context;
 pub use environment::{Environment, GovernorClass, RuntimeSnapshot};
 pub use plan::MeasurementPlan;
 pub use probe::FsyncProbe;
 pub use report::Report;
-pub use runner::{measure, Measured};
+pub use runner::{measure, measure_with_setup, Measured};
 pub use stats::{SampleStats, Stability};
 pub use storage::{MountEntry, StorageInfo};

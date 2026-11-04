@@ -9,6 +9,4 @@ description = "Benchmark harness of Adaptive DB: measurement plans, robust stati
 # crate can time any closure.
 [dependencies]
 serde_json.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true

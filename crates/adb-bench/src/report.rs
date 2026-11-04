@@ -179,15 +179,23 @@ impl Report {
         self.doc.insert(key.into(), value);
     }
 
-    /// Adds a case: the legacy timing keys, the `timing` object, and `extra` keys (rates,
-    /// checksums, counts) written by the family. `extra` wins over the legacy keys.
-    pub fn add_case(&mut self, name: &str, stats: &SampleStats, extra: Map<String, Value>) {
+    /// Builds the JSON of a case — legacy keys, `timing`, then `extra` — without adding it to
+    /// `cases`. Families that keep the layout of their earlier reports use this and place the
+    /// value themselves with [`Report::set`].
+    pub fn case(&self, stats: &SampleStats, extra: Map<String, Value>) -> Value {
         let mut case = legacy_timing(stats);
         case.insert("timing".into(), timing_json(stats, self.limit_percent));
         for (key, value) in extra {
             case.insert(key, value);
         }
-        self.cases.insert(name.into(), Value::Object(case));
+        Value::Object(case)
+    }
+
+    /// Adds a case: the legacy timing keys, the `timing` object, and `extra` keys (rates,
+    /// checksums, counts) written by the family. `extra` wins over the legacy keys.
+    pub fn add_case(&mut self, name: &str, stats: &SampleStats, extra: Map<String, Value>) {
+        let case = self.case(stats, extra);
+        self.cases.insert(name.into(), case);
     }
 
     /// Adds a case that has no timing samples (a count, a checksum, a skipped case). `reason`
