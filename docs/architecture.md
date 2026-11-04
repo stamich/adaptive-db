@@ -1,4 +1,4 @@
-# Architecture — Milestone 2.5.4
+# Architecture — Milestone 2.5.4.1
 
 Milestone 2.1.3 added relational execution (joins, aggregation, sorting) on top of the 2.0.3
 storage architecture below. 2.2.3 added optimizer statistics owned by the engine and a

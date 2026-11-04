@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.4. Hardened patch releases preserve the functional scope of
+Milestone 2.5.4.1. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,29 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.4.1 — a trustworthy benchmark harness (in progress)
+
+No engine change: the C ABI stays 9, plan wire v4 and data format 4 are unchanged. The Cargo crates
+stay `2.5.4`; the engine string, JVM build, scripts and workflows report `2.5.4.1`. Reason: the same
+2.5.4 code wrote 5.1k or 42.0k rows/s depending on the CPU governor, and the reports could not say
+which. Plan and status: `docs/milestone-2.5.4.1.md`, rules: `docs/BENCHMARKS.md`.
+
+### Added
+- Crate `adb-bench`: `MeasurementPlan` (release, quick and durable plans) and `measure`; `SampleStats`
+  (median of medians, batch MAD %, outliers reported and never removed, `Stability`); `Environment` and
+  `RuntimeSnapshot` (governor, frequency, temperature, load, toolchain); `StorageInfo` (filesystem,
+  mount, device, free space, RAM disks flagged); `FsyncProbe` (4 KiB write + `fdatasync` control).
+- Tag `v2.5.4` on the merge of PR #117, the baseline for A/B runs.
+
+### Changed
+- `build-milestone-2.5.4.sh` is now `build-milestone-2.5.4.1.sh`; benchmark scripts write
+  `examples/results/2.5.4.1-*`.
+
+### Still to come in this milestone
+Report schema 3 and its validator, the harness in the Rust and Scala benchmarks, the gates
+(governor, storage, spread), `--repeat`, interleaved A/B, CI quick plan, calibration of the limits on
+the reference machine.
 
 ## 2.5.4 — AUTO_SAFE actuator
 

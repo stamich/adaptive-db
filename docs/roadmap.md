@@ -128,6 +128,12 @@
   registry and log, composite and covering candidates, tuning of the policy on the reference machine,
   actions for join projections and partitions when their actuators exist
 
+## 2.5.4.1 — a trustworthy benchmark harness (in progress)
+- crate `adb-bench`: measurement plan, median of medians, MAD stability, environment and storage
+  records, fsync probe; then report schema 3, harness in Rust and JVM benchmarks, gates, `--repeat`,
+  interleaved A/B against a previous release, CI quick plan
+- precedes 2.5.5; no engine change. Plan: [milestone-2.5.4.1.md](milestone-2.5.4.1.md)
+
 ## 2.6 — asynchronous projections
 - asynchronous index maintenance fed from the change log, with the freshness machinery of 2.5.0
 - `DELTA_REPAIR`, delta caches and coalesced row deltas for projections that lag
