@@ -17,3 +17,7 @@ adb-projection-runtime = { path = "../../crates/adb-projection-runtime" }
 adb-bench = { path = "../../crates/adb-bench" }
 tempfile.workspace = true
 serde_json.workspace = true
+
+[[bin]]
+name = "memory"
+path = "src/bin/memory/main.rs"

@@ -7,6 +7,7 @@
 //!
 //! | module | responsibility |
 //! |---|---|
+//! | [`alloc`] | [`CountingAllocator`]: bytes and calls allocated by a closure (the `memory` family) |
 //! | [`context`] | [`Context`]: where the data directory lives, the environment, the probe |
 //! | [`plan`] | [`MeasurementPlan`]: warm-up, calibration, batches and samples per batch |
 //! | [`runner`] | [`measure`]: the measurement loop; returns raw per-invocation samples |
@@ -17,8 +18,11 @@
 //! | [`report`] | the schema-3 JSON documents, which keep every key earlier reports had |
 //!
 //! The crate has no dependency on the engine; it only times closures.
-#![forbid(unsafe_code)]
+// `deny`, not `forbid`: the counting allocator in `alloc` is the one module that needs `unsafe`
+// (`GlobalAlloc` is an unsafe trait) and allows it explicitly.
+#![deny(unsafe_code)]
 
+pub mod alloc;
 pub mod context;
 pub mod environment;
 pub mod plan;
@@ -28,6 +32,7 @@ pub mod runner;
 pub mod stats;
 pub mod storage;
 
+pub use alloc::{AllocUsage, CountingAllocator};
 pub use context::Context;
 pub use environment::{Environment, GovernorClass, RuntimeSnapshot};
 pub use plan::MeasurementPlan;
