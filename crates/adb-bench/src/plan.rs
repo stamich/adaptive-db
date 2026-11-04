@@ -4,7 +4,7 @@
 //! so that a case that takes 20 ns is still measured against a clock that ticks in tens of
 //! nanoseconds. Samples are collected in *batches*; the median of a batch is robust against a
 //! disturbance that lasts a few samples, and the spread of the batch medians is what the stability
-//! verdict of the `stats` module judges.
+//! verdict of [`crate::stats`] judges.
 
 use std::time::Duration;
 

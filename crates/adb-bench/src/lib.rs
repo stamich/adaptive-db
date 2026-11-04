@@ -9,7 +9,7 @@
 //! |---|---|
 //! | [`plan`] | [`MeasurementPlan`]: warm-up, calibration, batches and samples per batch |
 //! | [`runner`] | [`measure`]: the measurement loop; returns raw per-invocation samples |
-//! | `stats` | `SampleStats`: median of medians, batch MAD, outliers, stability verdict |
+//! | [`stats`] | [`SampleStats`]: median of medians, batch MAD, outliers, stability verdict |
 //! | `environment` | `Environment`: governor, frequency, temperature, load, toolchain |
 //! | `storage` | `StorageInfo`: filesystem, mount and device of the data directory |
 //! | `probe` | `FsyncProbe`: a fixed `write` + `fdatasync` used as a control |
@@ -20,6 +20,8 @@
 
 pub mod plan;
 pub mod runner;
+pub mod stats;
 
 pub use plan::MeasurementPlan;
 pub use runner::{measure, Measured};
+pub use stats::{SampleStats, Stability};
