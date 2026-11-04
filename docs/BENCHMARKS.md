@@ -116,7 +116,8 @@ scripts/benchmark.sh rust-local --ab v2.5.4    # interleaved A/B against a git r
 cargo test -p adb-bench
 cargo clippy -p adb-bench --all-targets -- -D warnings -W missing_docs -W clippy::missing_docs_in_private_items
 RUSTDOCFLAGS="-D warnings" cargo doc -p adb-bench --no-deps
-python3 -m unittest discover -s scripts/tests         # gates, repeat, A/B, compare, launcher
+python3 -m unittest discover -s scripts/tests         # gates, repeat, A/B, compare, launcher, Scaladoc check
+python3 scripts/check-scala-docs.py $(find jvm/adb-bench*/src/main -name '*.scala')
 (cd jvm && ./gradlew :adb-bench:test)                 # the Scala harness
 ```
 

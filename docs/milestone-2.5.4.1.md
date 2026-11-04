@@ -1,6 +1,6 @@
 # Milestone 2.5.4.1 — a trustworthy benchmark harness
 
-**Status: in progress.** 28 of 31 tasks are done; 24 and 31 need a run on the reference machine, 30 (API-doc audit) is next. Pull request: #118 (draft).
+**Status: in progress.** 29 of 31 tasks are done; 24 and 31 need a run on the reference machine. Pull request: #118 (draft).
 
 ## Why
 
@@ -43,7 +43,7 @@ design follows the harness of ACE (`ace-bench`), adapted to a database that is b
 | 27 | Tests (script tests, launcher, committed reports, harness tests) | done |
 | 28 | CI: quick plan and validator on every PR; timings never gate | done |
 | 29 | Documentation | done |
-| 30 | Rustdoc / Scaladoc / Javadoc audit | open |
+| 30 | Rustdoc / Scaladoc / Javadoc audit (`clippy::missing_docs_in_private_items`, `-D warnings` rustdoc, `check-scala-docs.py`) | done |
 | 31 | Release: reference run, baseline, validation files (needs the user's Ryzen run) | open |
 
 ## Not claimed
