@@ -76,25 +76,39 @@ fn open_small(path: &Path) -> Result<Database> {
     )?)
 }
 
-/// Commit throughput and log growth for one row and for [`BATCH_ROWS`] rows per commit.
+/// Commit throughput and log growth for one row and for [`BATCH_ROWS`] rows per commit, with the
+/// durable plan (each invocation loads `commits` commits into a fresh database).
 fn commit_throughput(commits: u64) -> Result<serde_json::Value> {
     let mut report = serde_json::Map::new();
     for (name, rows) in [("one_row_per_commit", 1), ("batched", BATCH_ROWS)] {
-        let dir = tempdir()?;
-        let db = Database::open(dir.path())?;
-        let before = db.change_log().total_bytes();
-        let start = Instant::now();
-        load(&db, 1, commits, rows)?;
-        let seconds = start.elapsed().as_secs_f64();
-        let bytes = db.change_log().total_bytes() - before;
+        let measured = adb_bench::measure(&durable_plan(), || {
+            let dir = tempdir().expect("data directory");
+            let db = Database::open(dir.path()).expect("open");
+            let before = db.change_log().total_bytes();
+            load(&db, 1, commits, rows).expect("commits");
+            let bytes = db.change_log().total_bytes() - before;
+            (dir, db, bytes)
+        });
+        let stats = SampleStats::from_measured(&measured);
+        let bytes = measured.last.2;
+        let seconds = stats.median_ns / 1e9;
         report.insert(
             name.into(),
-            json!({"commits": commits, "rows_per_commit": rows, "seconds": seconds,
-                   "commits_per_s": commits as f64 / seconds,
-                   "rows_per_s": (commits * rows) as f64 / seconds,
-                   "change_log_bytes_per_commit": bytes as f64 / commits as f64}),
+            case(
+                &stats,
+                vec![
+                    ("commits", json!(commits)),
+                    ("rows_per_commit", json!(rows)),
+                    ("seconds", json!(seconds)),
+                    ("commits_per_s", json!(commits as f64 / seconds)),
+                    ("rows_per_s", json!((commits * rows) as f64 / seconds)),
+                    (
+                        "change_log_bytes_per_commit",
+                        json!(bytes as f64 / commits as f64),
+                    ),
+                ],
+            ),
         );
-        db.close()?;
     }
     Ok(serde_json::Value::Object(report))
 }

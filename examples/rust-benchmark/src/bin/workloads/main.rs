@@ -27,15 +27,16 @@
 
 mod consistency;
 mod dataset;
+mod durable;
 mod harness;
 mod schema;
 
-use std::{env, path::PathBuf, time::Instant};
+use std::{env, path::PathBuf};
 
 use adb_bench::report::{plan_json, rate_per_second};
 use adb_bench::{measure, measure_with_setup, Report, SampleStats};
-use adb_core::{CommitTs, Direction, Row, RowId, Value};
-use adb_engine::{AnalyzeOptions, Database, IndexColumn, IndexSpec};
+use adb_core::{CommitTs, Row, RowId, Value};
+use adb_engine::{AnalyzeOptions, Database};
 use adb_execution::{
     AggregateFunction, AggregateSpec, BinaryOp, ColumnVector, Expr, JoinKey, JoinType,
     PhysicalPlan, ScanColumn, SlotId, SortKey,
@@ -45,7 +46,7 @@ use harness::{case, durable_plan, invocations, tempdir};
 use serde_json::json;
 
 /// Result type of the benchmark (any error aborts it).
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Shorthand for a scan column mapping.
 fn col(field_id: u32, slot: u32) -> ScanColumn {
@@ -115,7 +116,7 @@ fn workload_b() -> PhysicalPlan {
 }
 
 /// Entity id of `ix_account`.
-fn ix_account() -> u64 {
+pub fn ix_account() -> u64 {
     dataset::by_name("ix_account").entity
 }
 
@@ -353,74 +354,6 @@ fn build_indexes(
     Ok((serde_json::Value::Object(report), ids))
 }
 
-/// Rows inserted per write-overhead measurement.
-const WRITE_ROWS: u64 = 20_000;
-/// Rows per commit in the write-overhead measurement.
-const WRITE_BATCH: u64 = 100;
-
-/// Inserts [`WRITE_ROWS`] `ix_account`-shaped rows (100 per commit) into fresh databases with
-/// 0, 1 and 3 indexes; reports rows per second and the overhead relative to no index.
-fn write_overhead() -> Result<serde_json::Value> {
-    let entity = ix_account();
-    let index = |name: &str, fields: &[u32], include: &[u32]| IndexSpec {
-        name: name.into(),
-        entity_id: entity,
-        columns: fields
-            .iter()
-            .map(|field| IndexColumn {
-                field_id: *field,
-                direction: Direction::Asc,
-            })
-            .collect(),
-        include: include.to_vec(),
-    };
-    let sets: [(&str, Vec<IndexSpec>); 3] = [
-        ("0_indexes", vec![]),
-        ("1_index", vec![index("w_balance", &[3], &[])]),
-        (
-            "3_indexes",
-            vec![
-                index("w_balance", &[3], &[]),
-                index("w_owner", &[4], &[3]),
-                index("w_region_balance", &[2, 3], &[]),
-            ],
-        ),
-    ];
-    let mut report = serde_json::Map::new();
-    let mut baseline = None;
-    for (name, specs) in sets {
-        let dir = tempdir()?;
-        let db = Database::open(dir.path())?;
-        for spec in specs {
-            db.create_index(spec)?;
-        }
-        let table = dataset::by_name("ix_account");
-        let start = Instant::now();
-        let mut first = 1;
-        while first <= WRITE_ROWS {
-            let mut tx = db.begin();
-            for id in first..first + WRITE_BATCH {
-                tx.put(
-                    RowId::from_primary_key(entity, id as i64),
-                    dataset::row(table, id, 1),
-                );
-            }
-            db.commit(tx)?;
-            first += WRITE_BATCH;
-        }
-        let seconds = start.elapsed().as_secs_f64();
-        let rate = WRITE_ROWS as f64 / seconds;
-        let base = *baseline.get_or_insert(rate);
-        report.insert(
-            name.into(),
-            json!({"rows": WRITE_ROWS, "rows_per_commit": WRITE_BATCH, "seconds": seconds,
-                   "rows_per_s": rate, "slowdown_vs_no_index": base / rate}),
-        );
-        db.close()?;
-    }
-    Ok(serde_json::Value::Object(report))
-}
-
 /// Workload D at the latest snapshot and at the snapshot before 1% of the balances changed
 /// (`AS OF`): the index serves both, older entries are kept until `VACUUM`.
 fn as_of_read(db: &Database, balance_index: u64, scale: u64) -> Result<serde_json::Value> {
@@ -587,9 +520,17 @@ fn main() -> Result<()> {
     });
     // Changes balances: runs after every other measurement of ix_account.
     let as_of = as_of_read(&db, balance_index, args.scale)?;
-    let write_overhead = write_overhead()?;
+    let write_overhead = durable::write_overhead()?;
     let schema_evolution = schema::report(args.scale)?;
     let consistency = consistency::report(args.scale)?;
+
+    let probe_after = context.probe(probe_dir.path());
+    if let (Some(before), Some(after)) = (&probe_before, &probe_after) {
+        document.set(
+            "durable_write",
+            durable::summary(before, after, &write_overhead, &consistency),
+        );
+    }
 
     document.set("path", json!("rust_native"));
     document.set(
@@ -621,7 +562,7 @@ fn main() -> Result<()> {
     document.set("write_overhead", write_overhead);
     document.set("schema_evolution", schema_evolution);
     document.set("consistency", consistency);
-    if let (Some(before), Some(after)) = (&probe_before, &context.probe(probe_dir.path())) {
+    if let (Some(before), Some(after)) = (&probe_before, &probe_after) {
         document.set(
             "fsync_probe",
             json!({"before": before.to_json(), "after": after.to_json(), "drift_percent": before.drift_percent(after)}),
