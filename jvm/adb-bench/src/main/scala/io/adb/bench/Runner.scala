@@ -154,3 +154,53 @@ object Runner:
     }
     val measuredNs = System.nanoTime() - measuredFrom
     Measured(plan, 1L, batches, last, record(start, afterWarmup, counters(), measuredNs))
+
+  /** Measures several bodies **interleaved**, for comparisons between modes of one operation
+    * (telemetry off, sampled and full; with and without a cache).
+    *
+    * A drift of the machine (a frequency step, a noisy neighbour, JIT recompilation) hits whatever
+    * runs at that moment. Measuring the modes one after the other would charge it to one mode; here
+    * every batch visits every body, and the visiting order rotates from batch to batch, so each
+    * body is the first, the middle and the last equally often. Each body is warmed up and
+    * calibrated on its own. The JIT and GC record covers the whole interleaved run and is shared.
+    *
+    * @return the bodies' names with their measurements, in the order given
+    */
+  def interleaved[T](plan: MeasurementPlan)(bodies: Seq[(String, () => T)]): Vector[(String, Measured[T])] =
+    require(bodies.nonEmpty, "interleaved needs at least one body")
+    val start = counters()
+    val lasts = Array.fill[Option[T]](bodies.size)(None)
+    def run(index: Int): Unit =
+      val value = bodies(index)._2()
+      lasts(index) = Some(value)
+      Sink.value = value
+    for index <- bodies.indices do
+      for _ <- 0 to plan.warmupInvocations do run(index)
+    val iterations = bodies.indices.map { index =>
+      var n = 1L
+      var done = false
+      while !done do
+        val began = System.nanoTime()
+        var i = 0L
+        while i < n do { run(index); i += 1 }
+        if System.nanoTime() - began >= plan.minSampleNs || n >= plan.maxIterations then done = true
+        else n = math.min(n * 2, plan.maxIterations)
+      n
+    }
+    val afterWarmup = counters()
+    val measuredFrom = System.nanoTime()
+    val samples = Array.fill(bodies.size)(Vector.newBuilder[Vector[Double]])
+    for batch <- 0 until plan.batches do
+      val order = bodies.indices.map(k => (k + batch) % bodies.size)
+      for index <- order do
+        val taken = Vector.fill(plan.samplesPerBatch) {
+          val began = System.nanoTime()
+          var i = 0L
+          while i < iterations(index) do { run(index); i += 1 }
+          (System.nanoTime() - began).toDouble / iterations(index)
+        }
+        samples(index) += taken
+    val jit = record(start, afterWarmup, counters(), System.nanoTime() - measuredFrom)
+    bodies.indices.map { index =>
+      bodies(index)._1 -> Measured(plan, iterations(index), samples(index).result(), lasts(index).get, jit)
+    }.toVector

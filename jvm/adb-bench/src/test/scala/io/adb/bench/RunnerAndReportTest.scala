@@ -122,3 +122,27 @@ final class RunnerAndReportTest:
     assertEquals(1000.0, ReportJson.ratePerSecond(stats, 1.0), 1e-9)
     val zero = SampleStats.fromBatches(Seq(Seq(0.0)), 1, quick = true)
     assertEquals(0.0, ReportJson.ratePerSecond(zero, 1.0), 0.0)
+
+  /** Interleaved bodies each get every batch, and the visiting order rotates. */
+  @Test def interleavedVisitsEveryBodyInEveryBatch(): Unit =
+    val order = scala.collection.mutable.ArrayBuffer.empty[String]
+    val plan = MeasurementPlan(warmupInvocations = 0, minSampleNs = 0L, maxIterations = 1L, batches = 3, samplesPerBatch = 1)
+    val results = Runner.interleaved(plan)(Seq(
+      "a" -> (() => { order += "a"; 1 }),
+      "b" -> (() => { order += "b"; 2 }),
+      "c" -> (() => { order += "c"; 3 })
+    ))
+    assertEquals(Vector("a", "b", "c"), results.map(_._1))
+    assertEquals(Vector(1, 2, 3), results.map(_._2.last))
+    assertTrue(results.forall(_._2.batchesNs.size == 3))
+    // the timed part of the order: warm-up (1 each) + calibration (1 each) come first, then rotated batches
+    val timed = order.drop(6).toVector
+    assertEquals(Vector("a", "b", "c", "b", "c", "a", "c", "a", "b"), timed)
+
+  /** A slower body measures slower, whatever its position. */
+  @Test def interleavedKeepsBodiesApart(): Unit =
+    val plan = MeasurementPlan(warmupInvocations = 1, minSampleNs = 0L, maxIterations = 1L, batches = 3, samplesPerBatch = 2)
+    val results = Runner.interleaved(plan)(Seq("fast" -> (() => 1), "slow" -> (() => { Thread.sleep(5); 2 })))
+    val fast = SampleStats.fromMeasured(results(0)._2).medianNs
+    val slow = SampleStats.fromMeasured(results(1)._2).medianNs
+    assertTrue(slow > fast * 10, s"fast=$fast slow=$slow")
