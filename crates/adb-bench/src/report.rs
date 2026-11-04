@@ -102,6 +102,17 @@ pub fn legacy_timing(stats: &SampleStats) -> Map<String, Value> {
     map
 }
 
+/// The JSON of a case: the legacy keys, the `timing` object, then `extra` (which wins over both).
+/// [`Report::case`] and the benchmark binaries that keep their own layout use it.
+pub fn case_json(stats: &SampleStats, limit_percent: f64, extra: Map<String, Value>) -> Value {
+    let mut case = legacy_timing(stats);
+    case.insert("timing".into(), timing_json(stats, limit_percent));
+    for (key, value) in extra {
+        case.insert(key, value);
+    }
+    Value::Object(case)
+}
+
 /// Units per second when one invocation does `units` units of work (rows, operations, bytes).
 /// Zero when the median is zero, so a degenerate sample never divides by zero.
 pub fn rate_per_second(stats: &SampleStats, units: f64) -> f64 {
@@ -183,12 +194,7 @@ impl Report {
     /// `cases`. Families that keep the layout of their earlier reports use this and place the
     /// value themselves with [`Report::set`].
     pub fn case(&self, stats: &SampleStats, extra: Map<String, Value>) -> Value {
-        let mut case = legacy_timing(stats);
-        case.insert("timing".into(), timing_json(stats, self.limit_percent));
-        for (key, value) in extra {
-            case.insert(key, value);
-        }
-        Value::Object(case)
+        case_json(stats, self.limit_percent, extra)
     }
 
     /// Adds a case: the legacy timing keys, the `timing` object, and `extra` keys (rates,
