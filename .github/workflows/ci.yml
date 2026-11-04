@@ -119,7 +119,7 @@ jobs:
         env:
           ADB_BENCH_OUT: ${{ runner.temp }}/2.5.4.1-ffi.json
       - name: Validate benchmark reports
-        run: python3 scripts/bench_validate.py --require-schema "$RUNNER_TEMP"/2.5.4.1-*.json
+        run: python3 scripts/bench_validate.py --require-schema "$RUNNER_TEMP/2.5.4.1-database.json" "$RUNNER_TEMP/2.5.4.1-ffi.json"
       - name: Check benchmark consistency
         run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.5.4.1-database.json" "$RUNNER_TEMP/2.5.4.1-ffi.json"
       - name: Upload benchmark results
