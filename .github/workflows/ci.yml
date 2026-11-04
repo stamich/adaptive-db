@@ -2,8 +2,12 @@
 #
 #   rust         format, lints (incl. documentation of every item), tests, rustdoc, C header
 #   jvm          Gradle wrapper validation, Scala/Java compile (-Werror) and tests
-#   integration  Java FFM -> C ABI -> engine smoke test, Rust demo, JVM feature tour, and a small
-#                workload benchmark whose results are checked for consistency (never for speed)
+#   bench-tools  unit tests of the benchmark scripts (gates, repeat, A/B, compare) and the report
+#                validator on every committed report
+#   integration  Java FFM -> C ABI -> engine smoke test, Rust demo, JVM feature tour, and the quick
+#                benchmark plan whose reports are validated and checked for consistency (never for
+#                speed: hosted runners have no `performance` governor, so the gate says `diagnostic`
+#                and the steps accept exit codes 3 and 4)
 name: CI
 
 on:
@@ -47,6 +51,17 @@ jobs:
       - name: C header compiles
         run: gcc -fsyntax-only -Wall -Werror -x c include/adb.h
 
+  bench-tools:
+    name: Benchmark tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Script tests
+        run: python3 -m unittest discover -s scripts/tests
+      - name: Validate committed reports
+        run: python3 scripts/bench_validate.py examples/results/*.json
+
   jvm:
     name: JVM
     runs-on: ubuntu-latest
@@ -76,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      ADB_BENCH_ITERATIONS: "20"
+      ADB_BENCH_QUICK: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -88,21 +103,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Native library (release)
         run: cargo build --release -p adb-ffi
-      - name: Java FFM -> C ABI v7 smoke test
+      - name: Java FFM -> C ABI v9 smoke test
         run: ./examples/jvm-cdc-smoke/run.sh
       - name: Rust relational demo
         run: cargo run --release -p adb-rust-demo
       - name: JVM feature tour
         run: ./demo/run-demo.sh
       - name: Workload benchmark, rust_native (scale 1)
-        run: ./scripts/benchmark-db.sh
+        # exit 3 (unstable) and 4 (diagnostic) only say how far the numbers can be trusted
+        run: ./scripts/benchmark-db.sh || { c=$?; [ $c -eq 3 ] || [ $c -eq 4 ]; }
         env:
           ADB_BENCH_OUT: ${{ runner.temp }}/2.5.4.1-database.json
       - name: Workload benchmark, JVM paths (scale 1)
-        run: ./scripts/benchmark-ffi.sh
+        run: ./scripts/benchmark-ffi.sh || { c=$?; [ $c -eq 3 ] || [ $c -eq 4 ]; }
         env:
           ADB_BENCH_OUT: ${{ runner.temp }}/2.5.4.1-ffi.json
-          ADB_BENCH_WARMUP_MS: "500"
+      - name: Validate benchmark reports
+        run: python3 scripts/bench_validate.py --require-schema "$RUNNER_TEMP"/2.5.4.1-*.json
       - name: Check benchmark consistency
         run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.5.4.1-database.json" "$RUNNER_TEMP/2.5.4.1-ffi.json"
       - name: Upload benchmark results
