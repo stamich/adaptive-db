@@ -1,4 +1,4 @@
-# Continuous integration: the checks of build-milestone-2.5.4.sh, split into jobs.
+# Continuous integration: the checks of build-milestone-2.5.4.1.sh, split into jobs.
 #
 #   rust         format, lints (incl. documentation of every item), tests, rustdoc, C header
 #   jvm          Gradle wrapper validation, Scala/Java compile (-Werror) and tests
