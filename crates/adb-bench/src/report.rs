@@ -209,10 +209,19 @@ impl Report {
     }
 }
 
+/// Keys a `timing` object may have besides [`REQUIRED_TIMING`].
+pub const OPTIONAL_TIMING: [&str; 1] = ["stability_limit_percent"];
+
+/// The values `stability` may take.
+pub const STABILITY_VALUES: [&str; 3] = ["stable", "unstable", "skipped"];
+
 /// Checks a schema-3 document against the contract and returns every problem found.
 ///
 /// An empty vector means the document is valid. The checks mirror `scripts/bench_validate.py`:
-/// required keys, the schema number, and the shape of every case's `timing`.
+/// the required top-level keys, the schema number, and — for every `timing` object found
+/// anywhere in the document, because older reports keep their own layout — its keys (none missing,
+/// none unknown), its stability value and its internal consistency. Entries of a `cases` map
+/// without a `timing` need a `value` or a `skipped_reason`.
 pub fn validate(doc: &Value) -> Vec<String> {
     let mut problems = Vec::new();
     let Some(top) = doc.as_object() else {
@@ -226,27 +235,105 @@ pub fn validate(doc: &Value) -> Vec<String> {
     if top.get("schema").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
         problems.push(format!("`schema` must be {SCHEMA_VERSION}"));
     }
-    match top.get("cases").and_then(Value::as_object) {
-        None => problems.push("missing `cases` object".into()),
-        Some(cases) => {
-            for (name, case) in cases {
-                let Some(case) = case.as_object() else {
-                    problems.push(format!("case `{name}` is not an object"));
-                    continue;
-                };
-                if let Some(timing) = case.get("timing") {
-                    for key in REQUIRED_TIMING {
-                        if timing.get(key).is_none() {
-                            problems.push(format!("case `{name}`: timing lacks `{key}`"));
+    if let Some(cases) = top.get("cases") {
+        match cases.as_object() {
+            None => problems.push("`cases` is not an object".into()),
+            Some(cases) => {
+                for (name, case) in cases {
+                    match case.as_object() {
+                        None => problems.push(format!("case `{name}` is not an object")),
+                        Some(case) => {
+                            if !case.contains_key("timing")
+                                && !case.contains_key("skipped_reason")
+                                && !case.contains_key("value")
+                            {
+                                problems.push(format!(
+                                    "case `{name}` has neither `timing`, `value` nor `skipped_reason`"
+                                ));
+                            }
                         }
                     }
-                } else if !case.contains_key("skipped_reason") && !case.contains_key("value") {
-                    problems.push(format!(
-                        "case `{name}` has neither `timing` nor `skipped_reason`"
-                    ));
                 }
             }
         }
     }
+    check_timings(doc, "$", &mut problems);
     problems
+}
+
+/// Walks `value` and validates every `timing` object, naming it by its JSON path.
+fn check_timings(value: &Value, path: &str, problems: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                let child_path = format!("{path}.{key}");
+                if key == "timing" && child.is_object() {
+                    check_timing(child, &child_path, problems);
+                } else {
+                    check_timings(child, &child_path, problems);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                check_timings(child, &format!("{path}[{index}]"), problems);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Validates one `timing` object found at `path`.
+fn check_timing(timing: &Value, path: &str, problems: &mut Vec<String>) {
+    let Some(map) = timing.as_object() else {
+        return;
+    };
+    for key in REQUIRED_TIMING {
+        if !map.contains_key(key) {
+            problems.push(format!("{path}: timing lacks `{key}`"));
+        }
+    }
+    for key in map.keys() {
+        if !REQUIRED_TIMING.contains(&key.as_str()) && !OPTIONAL_TIMING.contains(&key.as_str()) {
+            problems.push(format!("{path}: unknown timing key `{key}`"));
+        }
+    }
+    if let Some(stability) = map.get("stability").and_then(Value::as_str) {
+        if !STABILITY_VALUES.contains(&stability) {
+            problems.push(format!(
+                "{path}: stability `{stability}` is not one of {STABILITY_VALUES:?}"
+            ));
+        }
+    }
+    let count = map.get("outlier_count").and_then(Value::as_u64);
+    let indices = map
+        .get("outlier_indices")
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    if let (Some(count), Some(indices)) = (count, indices) {
+        if count as usize != indices {
+            problems.push(format!(
+                "{path}: outlier_count {count} does not match {indices} indices"
+            ));
+        }
+    }
+    let batches = map.get("batches").and_then(Value::as_u64);
+    let medians = map
+        .get("batch_medians_ms")
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    if let (Some(batches), Some(medians)) = (batches, medians) {
+        if batches as usize != medians {
+            problems.push(format!(
+                "{path}: batches {batches} does not match {medians} batch medians"
+            ));
+        }
+    }
+    for key in ["median_of_medians_ms", "batch_mad_percent"] {
+        if let Some(number) = map.get(key).and_then(Value::as_f64) {
+            if number < 0.0 || !number.is_finite() {
+                problems.push(format!("{path}: `{key}` must be a finite number >= 0"));
+            }
+        }
+    }
 }

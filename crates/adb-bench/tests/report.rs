@@ -84,7 +84,7 @@ fn the_validator_names_every_problem() {
         .any(|p| p.contains("missing top-level key `plan`")));
     assert!(problems
         .iter()
-        .any(|p| p.contains("case `a`: timing lacks `stability`")));
+        .any(|p| p.contains("$.cases.a.timing: timing lacks `stability`")));
     assert!(problems
         .iter()
         .any(|p| p.contains("case `b` is not an object")));
@@ -92,8 +92,7 @@ fn the_validator_names_every_problem() {
         validate(&json!([1])),
         vec!["the document is not a JSON object".to_string()]
     );
-    let no_cases = validate(&json!({}));
-    assert!(no_cases.iter().any(|p| p.contains("missing `cases`")));
+    assert!(!validate(&json!({})).is_empty());
 }
 
 #[test]
@@ -141,4 +140,29 @@ fn rates_handle_a_zero_median() {
     let zero = SampleStats::from_batches(&[vec![0.0, 0.0]], 1, true);
     assert_eq!(rate_per_second(&zero, 10.0), 0.0);
     assert_eq!(legacy_timing(&zero)["p50_ms"], Value::from(0.0));
+}
+
+#[test]
+fn timing_objects_are_found_anywhere_and_checked_for_consistency() {
+    let mut r = report();
+    r.add_case("ok", &stats(), Map::new());
+    let mut doc = r.finish();
+    // older reports keep their own layout: a timing object outside `cases`
+    let mut bad = doc["cases"]["ok"]["timing"].clone();
+    bad["stability"] = json!("great");
+    bad["outlier_count"] = json!(3);
+    bad["batches"] = json!(9);
+    bad["median_of_medians_ms"] = json!(-1.0);
+    bad["surprise"] = json!(true);
+    doc["workloads"] = json!({"A": [{"timing": bad}]});
+    let problems = validate(&doc);
+    assert!(problems
+        .iter()
+        .any(|p| p.contains("$.workloads.A[0].timing: unknown timing key `surprise`")));
+    assert!(problems.iter().any(|p| p.contains("stability `great`")));
+    assert!(problems.iter().any(|p| p.contains("outlier_count 3")));
+    assert!(problems.iter().any(|p| p.contains("batches 9")));
+    assert!(problems
+        .iter()
+        .any(|p| p.contains("`median_of_medians_ms` must be")));
 }
