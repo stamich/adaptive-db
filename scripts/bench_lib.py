@@ -70,8 +70,9 @@ def headline(case):
     timing = case.get("timing")
     if isinstance(timing, dict) and isinstance(timing.get("median_of_medians_ms"), (int, float)):
         return float(timing["median_of_medians_ms"]), True
-    if isinstance(case.get("p50_ms"), (int, float)):
-        return float(case["p50_ms"]), False
+    for key in ("p50_ms", "ms"):  # `ms`: the single-shot time of the earliest 2.5.x reports
+        if isinstance(case.get(key), (int, float)) and not isinstance(case.get(key), bool):
+            return float(case[key]), False
     return None, False
 
 
