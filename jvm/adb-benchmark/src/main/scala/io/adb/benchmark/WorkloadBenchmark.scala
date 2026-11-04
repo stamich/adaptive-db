@@ -1,6 +1,7 @@
 package io.adb.benchmark
 
 import io.adb.actuator.{ActionKind, ActionState, AdaptiveMode}
+import io.adb.bench.{Environment, JitRecord, MeasurementPlan, Report, ReportJson, Runner, SampleStats}
 import io.adb.advisor.{Advisor, AdvisorConfig, CreateIndex}
 import io.adb.catalog.{Catalog, InMemoryCatalog}
 import io.adb.ffm.{NativeDatabase, NativeException}
@@ -118,9 +119,9 @@ object WorkloadBenchmark:
     *
     * @param dataDir    directory with the prepared native database in `rust/`
     * @param nativeLib  native library
-    * @param iterations timed iterations per path
+    * @param iterations accepted for old command lines and ignored: the measurement plan decides
     * @param scale      scale factor the data was prepared with
-    * @param warmupMs   minimum warm-up time per timed path
+    * @param warmupMs   accepted for old command lines and ignored: the measurement plan decides
     * @param out        JSON report path
     */
   final case class Settings(dataDir: Path, nativeLib: Path, iterations: Int, scale: Int, warmupMs: Long, out: Option[Path])
@@ -142,7 +143,8 @@ object WorkloadBenchmark:
         name -> obj("sql" -> str(ddl), "ms" -> num((System.nanoTime() - start) / 1e6))
       }
       db.execute("ANALYZE ix_account") // index statistics for the cost model
-      val timer = Timer(settings.iterations, settings.warmupMs)
+      val plan = MeasurementPlan.fromEnv(durable = false)
+      val timer = Timer(plan)
       val points = Vector.newBuilder[CalibrationPoint]
 
       val workloads = Vector(
@@ -154,7 +156,7 @@ object WorkloadBenchmark:
       ).map { (name, sql) =>
         val prepared = preparedPlan(db, catalog, sql)
         val engine = timer.measure(drain(native, prepared))
-        points += CalibrationPoint(name, rootEstimate(db, catalog, sql), engine.percentile(0.5))
+        points += CalibrationPoint(name, rootEstimate(db, catalog, sql), engine.medianMs)
         name -> obj(
           "planning_only" -> timer.measure(planOnly(db, catalog, sql)).json,
           "ffi_prepared_plan" -> engine.json,
@@ -170,16 +172,16 @@ object WorkloadBenchmark:
       // from the hash-row weight in the calibration fit.
       EstimationQueries.foreach { (name, sql) =>
         val engine = timer.measure(drain(native, preparedPlan(db, catalog, sql)))
-        points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.percentile(0.5))
+        points += CalibrationPoint(s"scan_$name", rootEstimate(db, catalog, sql), engine.medianMs)
       }
-      val report = obj(
-        "milestone" -> str("2.5.4.1"),
+      val document = new Report("jvm-workloads", "2.5.4.1", plan, Environment.capture())
+      Vector(
         "host" -> obj(
           "os" -> str(System.getProperty("os.name")), "arch" -> str(System.getProperty("os.arch")),
           "cpu" -> str(cpuModel()), "cpus" -> num(Runtime.getRuntime.availableProcessors()),
           "java" -> str(System.getProperty("java.version")), "max_heap_mib" -> num(Runtime.getRuntime.maxMemory() / 1048576)
         ),
-        "setup" -> obj("scale" -> num(settings.scale), "iterations" -> num(settings.iterations), "warmup_ms" -> num(settings.warmupMs),
+        "setup" -> obj("scale" -> num(settings.scale), "iterations" -> num(plan.totalSamples.toLong), "warmup_ms" -> num(plan.minSampleNs / 1_000_000L),
           "rows" -> obj(counts.map((t, n) => t -> num(n))*)),
         "index_build" -> obj(indexBuild*),
         "workloads" -> obj(workloads*),
@@ -191,7 +193,8 @@ object WorkloadBenchmark:
         "telemetry" -> telemetrySection(db),
         "advisor" -> advisorSection(db),
         "actuator" -> actuatorSection(db)
-      )
+      ).foreach((key, value) => document.set(key, value))
+      val report = document.finish()
       println(report)
       settings.out.foreach(path => Files.writeString(path, report + "\n", StandardCharsets.UTF_8))
     finally native.close()
@@ -419,11 +422,11 @@ object WorkloadBenchmark:
       val index = timer.measure(drain(native, preparedPlan(forcedIndex, catalog, sql)))
       db.execute("SET optimizer = rule")
       val seq = timer.measure(drain(native, preparedPlan(db, catalog, sql)))
-      points += CalibrationPoint(s"sweep_${fraction}_seq", rootEstimate(db, catalog, sql), seq.percentile(0.5))
+      points += CalibrationPoint(s"sweep_${fraction}_seq", rootEstimate(db, catalog, sql), seq.medianMs)
       db.execute("SET optimizer = cost")
-      points += CalibrationPoint(s"sweep_${fraction}_index", rootEstimate(forcedIndex, catalog, sql), index.percentile(0.5))
+      points += CalibrationPoint(s"sweep_${fraction}_index", rootEstimate(forcedIndex, catalog, sql), index.medianMs)
       val count = db.execute(sql).rows.head.head.asInstanceOf[java.lang.Long].longValue
-      val (indexMs, seqMs) = (index.percentile(0.5), seq.percentile(0.5))
+      val (indexMs, seqMs) = (index.medianMs, seq.medianMs)
       val chosenMs = if chosen.startsWith("index_scan") then indexMs else seqMs
       f"f_$fraction%.4f" -> obj(
         "fraction" -> num(fraction), "balance_below" -> num(bound), "rows" -> num(count),
@@ -464,7 +467,7 @@ object WorkloadBenchmark:
         try
           val prepared = preparedPlan(db, catalog, sql)
           val engine = timer.measure(drain(native, prepared))
-          points += CalibrationPoint(s"join_order_${name}_$mode", rootEstimate(db, catalog, sql), engine.percentile(0.5))
+          points += CalibrationPoint(s"join_order_${name}_$mode", rootEstimate(db, catalog, sql), engine.medianMs)
           obj(
             "ffi_prepared_plan" -> engine.json,
             "estimated_root_cost" -> num(rootCost(db, catalog, sql)),
@@ -520,7 +523,7 @@ object WorkloadBenchmark:
       val plan = () => AdaptiveDatabase.plan(binder.bind(parser.parse(sql)).asInstanceOf[BoundSelect], catalog, statistics, OptimizerConfig.Default, OptimizerMode.Cost)
       val method = plan().physical.decisions.find(_.operator == "join order").fold("")(_.reason.takeWhile(_ != ';'))
       val timing = timer.measure { plan(); 0L }
-      s"${shape}_$n" -> obj("relations" -> num(n), "p50_us" -> num(timing.percentile(0.5) * 1000), "p99_us" -> num(timing.percentile(0.99) * 1000), "method" -> str(method))
+      s"${shape}_$n" -> obj("relations" -> num(n), "p50_us" -> num(timing.medianMs * 1000), "p99_us" -> num(timing.p99Ms * 1000), "method" -> str(method))
     obj(rows*)
 
   /** One measured plan for the cost calibration.
@@ -610,59 +613,43 @@ object WorkloadBenchmark:
         .map(_.split(":", 2)(1).trim).getOrElse("unknown")
     catch case _: java.io.IOException => "unknown"
 
-  /** Timed runs with a time-based warm-up.
+  /** Timed runs on the `adb-bench` harness: warm-up, calibration, then batches of samples.
     *
-    * @param iterations timed iterations
-    * @param warmupMs   minimum warm-up time (at least 10 runs)
+    * @param plan the measurement plan (CPU-bound cases use the release plan)
     */
-  private final case class Timer(iterations: Int, warmupMs: Long):
-    /** Warms `body` up, then times `iterations` runs. */
+  private final case class Timer(plan: MeasurementPlan):
+    /** Measures `body` (which returns a checksum) according to the plan. */
     def measure(body: => Long): Timing =
-      val warmStart = System.nanoTime()
-      var warm = 0
-      while warm < 10 || (System.nanoTime() - warmStart) / 1_000_000 < warmupMs do
-        body
-        warm += 1
-      var last = 0L
-      val samples = Vector.fill(iterations) {
-        val start = System.nanoTime()
-        last = body
-        (System.nanoTime() - start) / 1e6
-      }
-      Timing(samples, last, warm)
+      val measured = Runner.measure(plan)(body)
+      Timing(SampleStats.fromMeasured(measured), measured.last, measured.jit, plan)
 
   /** Timings of one path.
     *
-    * @param inOrder    milliseconds per iteration, in measurement order
-    * @param checksum   checksum of the last iteration
-    * @param warmupRuns runs before timing started
+    * @param stats    the statistics of the samples (nanoseconds per invocation)
+    * @param checksum checksum of the last iteration
+    * @param jit      the JIT and GC record of the measurement
+    * @param plan     the plan the samples were taken with
     */
-  private final case class Timing(inOrder: Vector[Double], checksum: Long, warmupRuns: Int):
-    /** The samples, sorted. */
-    val samples: Vector[Double] = inOrder.sorted
+  private final case class Timing(stats: SampleStats, checksum: Long, jit: JitRecord, plan: MeasurementPlan):
+    /** The headline, the median of the batch medians, in milliseconds. */
+    def medianMs: Double = stats.medianNs / 1e6
 
-    /** `{"iterations":…,"warmup_runs":…,"p50_ms":…,"p95_ms":…,"p99_ms":…,"mean_ms":…,"min_ms":…,
-      * "max_ms":…,"stddev_ms":…,"round_medians_ms":[…],"checksum":…}`.
+    /** The 99th percentile in milliseconds. */
+    def p99Ms: Double = stats.p99Ns / 1e6
+
+    /** `{"iterations":…,"warmup_runs":…,"p50_ms":…,…,"round_medians_ms":[…],"checksum":…,"timing":{…},"jit":{…}}`:
+      * the keys of the earlier reports (`p50_ms` is now the median of medians) plus the harness's.
       */
     def json: String =
-      val mean = samples.sum / samples.size
-      val stddev = math.sqrt(samples.map(s => (s - mean) * (s - mean)).sum / math.max(2, samples.size))
-      obj(
-        "iterations" -> num(samples.size), "warmup_runs" -> num(warmupRuns), "p50_ms" -> num(percentile(0.5)),
-        "p95_ms" -> num(percentile(0.95)), "p99_ms" -> num(percentile(0.99)), "mean_ms" -> num(mean),
-        "min_ms" -> num(samples.head), "max_ms" -> num(samples.last), "stddev_ms" -> num(stddev),
-        "round_medians_ms" -> roundMedians.map(num).mkString("[", ",", "]"),
-        "checksum" -> num(checksum)
+      ReportJson.caseJson(
+        stats,
+        Some(jit),
+        Seq(
+          "iterations" -> num(plan.totalSamples.toLong * stats.iterationsPerSample),
+          "warmup_runs" -> num(plan.warmupInvocations.toLong),
+          "checksum" -> num(checksum)
+        )
       )
-
-    /** Medians of seven consecutive rounds of the samples in measurement order (their spread
-      * shows run-to-run stability, which one median hides).
-      */
-    def roundMedians: Vector[Double] =
-      val size = math.max(1, math.ceil(inOrder.size / 7.0).toInt)
-      inOrder.grouped(size).map(round => round.sorted.apply(round.size / 2)).toVector
-    /** The `p`-th percentile. */
-    def percentile(p: Double): Double = samples(((samples.size - 1) * p).round.toInt)
 
   /** A JSON object of already-encoded values. */
   private def obj(fields: (String, String)*): String = fields.map((k, v) => s"${PlanJsonEncoder.quote(k)}:$v").mkString("{", ",", "}")
