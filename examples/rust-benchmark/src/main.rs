@@ -487,7 +487,7 @@ fn main() -> Result<()> {
 
     if let Some(path) = args.output {
         let report = json!({
-            "milestone": "2.5.4",
+            "milestone": "2.5.4.1",
             "host": {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
