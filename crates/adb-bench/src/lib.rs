@@ -10,7 +10,7 @@
 //! | [`plan`] | [`MeasurementPlan`]: warm-up, calibration, batches and samples per batch |
 //! | [`runner`] | [`measure`]: the measurement loop; returns raw per-invocation samples |
 //! | [`stats`] | [`SampleStats`]: median of medians, batch MAD, outliers, stability verdict |
-//! | `environment` | `Environment`: governor, frequency, temperature, load, toolchain |
+//! | [`environment`] | [`Environment`]: governor, frequency, temperature, load, toolchain |
 //! | `storage` | `StorageInfo`: filesystem, mount and device of the data directory |
 //! | `probe` | `FsyncProbe`: a fixed `write` + `fdatasync` used as a control |
 //! | `report` | the schema-3 JSON documents, which keep every key earlier reports had |
@@ -18,10 +18,12 @@
 //! The crate has no dependency on the engine; it only times closures.
 #![forbid(unsafe_code)]
 
+pub mod environment;
 pub mod plan;
 pub mod runner;
 pub mod stats;
 
+pub use environment::{Environment, GovernorClass, RuntimeSnapshot};
 pub use plan::MeasurementPlan;
 pub use runner::{measure, Measured};
 pub use stats::{SampleStats, Stability};
