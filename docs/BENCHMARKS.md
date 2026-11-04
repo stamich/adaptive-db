@@ -27,22 +27,102 @@ Unknown values are `null` in the JSON, never a guess.
 
 ## Limits are provisional
 
-`DEFAULT_STABLE_BATCH_MAD_PERCENT = 5.0` was chosen without the reference machine. It will be
-calibrated from A/A and `--repeat` runs on the Ryzen (task 24) and then replaced; until that is done,
-any status derived from it is provisional.
+Every limit below was chosen without the reference machine and is **provisional** until task 24
+calibrates it from A/A and `--repeat` runs on the Ryzen 9 5950X; any status derived from one says so
+(`limit_is_provisional` in the documents).
 
-## Still to come in 2.5.4.1
+| Limit | Value | Where |
+|---|---|---|
+| Batch MAD % that makes a case `unstable` | 5.0 | `DEFAULT_STABLE_BATCH_MAD_PERCENT`, `Stability` in the JVM |
+| Run-to-run spread for `--repeat` | 10 % | `scripts/bench_repeat.py` |
+| A/B and compare: change that counts | 5 % (and above the A/A control) | `bench_ab.py`, `bench_compare.py` |
 
-Report schema 3 and `scripts/bench_validate.py`; the harness in the Rust and Scala benchmarks;
-families (`durable-write`, `memory`, `scaling`, `recovery`, `sql-path`, `telemetry`, `actuator`,
-`ffi`); `--repeat N` with deterministic and spread gates; interleaved A/B against a previous git ref
-with an A/A control; gate exit codes 0/1/3/4; `scripts/benchmark.sh`. This page is extended as each
-arrives. See [milestone-2.5.4.1.md](milestone-2.5.4.1.md).
+## Report schema 3
 
-## Running the harness tests
+Every family writes one JSON document: `schema` (3), `milestone`, `family`, `environment`,
+`runtime_before`, `runtime_after`, `plan`, usually `storage` and `fsync_probe`, and the cases. A timed
+case keeps every key the 2.5.4 report had and adds a `timing` object: `median_of_medians_ms`,
+`batch_medians_ms`, `batch_mad_percent`, `outlier_count`, `outlier_indices`, `stability`, `batches`,
+`samples_per_batch`, `iterations_per_sample`, `quick`. A case that is not a timing (a byte count, a row
+count) is a *plain case* with a `value` or a `skipped_reason`. JVM reports also carry `jit` (did the
+code warm up? how much GC ran?) and a `fresh_fork` flag (was the family alone in its JVM?).
+`scripts/bench_validate.py` implements the contract (`crates/adb-bench/src/report.rs` `validate` is the
+Rust side; both are tested against each other). Reports from 2.5.x and earlier are classified `legacy`
+and are never rejected, but they are always *diagnostic* when compared.
+
+## Families
+
+| Family | Language | What it measures | Plan |
+|---|---|---|---|
+| `rust-local` | Rust | scans, point lookups, load, durable commits (1 and N threads), CDC read, recovery, relational operators | release + durable |
+| `workloads` | Rust | workloads A-H and the consistency workloads I-O on the engine catalog | release + durable |
+| `memory` | Rust | bytes and calls allocated per operation (a counting allocator; deterministic) | none (counts) |
+| `scaling` | Rust | read scaling over threads, write amplification, recovery time over log size | release + durable |
+| `sql-path` | JVM | SQL text to plan, plan cache on and off, `sql_to_rust` | JVM plan |
+| `telemetry` | JVM | cost of capturing a query at `off`, `basic` and `full` | JVM plan |
+| `actuator` | JVM | controller tick and the stall of a `CREATE INDEX` | JVM plan |
+| `ffi` | JVM | native calls, prepared plans, profile fetch | JVM plan |
+
+JVM families are launched one per JVM (`ADB_BENCH_FORK=1`), so the JIT profile of one cannot colour
+another; the JVM harness measures like the Rust one (warm-up, calibration, batches) and records whether
+the JIT was still compiling and how much GC ran during the samples.
+
+## Gates and exit codes
+
+`scripts/bench_gate.py report.json...` evaluates reports:
+
+| Gate | Result |
+|---|---|
+| governor | `performance` -> pass; anything else, or unreadable -> **diagnostic** |
+| storage | `tmpfs`, `ramfs`, `devtmpfs` under a durable family (`rust-local`, `workloads`, `scaling`) -> **fail**; otherwise pass or skipped |
+| stability | a case with `stability: unstable` -> **unstable**; quick plans are skipped |
+| jit | a JVM case measured while compiling (`warm: false`) -> **unstable** |
+| schema | a schema-3 report that breaks the contract -> **fail**; a legacy report -> diagnostic |
+
+Exit codes of all tools: **0** pass or skipped, **1** fail, **3** unstable, **4** diagnostic; **2** is a
+usage or tool error. When several apply: fail, then diagnostic, then unstable. *Timings never gate CI*:
+hosted runners have no `performance` governor, so CI accepts 3 and 4 and fails only on 1 and 2.
+
+## Running benchmarks
+
+```bash
+scripts/benchmark.sh all                       # every family, one JVM per JVM family
+scripts/benchmark.sh rust-local --quick        # a smoke run (not release grade)
+scripts/benchmark.sh workloads --repeat 3      # three fresh processes, one median document
+scripts/benchmark.sh rust-local --ab v2.5.4    # interleaved A/B against a git ref
+```
+
+* `--repeat N` (`scripts/bench_repeat.py`) runs a family N times as fresh processes. Deterministic
+  values (`checksum`, `rows_out`, `rows`, `entries`, `table_rows`, `expected_changes`, `changed_rows`,
+  and `value` of untimed cases) must be identical in every run, else **fail**; the spread of the
+  per-run medians above the limit is **unstable**.
+* Without `--repeat`, `scripts/bench_run.py` measures a family again (up to twice) while it is
+  `unstable`; `diagnostic` and `fail` are not retried because measuring again does not help.
+* `--ab REF` (`scripts/bench_ab.py`) builds a git worktree of REF, copies the *current* harness
+  (`crates/adb-bench`, `examples/rust-benchmark`) over it so the same binaries measure both engines, and
+  runs A (the old engine), B (the working tree) and A2 (a second copy of A, the A/A control) in a
+  rotating order. A change is reported only when it exceeds both the limit and the control noise; a
+  noisy control makes the comparison `unstable`. Rust families only.
+* `scripts/bench_compare.py old.json new.json` compares two reports; it is conservative (legacy reports
+  and non-`performance` governors give `diagnostic`). For a verdict use `--ab`.
+* `scripts/bench_report.py report.json` renders a report as Markdown.
+* `scripts/benchmark-db.sh` and `scripts/benchmark-ffi.sh` stay as shortcuts for the `workloads`
+  family of each language. `ADB_BENCH_ITERATIONS`, `ADB_BENCH_WARMUP_MS` and `ADB_BENCH_DATA` are
+  ignored since 2.5.4.1: the measurement plan decides and every run gets a fresh data directory.
+
+## Running the tests
 
 ```bash
 cargo test -p adb-bench
 cargo clippy -p adb-bench --all-targets -- -D warnings -W missing_docs -W clippy::missing_docs_in_private_items
 RUSTDOCFLAGS="-D warnings" cargo doc -p adb-bench --no-deps
+python3 -m unittest discover -s scripts/tests         # gates, repeat, A/B, compare, launcher
+(cd jvm && ./gradlew :adb-bench:test)                 # the Scala harness
 ```
+
+## What is not claimed
+
+No 2.5.4.1 reference-machine numbers exist yet: the committed reports of this milestone come from a
+2-CPU virtual machine without a CPU governor, and every number from it is diagnostic. The release
+numbers (task 31) and the calibration of the limits (task 24) need a run on the reference machine; see
+[milestone-2.5.4.1.md](milestone-2.5.4.1.md).

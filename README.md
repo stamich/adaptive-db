@@ -26,8 +26,9 @@ The reason is the 2.5.4 finding that identical code wrote 5.1k or 42.0k rows/s d
 governor. The C ABI stays 9, plan wire v4 and data format 4 are unchanged, and the Cargo crates stay
 `2.5.4`; the engine string, the JVM build, the scripts and the workflows say **2.5.4.1**.
 
-The milestone is delivered task by task (31 in all). What exists today, what is still to come and the
-rules of measurement are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and
+The milestone is delivered task by task (31 in all; 28 are done, the calibration of the limits and the
+release run need the reference machine). Run it with `scripts/benchmark.sh all` (`--quick`,
+`--repeat N`, `--ab REF`); the rules of measurement, the families, the gates and their exit codes are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and
 [docs/milestone-2.5.4.1.md](docs/milestone-2.5.4.1.md).
 
 ## What 2.5.4 adds

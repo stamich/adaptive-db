@@ -129,9 +129,11 @@
   actions for join projections and partitions when their actuators exist
 
 ## 2.5.4.1 — a trustworthy benchmark harness (in progress)
-- crate `adb-bench`: measurement plan, median of medians, MAD stability, environment and storage
-  records, fsync probe; then report schema 3, harness in Rust and JVM benchmarks, gates, `--repeat`,
-  interleaved A/B against a previous release, CI quick plan
+- crate `adb-bench` and the Scala module `jvm/adb-bench`: measurement plan, median of medians, MAD
+  stability, environment and storage records, fsync probe, report schema 3; the Rust and JVM benchmark
+  families on the harness; gates (governor, storage, stability, JIT) with exit codes 0/1/3/4,
+  `--repeat`, interleaved A/B against a previous release with an A/A control, CI quick plan
+- open: calibration of the limits and the release run on the reference machine
 - precedes 2.5.5; no engine change. Plan: [milestone-2.5.4.1.md](milestone-2.5.4.1.md)
 
 ## 2.6 — asynchronous projections

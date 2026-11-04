@@ -13,7 +13,8 @@ they used the same governor. The two benchmark scripts print a warning when it i
 
 ## Milestone 2.5.4.1
 
-Reports are written as `2.5.4.1-*.json`. The harness (`crates/adb-bench`, rules in
+Reports are written as `2.5.4.1-*.json` (schema 3; older reports stay as they are and validate as
+`legacy`). `scripts/benchmark.sh all` writes one report per family to `examples/results/2.5.4.1/`. The harness (`crates/adb-bench`, rules in
 `docs/BENCHMARKS.md`) records the governor, frequency, temperature, load, storage and an fsync
 probe next to every result. No reference-machine numbers for 2.5.4.1 are committed yet; they will be
 added from a run on the reference machine, never estimated.

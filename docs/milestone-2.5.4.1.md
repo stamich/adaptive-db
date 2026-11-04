@@ -1,6 +1,6 @@
 # Milestone 2.5.4.1 — a trustworthy benchmark harness
 
-**Status: in progress.** 6 of 31 tasks are done. Pull request: #118 (draft).
+**Status: in progress.** 28 of 31 tasks are done; 24 and 31 need a run on the reference machine, 30 (API-doc audit) is next. Pull request: #118 (draft).
 
 ## Why
 
@@ -29,15 +29,21 @@ design follows the harness of ACE (`ace-bench`), adapted to a database that is b
 | 4 | Environment record | done |
 | 5 | Storage record | done |
 | 6 | fsync control probe | done |
-| 7-8 | Report schema 3 and validator | open |
-| 9-13 | Rust families (rust-local, workloads, durable-write, memory, scaling, recovery) | open |
-| 14-16 | Scala harness, `WorkloadBenchmark`, `sql-path` | open |
-| 17-19 | `telemetry`, `actuator`, `ffi` families | open |
-| 20-23 | Governor and storage gates, `--repeat`, interleaved A/B, gate exit codes | open |
+| 7-8 | Report schema 3 and validator (`report.rs`, `bench_validate.py`) | done |
+| 9-13 | Rust families (rust-local, workloads, durable-write, memory, scaling, recovery) | done |
+| 14-16 | Scala harness (`adb-bench` module), `WorkloadBenchmark`, `sql-path` | done |
+| 17-19 | `telemetry`, `actuator`, `ffi` families | done |
+| 20 | Governor and storage gates, statuses and exit codes (`bench_gate.py`) | done |
+| 21 | `--repeat` with deterministic and spread gates (`bench_repeat.py`) | done |
+| 22 | Interleaved A/B with an A/A control (`bench_ab.py`) | done |
+| 23 | Gate exit codes 0/1/3/4 wired together, remeasure on unstable (`bench_run.py`, `check-benchmarks.py`) | done |
 | 24 | Calibrate limits on the reference machine (needs the user's Ryzen run) | open |
-| 25-26 | `bench_report.py`, `bench_compare.py`, `scripts/benchmark.sh` | open |
-| 27-28 | Tests, CI quick plan | open |
-| 29-30 | Documentation, API-doc audit | open |
+| 25 | `bench_report.py`, `bench_compare.py` | done |
+| 26 | `scripts/benchmark.sh`, `bench-jvm-family.sh`, updated `benchmark-*.sh` and build script | done |
+| 27 | Tests (script tests, launcher, committed reports, harness tests) | done |
+| 28 | CI: quick plan and validator on every PR; timings never gate | done |
+| 29 | Documentation | done |
+| 30 | Rustdoc / Scaladoc / Javadoc audit | open |
 | 31 | Release: reference run, baseline, validation files (needs the user's Ryzen run) | open |
 
 ## Not claimed
