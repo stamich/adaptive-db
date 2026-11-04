@@ -13,7 +13,7 @@
 //! | [`environment`] | [`Environment`]: governor, frequency, temperature, load, toolchain |
 //! | [`storage`] | [`StorageInfo`]: filesystem, mount and device of the data directory |
 //! | [`probe`] | [`FsyncProbe`]: a fixed `write` + `fdatasync` used as a control |
-//! | `report` | the schema-3 JSON documents, which keep every key earlier reports had |
+//! | [`report`] | the schema-3 JSON documents, which keep every key earlier reports had |
 //!
 //! The crate has no dependency on the engine; it only times closures.
 #![forbid(unsafe_code)]
@@ -21,6 +21,7 @@
 pub mod environment;
 pub mod plan;
 pub mod probe;
+pub mod report;
 pub mod runner;
 pub mod stats;
 pub mod storage;
@@ -28,6 +29,7 @@ pub mod storage;
 pub use environment::{Environment, GovernorClass, RuntimeSnapshot};
 pub use plan::MeasurementPlan;
 pub use probe::FsyncProbe;
+pub use report::Report;
 pub use runner::{measure, Measured};
 pub use stats::{SampleStats, Stability};
 pub use storage::{MountEntry, StorageInfo};
