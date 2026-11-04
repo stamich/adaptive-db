@@ -31,7 +31,7 @@ object BenchmarkMain:
   )
 
   /** The families that need no prepared dataset. */
-  private val Families = Vector("sql-path", "telemetry", "actuator")
+  private val Families = Vector("sql-path", "telemetry", "actuator", "ffi")
 
   /** Runs the chosen family. */
   def main(args: Array[String]): Unit =
@@ -54,7 +54,7 @@ object BenchmarkMain:
       case "sql-path" => SqlPathFamily.run(settings)
       case "telemetry" => TelemetryFamily.run(settings)
       case "actuator" => ActuatorFamily.run(settings)
-      case _ => SqlPathFamily.run(settings)
+      case _ => FfiFamily.run(settings)
     println(s"family $family: ${text.length} bytes${out.fold("")(p => s" -> $p")}")
 
   /** Parses `--family`, `--data`, `--native-lib`, `--out` and `--scale`. The pre-2.5.4.1 options
