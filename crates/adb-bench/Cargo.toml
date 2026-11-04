@@ -1,0 +1,14 @@
+[package]
+name = "adb-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Benchmark harness of Adaptive DB: measurement plans, robust statistics, environment record, fsync control probe and the schema-3 report"
+
+# Deliberately no dependency on the engine: the harness measures it from outside, and the same
+# crate can time any closure.
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
