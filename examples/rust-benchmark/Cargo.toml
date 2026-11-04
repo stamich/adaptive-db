@@ -21,3 +21,7 @@ serde_json.workspace = true
 [[bin]]
 name = "memory"
 path = "src/bin/memory/main.rs"
+
+[[bin]]
+name = "scaling"
+path = "src/bin/scaling/main.rs"
