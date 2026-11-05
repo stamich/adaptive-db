@@ -19,7 +19,7 @@ cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 echo "== Rust: release build, relational demo, migration tool, data-plane benchmark, workload benchmark (rust_native)"
-cargo build --release -p adb-ffi -p adb-migrate
+cargo build --release -p adb-ffi -p adb-migrate -p adb-benchmark-rust
 cargo run --release -p adb-rust-demo
 # Benchmark gates: exit 3 (unstable) and 4 (diagnostic, e.g. the governor is not `performance`) say how
 # far the numbers can be trusted; they are not build failures. Only 1 (fail) and 2 (tool error) are.

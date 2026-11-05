@@ -67,6 +67,9 @@ object Runner:
     /** The last result; volatile, so the write cannot be elided. */
     @volatile var value: Any = null
 
+  /** Upper bound on the calibrated groups run after calibration while the JIT is still compiling. */
+  private val SettleRounds = 60
+
   /** Compilation time and GC counters, read before and after a phase. */
   private final case class Counters(compileMs: Long, gcCount: Long, gcMs: Long)
 
@@ -112,6 +115,22 @@ object Runner:
         i += 1
       if System.nanoTime() - began >= plan.minSampleNs || iterations >= plan.maxIterations then calibrated = true
       else iterations = math.min(iterations * 2, plan.maxIterations)
+    // The JIT needs thousands of calls, not five: keep running calibrated groups until two in a row
+    // compile (almost) nothing, so the samples are not taken while the code is still being compiled.
+    var quietRounds = 0
+    var rounds = 0
+    val maxRounds = if plan.minSampleNs <= 0L then 0 else if plan.isQuick then 2 else SettleRounds
+    while quietRounds < 2 && rounds < maxRounds do
+      val before = counters().compileMs
+      val began = System.nanoTime()
+      var i = 0L
+      while i < iterations do
+        last = body
+        Sink.value = last
+        i += 1
+      val roundNs = System.nanoTime() - began
+      if (counters().compileMs - before) * 100.0 <= roundNs / 1e6 then quietRounds += 1 else quietRounds = 0
+      rounds += 1
     val afterWarmup = counters()
     val measuredFrom = System.nanoTime()
     val batches = Vector.fill(plan.batches) {
