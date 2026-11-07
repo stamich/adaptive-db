@@ -43,8 +43,11 @@ object MeasurementPlan:
   /** Environment variable that overrides the minimum sample duration of CPU-bound plans, in ms. */
   val MinSampleMsEnv = "ADB_BENCH_MIN_SAMPLE_MS"
 
-  /** CPU-bound release plan: 5 warm-ups, samples of at least 50 ms, 3 batches of 7. */
-  val Release: MeasurementPlan = MeasurementPlan(5, 50_000_000L, 1L << 20, 3, 7)
+  /** CPU-bound release plan: 5 warm-ups, samples of at least 50 ms, 3 batches of 7. Up to 2^26
+    * iterations per sample, so a case of a few nanoseconds still fills 50 ms (with 2^20 a 2 ns case
+    * gave 2 ms samples, and a few ms of background compilation made it look cold).
+    */
+  val Release: MeasurementPlan = MeasurementPlan(5, 50_000_000L, 1L << 26, 3, 7)
 
   /** A smoke plan: one batch of 5 samples of at least 2 ms. */
   val Quick: MeasurementPlan = MeasurementPlan(1, 2_000_000L, 1L << 20, 1, 5)

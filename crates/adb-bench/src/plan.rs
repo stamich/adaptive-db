@@ -32,12 +32,13 @@ pub struct MeasurementPlan {
 /// Constructors and derived quantities of [`MeasurementPlan`].
 impl MeasurementPlan {
     /// The release plan for CPU-bound cases: 5 warm-up calls, samples of at least 50 ms,
-    /// 3 batches of 7 samples (the shape ACE uses).
+    /// 3 batches of 7 samples (the shape ACE uses). Up to 2^26 iterations per sample, so a case of a
+    /// few nanoseconds still fills the 50 ms.
     pub const fn release() -> Self {
         Self {
             warmup_invocations: 5,
             min_sample: Duration::from_millis(50),
-            max_iterations: 1 << 20,
+            max_iterations: 1 << 26,
             batches: 3,
             samples_per_batch: 7,
         }
