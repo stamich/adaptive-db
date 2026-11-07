@@ -35,7 +35,10 @@ class LauncherTest(unittest.TestCase):
 
 class CommittedReportsTest(unittest.TestCase):
     def test_every_committed_report_validates(self):
-        paths = glob.glob(os.path.join(ROOT, "examples", "results", "**", "*.json"), recursive=True)
+        # `*.gate.json` are gate verdicts written by bench_run.py before it named them `<report>.gate`;
+        # stale copies may still lie in a working tree. They are not reports.
+        paths = [p for p in glob.glob(os.path.join(ROOT, "examples", "results", "**", "*.json"), recursive=True)
+                 if not p.endswith(".gate.json")]
         self.assertTrue(paths)
         for path in paths:
             document = bench_lib.load(path)

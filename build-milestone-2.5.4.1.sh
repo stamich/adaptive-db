@@ -28,6 +28,8 @@ cargo run --release -p adb-rust-demo
 bench() { "$@" || { code=$?; if [[ $code -eq 3 || $code -eq 4 ]]; then echo "note: gate status $code (see docs/BENCHMARKS.md)"; else exit "$code"; fi; }; }
 echo "== Benchmark tools: unit tests and the report validator on the committed reports"
 python3 -m unittest discover -s scripts/tests
+# gate verdicts are not reports; remove those an older bench_run.py wrote as *.gate.json
+rm -f examples/results/*.gate.json examples/results/*/*.gate.json
 python3 scripts/bench_validate.py examples/results/*.json
 bench python3 scripts/bench_run.py --out examples/results/2.5.4.1-rust-local.json \
   --cmd "target/release/adb-benchmark-rust --output {out}"
