@@ -37,7 +37,7 @@ design follows the harness of ACE (`ace-bench`), adapted to a database that is b
 | 21 | `--repeat` with deterministic and spread gates (`bench_repeat.py`) | done |
 | 22 | Interleaved A/B with an A/A control (`bench_ab.py`) | done |
 | 23 | Gate exit codes 0/1/3/4 wired together, remeasure on unstable (`bench_run.py`, `check-benchmarks.py`) | done |
-| 24 | Calibrate limits on the reference machine (needs the user's Ryzen run) | open |
+| 24 | Calibrate limits on the reference machine: batch MAD limit confirmed by the first Ryzen run; `--repeat` and A/B limits still need repeat and A/A runs | in progress |
 | 25 | `bench_report.py`, `bench_compare.py` | done |
 | 26 | `scripts/benchmark.sh`, `bench-jvm-family.sh`, updated `benchmark-*.sh` and build script | done |
 | 27 | Tests (script tests, launcher, committed reports, harness tests) | done |

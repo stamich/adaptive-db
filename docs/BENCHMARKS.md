@@ -46,6 +46,25 @@ durable plan. On a disk where `fsync` costs 7 ms, the durable plan made the `wor
 for close to an hour; with the heavy plan it takes 10-20 minutes. Families print one progress line per
 section to stderr.
 
+## Calibration on the reference machine
+
+First reference run (Ryzen 9 5950X, `performance` governor, data on ext4, `fsync` p50 2.2-5.4 ms),
+86 timed cases in `rust-local`, `workloads` (Rust) and `workloads` (JVM):
+
+| Family | Cases | Median batch MAD | 90th percentile | Highest |
+|---|---:|---:|---:|---:|
+| rust-local | 17 | 0.08 % | 2.0 % | 4.3 % (`commit_single_row.n_threads`) |
+| workloads (Rust) | 38 | 0.15 % | 1.4 % | 3.3 % (`analyze.jo_b`); L excluded, see below |
+| workloads (JVM) | 31 | 0.08 % | 0.8 % | 6.3 % (`A planning_only`, measured while compiling) |
+
+* The **5 % batch MAD limit holds**: no case that was warm and not a poll-bound latency exceeded it.
+* `L_projection_wait_latency` measured 49.9 %: its consumer polls every 200 µs, so the spread is the poll
+  interval. Its stability is no longer judged (`stability_skipped_reason`).
+* The JVM cases above 1 % were measured while the JIT was compiling; the runner now settles the JIT for
+  at least 2 s.
+* Not calibrated yet: the run-to-run spread of `--repeat` (10 %) and the A/B threshold (5 %), which need
+  `--repeat 3` and A/A runs on the same machine.
+
 ## Report schema 3
 
 Every family writes one JSON document: `schema` (3), `milestone`, `family`, `environment`,
