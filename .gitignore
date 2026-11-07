@@ -5,3 +5,6 @@
 .demo-data/
 .bench-data/
 __pycache__/
+# gate verdicts of scripts/bench_run.py
+*.gate
+*.gate.json

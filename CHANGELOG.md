@@ -1,7 +1,7 @@
 # Adaptive DB Changelog
 
 This changelog summarizes the evolution of the repository from the original Milestone 1.0 through
-Milestone 2.5.4. Hardened patch releases preserve the functional scope of
+Milestone 2.5.4.1. Hardened patch releases preserve the functional scope of
 their parent milestone and focus on correctness, crash safety, corruption handling, documentation,
 and build reproducibility.
 
@@ -9,6 +9,46 @@ and build reproducibility.
 (2.2.1, 2.2.2, 2.2.3). From 2.3.0 on, the minor number is the milestone and the patch number is
 for fixes only: 2.3.0 is Milestone 2.3, 2.3.1 would fix it, Milestone 2.4 is 2.4.0 and
 Milestone 2.5 is 2.5.0 (its proposals called it 2.5, 2.5.1 and 2.5.2).
+
+## 2.5.4.1 — a trustworthy benchmark harness (in progress)
+
+No engine change: the C ABI stays 9, plan wire v4 and data format 4 are unchanged. The Cargo crates
+stay `2.5.4`; the engine string, JVM build, scripts and workflows report `2.5.4.1`. Reason: the same
+2.5.4 code wrote 5.1k or 42.0k rows/s depending on the CPU governor, and the reports could not say
+which. Plan and status: `docs/milestone-2.5.4.1.md`, rules: `docs/BENCHMARKS.md`.
+
+### Added
+- Crate `adb-bench`: `MeasurementPlan` (release, quick and durable plans) and `measure` /
+  `measure_with_setup`; `SampleStats` (median of medians, batch MAD %, outliers reported and never
+  removed, `Stability`); `Environment` and `RuntimeSnapshot` (governor, frequency, temperature, load,
+  toolchain); `StorageInfo` (filesystem, mount, device, free space, RAM disks flagged); `FsyncProbe`
+  (4 KiB write + `fdatasync` control); a counting allocator; `Report` and `validate` (report schema 3,
+  which keeps every 2.5.4 key and adds a `timing` object per case).
+- Rust benchmarks on the harness: `rust-local`, `workloads` (with durable plans), `memory` (bytes and
+  calls per operation) and `scaling` (read scaling, write amplification, recovery over log size).
+- Scala module `jvm/adb-bench` (plan, statistics, runner with a rotating interleaved mode, JIT and GC
+  record, environment with fork record, JSON report) and the JVM families `sql-path`, `telemetry`,
+  `actuator`, `ffi` and `workloads`; `adb-benchmark` selects them with `--family`.
+- Tools: `bench_validate.py`, `bench_gate.py` (governor, storage, stability, JIT and schema gates;
+  statuses pass, skipped, unstable, diagnostic, fail), `bench_repeat.py` (`--repeat N`, deterministic
+  and spread gates), `bench_ab.py` (interleaved A/B against a git ref with an A/A control),
+  `bench_run.py` (remeasure while unstable), `bench_report.py`, `bench_compare.py` and the launcher
+  `scripts/benchmark.sh` (`all` or one family; `--quick`, `--repeat`, `--ab`). Exit codes 0 pass, 1 fail,
+  3 unstable, 4 diagnostic.
+- CI: a benchmark-tools job, the quick plan and the report validator; timings never gate CI.
+- Tag `v2.5.4` on the merge of PR #117, the baseline for A/B runs.
+
+### Changed
+- `build-milestone-2.5.4.sh` is now `build-milestone-2.5.4.1.sh`; benchmark scripts write
+  `examples/results/2.5.4.1-*`. `benchmark-db.sh` and `benchmark-ffi.sh` are shortcuts over the new
+  tools; `ADB_BENCH_ITERATIONS`, `ADB_BENCH_WARMUP_MS` and `ADB_BENCH_DATA` are ignored (the
+  measurement plan decides). The JVM benchmark's `--iterations`, `--gateway-iterations` and
+  `--warmup-ms` are accepted and ignored.
+
+### Not yet done
+The calibration of the stability and spread limits (all of them provisional) and the reference-machine
+release run and baseline, which need the Ryzen 9 5950X with the `performance` governor. No 2.5.4.1
+reference numbers exist yet.
 
 ## 2.5.4 — AUTO_SAFE actuator
 

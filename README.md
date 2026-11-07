@@ -1,4 +1,4 @@
-# Adaptive DB — Milestone 2.5.4
+# Adaptive DB — Milestone 2.5.4.1
 
 [![CI](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml/badge.svg)](https://github.com/stamich/adaptive-db/actions/workflows/ci.yml)
 
@@ -16,6 +16,20 @@ evolution (2.4.0: versioned schemas owned by the engine, changed without rewriti
 2.5.0, a global commit order, a change log derived from the canonical log, a registry of
 projections with their freshness, and session-level consistency (`SET SESSION CONSISTENCY`) and, since
 2.5.1, a plan cache in the SQL gateway and, since 2.5.2, sampled query telemetry (cheaper to capture since 2.5.2.1) and, since 2.5.3, a workload advisor that recommends indexes and `ANALYZE` from that telemetry and, since 2.5.4, an opt-in `auto_safe` actuator that carries a recommendation out, measures it and keeps or undoes it.
+
+## What 2.5.4.1 adds
+
+2.5.4.1 changes no engine behaviour. It gives the project a **trustworthy benchmark harness**: the
+new crate `adb-bench` (measurement plan, median of medians, batch MAD stability, outliers that are
+reported and never removed, a record of the machine and the storage, and an fsync control probe).
+The reason is the 2.5.4 finding that identical code wrote 5.1k or 42.0k rows/s depending on the CPU
+governor. The C ABI stays 9, plan wire v4 and data format 4 are unchanged, and the Cargo crates stay
+`2.5.4`; the engine string, the JVM build, the scripts and the workflows say **2.5.4.1**.
+
+The milestone is delivered task by task (31 in all; 29 are done, the calibration of the limits and the
+release run need the reference machine). Run it with `scripts/benchmark.sh all` (`--quick`,
+`--repeat N`, `--ab REF`); the rules of measurement, the families, the gates and their exit codes are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and
+[docs/milestone-2.5.4.1.md](docs/milestone-2.5.4.1.md).
 
 ## What 2.5.4 adds
 
@@ -55,7 +69,8 @@ advice. The default stays `off`.
 **Upgrading from 2.5.3:** rebuild the JVM modules; the native library is unchanged except for its
 version string. Nothing happens until `SET adaptive = auto_safe`.
 
-**Numbering:** 2.5.4 has three components, so the Cargo crates are `2.5.4`.
+**Numbering:** 2.5.4 has three components, so the Cargo crates are `2.5.4`. 2.5.4.1 has four, which Cargo
+does not accept, so the crates stay `2.5.4` and the engine string, JVM build and scripts say `2.5.4.1`.
 
 ## What 2.5.3 adds
 
@@ -378,9 +393,9 @@ A complete relational example: `cargo run --release -p adb-rust-demo`.
 ## Build and validation
 
 ```bash
-./build-milestone-2.5.4.sh   # fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
+./build-milestone-2.5.4.1.sh #  fmt, clippy (incl. docs lints), tests, rustdoc, Rust demo,
                              # benchmarks, Java FFM smoke test, JVM tests + benchmarks + demo
-./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.4 through the JVM CLI
+./demo/run-demo.sh           # feature tour 1.0.1 -> 2.5.4 (2.5.4.1 adds no phase) through the JVM CLI
 # Benchmarks on Linux: first `sudo cpupower frequency-set -g performance`. With the default governor
 # write and commit rates were 2 to 8 times lower for identical code (examples/results/README.md).
 ./scripts/benchmark-db.sh    # workloads, rust_native path, index builds, schema evolution (F-H), consistency (I-O)
@@ -403,12 +418,13 @@ and (plan cache, 2.5.1, [docs/plan-cache.md](docs/plan-cache.md)) `examples/jvm-
 and (telemetry, 2.5.2 and 2.5.2.1, [docs/telemetry.md](docs/telemetry.md)) `examples/jvm-telemetry-smoke/run.sh`
 and (advisor, 2.5.3, [docs/advisor.md](docs/advisor.md)) `examples/jvm-advisor-smoke/run.sh`
 and (actuator, 2.5.4, [docs/actuator.md](docs/actuator.md)) `examples/jvm-actuator-smoke/run.sh`.
+The benchmark harness (2.5.4.1) is tested by `cargo test -p adb-bench`.
 
 ## Repository layout
 
 ```text
 crates/        Rust engine (core, journal, page, buffer, btree, storage, schema, wal, tx, index,
-               execution, plan-wire, stats, change-log, projection-runtime, engine, ffi) and the adb-migrate tool
+               execution, plan-wire, stats, change-log, projection-runtime, engine, ffi), the adb-migrate tool and the adb-bench benchmark harness
 include/adb.h  C ABI v9
 jvm/           Scala/Java: model, statistics, schema, consistency, catalog (engine catalog, indexes), plan cache, telemetry,
                advisor, actuator, SQL, binder, optimizer (estimation, cost, join order, access paths), physical planning, FFM,

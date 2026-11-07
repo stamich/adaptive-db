@@ -23,25 +23,29 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::harness::tempdir;
 use adb_change_log::{ChangePayload, ChangeRetentionPolicy};
 use adb_core::{CommitSeq, Row, RowId, Value};
 use adb_engine::{Database, DatabaseOptions};
 use adb_projection_runtime::WaitOutcome;
 use serde_json::json;
-use tempfile::tempdir;
 
-use crate::{summary, Result};
+use crate::harness::{case, cpu_plan, durable_plan, heavy_plan};
+use crate::Result;
+use adb_bench::SampleStats;
 
 /// Commits of the throughput and streaming measurements at scale factor 1.
 const BASE_COMMITS: u64 = 5_000;
+/// Commits per invocation of the throughput measurement (I) at scale factor 1. Its result is a
+/// rate, so it needs far fewer commits than the log the streaming workloads read: at a few
+/// milliseconds per `fsync`, 5 000 commits took 40 to 55 s per invocation.
+const THROUGHPUT_COMMITS: u64 = 1_000;
 /// Rows per commit of the batched throughput measurement.
 const BATCH_ROWS: u64 = 100;
 /// Commits per batch a consumer asks for.
 const FEED_COMMITS: usize = 500;
 /// Change-log segment size of the multi-segment measurements: small, so the log rolls over.
 const SMALL_SEGMENT_BYTES: u64 = 256 * 1024;
-/// Waits timed in the wait-latency measurement.
-const WAITS: usize = 200;
 
 /// A row with a 64-byte payload.
 fn payload(n: u64) -> Row {
@@ -76,25 +80,40 @@ fn open_small(path: &Path) -> Result<Database> {
     )?)
 }
 
-/// Commit throughput and log growth for one row and for [`BATCH_ROWS`] rows per commit.
+/// Commit throughput and log growth for one row and for [`BATCH_ROWS`] rows per commit, with the
+/// heavy plan (each invocation loads `commits` commits into a fresh database).
 fn commit_throughput(commits: u64) -> Result<serde_json::Value> {
     let mut report = serde_json::Map::new();
     for (name, rows) in [("one_row_per_commit", 1), ("batched", BATCH_ROWS)] {
-        let dir = tempdir()?;
-        let db = Database::open(dir.path())?;
-        let before = db.change_log().total_bytes();
-        let start = Instant::now();
-        load(&db, 1, commits, rows)?;
-        let seconds = start.elapsed().as_secs_f64();
-        let bytes = db.change_log().total_bytes() - before;
+        eprintln!("workloads: I_commit_with_change_log {name} ({commits} commits per invocation)");
+        let measured = adb_bench::measure(&heavy_plan(), || {
+            let dir = tempdir().expect("data directory");
+            let db = Database::open(dir.path()).expect("open");
+            let before = db.change_log().total_bytes();
+            load(&db, 1, commits, rows).expect("commits");
+            let bytes = db.change_log().total_bytes() - before;
+            (dir, db, bytes)
+        });
+        let stats = SampleStats::from_measured(&measured);
+        let bytes = measured.last.2;
+        let seconds = stats.median_ns / 1e9;
         report.insert(
             name.into(),
-            json!({"commits": commits, "rows_per_commit": rows, "seconds": seconds,
-                   "commits_per_s": commits as f64 / seconds,
-                   "rows_per_s": (commits * rows) as f64 / seconds,
-                   "change_log_bytes_per_commit": bytes as f64 / commits as f64}),
+            case(
+                &stats,
+                vec![
+                    ("commits", json!(commits)),
+                    ("rows_per_commit", json!(rows)),
+                    ("seconds", json!(seconds)),
+                    ("commits_per_s", json!(commits as f64 / seconds)),
+                    ("rows_per_s", json!((commits * rows) as f64 / seconds)),
+                    (
+                        "change_log_bytes_per_commit",
+                        json!(bytes as f64 / commits as f64),
+                    ),
+                ],
+            ),
         );
-        db.close()?;
     }
     Ok(serde_json::Value::Object(report))
 }
@@ -121,20 +140,18 @@ fn stream(db: &Database, expected_changes: u64) -> Result<serde_json::Value> {
     )
 }
 
-/// Time to open a cursor and read its first batch after `position`.
-fn cursor_start(db: &Database, position: CommitSeq, iters: usize) -> Result<serde_json::Value> {
-    let mut samples = Vec::with_capacity(iters);
-    let mut first = 0;
-    for _ in 0..iters {
-        let start = Instant::now();
-        let mut cursor = db.change_log().cursor(position)?;
-        let batch = cursor.next_batch(FEED_COMMITS, 4 << 20)?;
-        samples.push(start.elapsed().as_secs_f64() * 1e3);
-        first = batch.map_or(0, |b| b.first_commit_seq.0);
-    }
-    let mut report = summary(&samples);
-    report.insert("first_commit_seq".into(), json!(first));
-    Ok(serde_json::Value::Object(report))
+/// Time to open a cursor and read its first batch after `position`, with the CPU-bound plan.
+fn cursor_start(db: &Database, position: CommitSeq) -> Result<serde_json::Value> {
+    let measured = adb_bench::measure(&cpu_plan(), || {
+        let mut cursor = db.change_log().cursor(position).expect("cursor");
+        let batch = cursor.next_batch(FEED_COMMITS, 4 << 20).expect("batch");
+        batch.map_or(0, |b| b.first_commit_seq.0)
+    });
+    let stats = SampleStats::from_measured(&measured);
+    Ok(case(
+        &stats,
+        vec![("first_commit_seq", json!(measured.last))],
+    ))
 }
 
 /// Latency from a commit to its asynchronous projection reaching it.
@@ -155,28 +172,41 @@ fn wait_latency() -> Result<serde_json::Value> {
             }
         }
     });
-    let mut samples = Vec::with_capacity(WAITS);
-    let mut timed_out = 0;
-    let mut next = 1;
-    for _ in 0..WAITS {
-        next = load(&db, next, 1, 1)?;
-        let target = db.latest_commit_seq();
-        let start = Instant::now();
-        let outcome = db
-            .projection_registry()
-            .wait_until(id, target, Duration::from_secs(5));
-        samples.push(start.elapsed().as_secs_f64() * 1e3);
-        if outcome != WaitOutcome::Reached {
-            timed_out += 1;
-        }
-    }
+    // One invocation = one commit followed by one wait for the projection to reach it; the commit
+    // is part of the invocation but is cheap next to the wait only when the consumer keeps up.
+    // The wait is timed on its own inside the invocation, so the sample is the wait alone.
+    let timed_out = std::cell::Cell::new(0u64);
+    let next = std::cell::Cell::new(1u64);
+    let measured = adb_bench::measure_with_setup(
+        &durable_plan(),
+        || {
+            next.set(load(&db, next.get(), 1, 1).expect("commit"));
+            db.latest_commit_seq()
+        },
+        |target| {
+            let outcome = db
+                .projection_registry()
+                .wait_until(id, target, Duration::from_secs(5));
+            if outcome != WaitOutcome::Reached {
+                timed_out.set(timed_out.get() + 1);
+            }
+        },
+    );
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     consumer.join().expect("consumer thread");
-    let mut report = summary(&samples);
-    report.insert("waits".into(), json!(WAITS));
-    report.insert("timed_out".into(), json!(timed_out));
+    let stats = SampleStats::from_measured(&measured);
+    let report = case(
+        &stats,
+        vec![
+            (
+                "waits",
+                json!(durable_plan().total_samples() + durable_plan().warmup_invocations + 1),
+            ),
+            ("timed_out", json!(timed_out.get())),
+        ],
+    );
     db.close()?;
-    Ok(serde_json::Value::Object(report))
+    Ok(report)
 }
 
 /// A consumer fed a backlog of `commits` commits.
@@ -275,7 +305,7 @@ fn prune(commits: u64) -> Result<serde_json::Value> {
 }
 
 /// Runs every 2.5.0 workload; `scale` multiplies the commit counts.
-pub fn report(scale: u64, iters: usize) -> Result<serde_json::Value> {
+pub fn report(scale: u64) -> Result<serde_json::Value> {
     let commits = BASE_COMMITS * scale;
     let rows_per_commit = 10;
     let dir = tempdir()?;
@@ -284,16 +314,16 @@ pub fn report(scale: u64, iters: usize) -> Result<serde_json::Value> {
     let head = db.latest_commit_seq();
     let streaming = stream(&db, commits * rows_per_commit)?;
     let starts = json!({
-        "start": cursor_start(&db, CommitSeq::ZERO, iters)?,
-        "middle": cursor_start(&db, CommitSeq(head.0 / 2), iters)?,
-        "end": cursor_start(&db, CommitSeq(head.0.saturating_sub(1)), iters)?,
+        "start": cursor_start(&db, CommitSeq::ZERO)?,
+        "middle": cursor_start(&db, CommitSeq(head.0 / 2))?,
+        "end": cursor_start(&db, CommitSeq(head.0.saturating_sub(1)))?,
         "segments": db.change_log().segment_count(),
     });
     db.close()?;
     Ok(json!({
         "setup": {"commits": commits, "rows_per_commit": rows_per_commit, "segment_bytes": SMALL_SEGMENT_BYTES},
         "workloads": {
-            "I_commit_with_change_log": commit_throughput(commits)?,
+            "I_commit_with_change_log": commit_throughput(THROUGHPUT_COMMITS * scale)?,
             "J_change_log_stream": streaming,
             "K_cursor_start": starts,
             "L_projection_wait_latency": wait_latency()?,
