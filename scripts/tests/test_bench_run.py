@@ -31,8 +31,14 @@ class RunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "r.json")
             code = bench_run.main(["--out", out, "--cmd", "fake {out}", "--retries", str(retries)], run=replay)
-            gate = read_json(out + ".gate.json") if os.path.exists(out + ".gate.json") else None
+            gate = read_json(out + ".gate") if os.path.exists(out + ".gate") else None
             return code, gate
+
+    def test_the_gate_file_is_not_matched_by_a_json_glob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "r.json")
+            bench_run.main(["--out", out, "--cmd", "fake {out}"], run=Replay([document()]))
+            self.assertEqual(sorted(os.listdir(tmp)), ["r.json", "r.json.gate"])
 
     def test_a_good_run_is_not_repeated(self):
         replay = Replay([document()])

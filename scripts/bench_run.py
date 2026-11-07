@@ -4,7 +4,7 @@
 ``bench_run.py --out report.json --cmd "<command with {out}>"`` runs the command, evaluates the report
 with ``bench_gate`` and, when the verdict is ``unstable`` (the numbers moved more than the limit
 allows, a noisy moment rather than a machine fault), runs the family again, up to ``--retries``
-times. The last report is kept; its gate result is written next to it as ``<out>.gate.json`` with the
+times. The last report is kept; its gate result is written next to it as ``<out>.gate`` (JSON, but not named *.json, so globs over reports skip it) with the
 list of attempts. Only ``unstable`` is retried: ``diagnostic`` (a machine that gives no comparable
 numbers) and ``fail`` (a wrong value, a refused storage) do not improve by measuring again.
 
@@ -66,7 +66,7 @@ def main(argv=None, run=subprocess.run) -> int:
         print(f"bench_run: {error}", file=sys.stderr)
         return 2
     verdict = dict(verdict, attempts=statuses)
-    with open(args.out + ".gate.json", "w", encoding="utf-8") as handle:
+    with open(args.out + ".gate", "w", encoding="utf-8") as handle:
         json.dump(verdict, handle, indent=2)
         handle.write("\n")
     if verdict["status"] not in (bench_lib.PASS, bench_lib.SKIPPED):
