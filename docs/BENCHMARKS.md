@@ -62,8 +62,21 @@ First reference run (Ryzen 9 5950X, `performance` governor, data on ext4, `fsync
   interval. Its stability is no longer judged (`stability_skipped_reason`).
 * The JVM cases above 1 % were measured while the JIT was compiling; the runner now settles the JIT for
   at least 2 s.
+* The other families of the same run: `memory` (deterministic counts identical across its repeats),
+  `scaling` (highest MAD 4.35 %), `ffi` (1.2 %); `sql-path`, `telemetry` and `actuator` had cases measured
+  while compiling, several of them nanosecond cases whose samples were capped at 2^20 iterations
+  (2-6 ms instead of 50 ms) - the cap is now 2^26. `actuator`'s advisory controller tick (27.7 %, cold)
+  and the 5 000-row `CREATE INDEX` stall (5.7 %) were the only warm-or-cold cases above the limit.
 * Not calibrated yet: the run-to-run spread of `--repeat` (10 %) and the A/B threshold (5 %), which need
   `--repeat 3` and A/A runs on the same machine.
+
+## Findings of the first reference run
+
+* **Point lookups do not scale with threads.** One thread does 1.03 M lookups/s; 2 threads together
+  0.78 M/s, 4 threads 0.61 M/s, 16 threads 0.52 M/s (speedup 0.51). Concurrent readers serialise and
+  contend somewhere on the read path. This is an engine issue for a later milestone, not a harness one.
+* **Group commit works but saturates early**: single-row commits go from 136/s (1 thread) to 356/s
+  (8 threads, speedup 2.6) and stay there at 16 threads, on a disk where one `fsync` costs 2-7 ms.
 
 ## Report schema 3
 
