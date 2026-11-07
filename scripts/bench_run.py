@@ -69,6 +69,10 @@ def main(argv=None, run=subprocess.run) -> int:
     with open(args.out + ".gate.json", "w", encoding="utf-8") as handle:
         json.dump(verdict, handle, indent=2)
         handle.write("\n")
+    if verdict["status"] not in (bench_lib.PASS, bench_lib.SKIPPED):
+        for name, gate in verdict["gates"].items():
+            if gate["status"] not in (bench_lib.PASS, bench_lib.SKIPPED):
+                print(f"  {name}: {gate['status']}: {gate.get('reason', '')}")
     print(f"{args.out}: {verdict['status']} after {len(statuses)} attempt(s) {statuses}")
     return bench_lib.exit_code(verdict["status"])
 

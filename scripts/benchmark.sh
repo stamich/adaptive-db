@@ -21,6 +21,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Durable benchmarks must not run on a RAM disk (/tmp is one on many systems): the storage gate fails
+# them. Default to a directory under the repository, i.e. on the disk the repository lives on.
+export ADB_BENCH_DATA_DIR="${ADB_BENCH_DATA_DIR:-$ROOT/target/bench-data}"
+mkdir -p "$ADB_BENCH_DATA_DIR"
 RUST_FAMILIES=(rust-local workloads memory scaling)
 JVM_FAMILIES=(sql-path telemetry actuator ffi)
 TARGET="all"; REPEAT=1; AB=""; OUT_DIR="$ROOT/examples/results/2.5.4.1"; SCALE=1

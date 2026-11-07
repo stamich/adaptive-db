@@ -18,6 +18,8 @@ cargo clippy --workspace --all-targets -- -D warnings -W missing_docs -W clippy:
 cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+export ADB_BENCH_DATA_DIR="${ADB_BENCH_DATA_DIR:-$PWD/target/bench-data}"  # not /tmp: a RAM disk fails the storage gate
+mkdir -p "$ADB_BENCH_DATA_DIR"
 echo "== Rust: release build, relational demo, migration tool, data-plane benchmark, workload benchmark (rust_native)"
 cargo build --release -p adb-ffi -p adb-migrate -p adb-benchmark-rust
 cargo run --release -p adb-rust-demo

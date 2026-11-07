@@ -25,7 +25,8 @@ case "$(uname -s)" in
   *) echo "ERROR: unsupported OS" >&2; exit 1 ;;
 esac
 LIB="${ADB_NATIVE_LIBRARY:-$DEFAULT_LIB}"
-DATA="$(mktemp -d)/adb-bench"
+BASE="${ADB_BENCH_DATA_DIR:-$ROOT/target/bench-data}"; mkdir -p "$BASE"
+DATA="$(mktemp -d -p "$BASE")/adb-bench"
 trap 'rm -rf "$(dirname "$DATA")"' EXIT
 
 if [[ "$FAMILY" == "workloads" ]]; then
