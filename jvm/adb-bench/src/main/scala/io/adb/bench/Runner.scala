@@ -67,8 +67,11 @@ object Runner:
     /** The last result; volatile, so the write cannot be elided. */
     @volatile var value: Any = null
 
-  /** Upper bound on the calibrated groups run after calibration while the JIT is still compiling. */
-  private val SettleRounds = 60
+  /** Shortest JIT settling after calibration, in nanoseconds (release plans). */
+  private val SettleMinNs = 2_000_000_000L
+
+  /** Longest JIT settling after calibration, in nanoseconds (release plans). */
+  private val SettleMaxNs = 10_000_000_000L
 
   /** Compilation time and GC counters, read before and after a phase. */
   private final case class Counters(compileMs: Long, gcCount: Long, gcMs: Long)
@@ -115,12 +118,17 @@ object Runner:
         i += 1
       if System.nanoTime() - began >= plan.minSampleNs || iterations >= plan.maxIterations then calibrated = true
       else iterations = math.min(iterations * 2, plan.maxIterations)
-    // The JIT needs thousands of calls, not five: keep running calibrated groups until two in a row
-    // compile (almost) nothing, so the samples are not taken while the code is still being compiled.
+    // The JIT needs thousands of calls and seconds, not five calls: keep running calibrated groups
+    // for at least SettleMinNs (the 2.5.4 harness warmed up for 2 s) and until three groups in a row
+    // spend at most 1 % of their time compiling, but no longer than SettleMaxNs. On the reference
+    // machine two quiet groups were not enough: tiered compilation resumed during the samples.
     var quietRounds = 0
-    var rounds = 0
-    val maxRounds = if plan.minSampleNs <= 0L then 0 else if plan.isQuick then 2 else SettleRounds
-    while quietRounds < 2 && rounds < maxRounds do
+    val settleFrom = System.nanoTime()
+    val settles = plan.minSampleNs > 0L
+    val minNs = if plan.isQuick then 0L else SettleMinNs
+    val maxNs = if plan.isQuick then 2L * plan.minSampleNs else SettleMaxNs
+    def settled(now: Long): Boolean = now - settleFrom >= minNs && quietRounds >= 3
+    while settles && !settled(System.nanoTime()) && System.nanoTime() - settleFrom < maxNs do
       val before = counters().compileMs
       val began = System.nanoTime()
       var i = 0L
@@ -130,7 +138,6 @@ object Runner:
         i += 1
       val roundNs = System.nanoTime() - began
       if (counters().compileMs - before) * 100.0 <= roundNs / 1e6 then quietRounds += 1 else quietRounds = 0
-      rounds += 1
     val afterWarmup = counters()
     val measuredFrom = System.nanoTime()
     val batches = Vector.fill(plan.batches) {
