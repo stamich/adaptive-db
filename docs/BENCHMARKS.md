@@ -37,6 +37,15 @@ calibrates it from A/A and `--repeat` runs on the Ryzen 9 5950X; any status deri
 | Run-to-run spread for `--repeat` | 10 % | `scripts/bench_repeat.py` |
 | A/B and compare: change that counts | 5 % (and above the A/A control) | `bench_ab.py`, `bench_compare.py` |
 
+## The heavy plan
+
+A durable case whose single invocation takes a second or more (loading the dataset, the thousand
+commits of workload I, the write-overhead loads, the single-thread commits of `scaling`) uses the
+**heavy plan**: one warm-up and 3 batches of 3 samples, ten invocations instead of the 27 of the
+durable plan. On a disk where `fsync` costs 7 ms, the durable plan made the `workloads` family run
+for close to an hour; with the heavy plan it takes 10-20 minutes. Families print one progress line per
+section to stderr.
+
 ## Report schema 3
 
 Every family writes one JSON document: `schema` (3), `milestone`, `family`, `environment`,

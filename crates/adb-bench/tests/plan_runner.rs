@@ -114,3 +114,16 @@ fn iterations_never_exceed_the_cap() {
     let measured = measure(&plan, || 1u8);
     assert_eq!(measured.iterations_per_sample, 8);
 }
+
+#[test]
+fn the_heavy_plan_takes_ten_invocations_and_turns_quick_on_request() {
+    let heavy = MeasurementPlan::heavy();
+    assert_eq!(heavy.warmup_invocations + heavy.total_samples(), 10);
+    assert!(!heavy.is_quick());
+    assert_eq!(heavy.max_iterations, 1);
+    assert_eq!(MeasurementPlan::heavy_from_lookup(|_| None), heavy);
+    let quick = MeasurementPlan::heavy_from_lookup(|name| {
+        (name == "ADB_BENCH_QUICK").then(|| "1".to_string())
+    });
+    assert_eq!(quick, MeasurementPlan::durable_quick());
+}

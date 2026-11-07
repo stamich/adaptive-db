@@ -68,6 +68,12 @@ impl Context {
         MeasurementPlan::from_env(durable)
     }
 
+    /// The plan for durable operations that take a second or more each
+    /// ([`MeasurementPlan::heavy`], or the quick durable plan under `ADB_BENCH_QUICK=1`).
+    pub fn heavy_plan(&self) -> MeasurementPlan {
+        MeasurementPlan::heavy_from_lookup(|name| std::env::var(name).ok())
+    }
+
     /// The storage record of [`Context::data_root`]; unknown values in it are `None`.
     pub fn storage(&self) -> StorageInfo {
         StorageInfo::capture(&self.data_root)

@@ -42,7 +42,7 @@ use adb_execution::{
     PhysicalPlan, ScanColumn, SlotId, SortKey,
 };
 use adb_index::{IndexBounds, ScanDirection, ValueBound};
-use harness::{case, durable_plan, invocations, tempdir};
+use harness::{case, durable_plan, heavy_plan, invocations, tempdir};
 use serde_json::json;
 
 /// Result type of the benchmark (any error aborts it).
@@ -455,14 +455,16 @@ fn main() -> Result<()> {
     let cpu = harness::cpu_plan();
     let mut document = Report::new("workloads", "2.5.4.1", &cpu, &context.environment);
     document.set("plan_durable", plan_json(&durable_plan()));
+    document.set("plan_heavy", plan_json(&heavy_plan()));
     document.set("storage", context.storage().to_json());
     let probe_dir = tempdir()?;
     let probe_before = context.probe(probe_dir.path());
 
     // Loading is durable work: measured with the durable plan, a fresh database each time
     // (creating it is not timed). The last loaded database serves every later section.
+    eprintln!("workloads: loading the dataset");
     let load = measure_with_setup(
-        &durable_plan(),
+        &heavy_plan(),
         || {
             let dir = tempdir().expect("data directory");
             let db = Database::open(dir.path()).expect("open");
@@ -488,6 +490,7 @@ fn main() -> Result<()> {
         ],
     );
 
+    eprintln!("workloads: ANALYZE");
     let mut analyze = analyze_tables(&db, loaded)?;
     // HyperLogLog check: sk_events ids are unique, so the distinct count should equal the rows.
     let events = dataset::by_name("sk_events");
@@ -499,6 +502,7 @@ fn main() -> Result<()> {
         json!({"estimated": ids, "actual": events.rows(args.scale)}),
     );
 
+    eprintln!("workloads: index builds");
     let (index_build, index_ids) = build_indexes(&db, args.scale)?;
     let index_id = |name: &str| {
         index_ids
@@ -511,6 +515,7 @@ fn main() -> Result<()> {
     let accounts = dataset::rows("ix_account", args.scale);
     let join_rows =
         dataset::rows("bench_customer", args.scale) + dataset::rows("bench_orders", args.scale);
+    eprintln!("workloads: A-E");
     let workloads = json!({
         "A_hash_join_topk": measure_latest(&db, &workload_a(), join_rows)?,
         "B_hash_join_aggregate_topk": measure_latest(&db, &workload_b(), join_rows)?,
@@ -519,9 +524,12 @@ fn main() -> Result<()> {
         "E_seq_scan_region_eq": measure_latest(&db, &workload_e(), accounts)?,
     });
     // Changes balances: runs after every other measurement of ix_account.
+    eprintln!("workloads: AS OF index read");
     let as_of = as_of_read(&db, balance_index, args.scale)?;
     let write_overhead = durable::write_overhead()?;
+    eprintln!("workloads: schema evolution F-H");
     let schema_evolution = schema::report(args.scale)?;
+    eprintln!("workloads: consistency I-O");
     let consistency = consistency::report(args.scale)?;
 
     let probe_after = context.probe(probe_dir.path());

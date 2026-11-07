@@ -30,12 +30,16 @@ use adb_engine::{Database, DatabaseOptions};
 use adb_projection_runtime::WaitOutcome;
 use serde_json::json;
 
-use crate::harness::{case, cpu_plan, durable_plan};
+use crate::harness::{case, cpu_plan, durable_plan, heavy_plan};
 use crate::Result;
 use adb_bench::SampleStats;
 
 /// Commits of the throughput and streaming measurements at scale factor 1.
 const BASE_COMMITS: u64 = 5_000;
+/// Commits per invocation of the throughput measurement (I) at scale factor 1. Its result is a
+/// rate, so it needs far fewer commits than the log the streaming workloads read: at a few
+/// milliseconds per `fsync`, 5 000 commits took 40 to 55 s per invocation.
+const THROUGHPUT_COMMITS: u64 = 1_000;
 /// Rows per commit of the batched throughput measurement.
 const BATCH_ROWS: u64 = 100;
 /// Commits per batch a consumer asks for.
@@ -77,11 +81,12 @@ fn open_small(path: &Path) -> Result<Database> {
 }
 
 /// Commit throughput and log growth for one row and for [`BATCH_ROWS`] rows per commit, with the
-/// durable plan (each invocation loads `commits` commits into a fresh database).
+/// heavy plan (each invocation loads `commits` commits into a fresh database).
 fn commit_throughput(commits: u64) -> Result<serde_json::Value> {
     let mut report = serde_json::Map::new();
     for (name, rows) in [("one_row_per_commit", 1), ("batched", BATCH_ROWS)] {
-        let measured = adb_bench::measure(&durable_plan(), || {
+        eprintln!("workloads: I_commit_with_change_log {name} ({commits} commits per invocation)");
+        let measured = adb_bench::measure(&heavy_plan(), || {
             let dir = tempdir().expect("data directory");
             let db = Database::open(dir.path()).expect("open");
             let before = db.change_log().total_bytes();
@@ -318,7 +323,7 @@ pub fn report(scale: u64) -> Result<serde_json::Value> {
     Ok(json!({
         "setup": {"commits": commits, "rows_per_commit": rows_per_commit, "segment_bytes": SMALL_SEGMENT_BYTES},
         "workloads": {
-            "I_commit_with_change_log": commit_throughput(commits)?,
+            "I_commit_with_change_log": commit_throughput(THROUGHPUT_COMMITS * scale)?,
             "J_change_log_stream": streaming,
             "K_cursor_start": starts,
             "L_projection_wait_latency": wait_latency()?,

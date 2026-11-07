@@ -13,7 +13,7 @@ use adb_engine::{Database, IndexColumn, IndexSpec};
 use serde_json::{json, Value as Json};
 
 use crate::dataset;
-use crate::harness::{case, durable_plan, tempdir};
+use crate::harness::{case, heavy_plan, tempdir};
 use crate::{ix_account, Result};
 
 /// Rows inserted per write-overhead measurement.
@@ -55,7 +55,8 @@ pub fn write_overhead() -> Result<Json> {
     let mut report = serde_json::Map::new();
     let mut baseline = None;
     for (name, specs) in sets {
-        let measured = measure(&durable_plan(), || {
+        eprintln!("workloads: write_overhead {name}");
+        let measured = measure(&heavy_plan(), || {
             let dir = tempdir().expect("data directory");
             let db = Database::open(dir.path()).expect("open");
             for spec in &specs {

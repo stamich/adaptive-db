@@ -145,7 +145,8 @@ fn relative_to_one_thread(rates: &[(u64, f64)], index: usize) -> (f64, f64) {
 /// Concurrent point lookups and concurrent single-row commits for each thread count.
 fn scaling(args: &Args, context: &Context) -> Result<Json> {
     let cpu = context.plan(false);
-    let durable = context.plan(true);
+    // a single-thread invocation is COMMITS_TOTAL commits: seconds on a disk with a slow fsync
+    let durable = context.heavy_plan();
     let mut out = Map::new();
 
     // ---- reads --------------------------------------------------------------------------------
@@ -319,6 +320,7 @@ fn main() -> Result<()> {
     let cpu = context.plan(false);
     let mut report = Report::new("scaling", "2.5.4.1", &cpu, &context.environment);
     report.set("plan_durable", plan_json(&context.plan(true)));
+    report.set("plan_heavy", plan_json(&context.heavy_plan()));
     report.set("storage", context.storage().to_json());
     let probe_dir = context.tempdir()?;
     let probe_before = context.probe(probe_dir.path());

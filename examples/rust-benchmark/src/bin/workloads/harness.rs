@@ -48,6 +48,13 @@ pub fn durable_plan() -> MeasurementPlan {
     context().plan(true)
 }
 
+/// The plan of durable cases whose single invocation takes a second or more (the dataset load,
+/// thousands of commits): ten invocations instead of 27, so a disk with a slow `fsync` does not
+/// turn one case into half an hour.
+pub fn heavy_plan() -> MeasurementPlan {
+    context().heavy_plan()
+}
+
 /// The JSON of one case: the legacy timing keys, the `timing` object and `extra`.
 pub fn case(stats: &SampleStats, extra: Vec<(&str, Json)>) -> Json {
     let extra: Map<String, Json> = extra.into_iter().map(|(k, v)| (k.to_string(), v)).collect();

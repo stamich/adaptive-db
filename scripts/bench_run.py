@@ -39,6 +39,8 @@ def run_gated(template: str, out: str, retries: int, run=subprocess.run):
     with tempfile.TemporaryDirectory() as tmp:
         for index in range(retries + 1):
             candidate = os.path.join(tmp, f"attempt{index}.json")
+            if index:
+                print(f"bench_run: unstable, measuring again (attempt {index + 1} of {retries + 1})", file=sys.stderr)
             verdict = attempt(template, candidate, run)
             statuses.append(verdict["status"])
             shutil.copyfile(candidate, out)

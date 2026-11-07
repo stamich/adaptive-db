@@ -79,6 +79,29 @@ impl MeasurementPlan {
         }
     }
 
+    /// The plan for durable operations that take a second or more each (loading a dataset,
+    /// thousands of commits on a disk whose `fsync` costs milliseconds): one warm-up, 3 batches of 3
+    /// samples. Ten invocations instead of the 27 of [`Self::durable`] keep such a case within
+    /// minutes, and three batches still give the stability verdict something to judge.
+    pub const fn heavy() -> Self {
+        Self {
+            warmup_invocations: 1,
+            min_sample: Duration::ZERO,
+            max_iterations: 1,
+            batches: 3,
+            samples_per_batch: 3,
+        }
+    }
+
+    /// Chooses the heavy plan, or [`Self::durable_quick`] when [`QUICK_ENV`] asks for quick plans.
+    pub fn heavy_from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        if lookup(QUICK_ENV).is_some_and(|v| v == "1") {
+            Self::durable_quick()
+        } else {
+            Self::heavy()
+        }
+    }
+
     /// Chooses the plan for CPU-bound (`durable == false`) or durable-write cases from the
     /// process environment ([`QUICK_ENV`], [`MIN_SAMPLE_MS_ENV`]).
     pub fn from_env(durable: bool) -> Self {

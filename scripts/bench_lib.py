@@ -77,7 +77,7 @@ def headline(case):
 
 
 #: Top-level keys that describe the run, not a measurement.
-_NOT_CASES = {"environment", "storage", "plan", "plan_durable", "runtime_before", "runtime_after",
+_NOT_CASES = {"environment", "storage", "plan", "plan_durable", "plan_heavy", "runtime_before", "runtime_after",
               "fsync_probe", "host", "repeat", "setup"}
 
 
