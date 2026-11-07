@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_lib  # noqa: E402
 import bench_repeat  # noqa: E402
 
@@ -70,14 +71,14 @@ class RepeatTest(unittest.TestCase):
             paths = []
             for index, ms in enumerate((10.0, 10.1, 10.0)):
                 path = os.path.join(tmp, f"r{index}.json")
-                json.dump(run(ms), open(path, "w"))
+                write_json(path, run(ms))
                 paths.append(path)
             out = os.path.join(tmp, "median.json")
             self.assertEqual(bench_repeat.main(["--out", out, "--inputs", *paths]), 0)
-            self.assertEqual(json.load(open(out))["repeat"]["runs"], 3)
-            writer = f"{sys.executable} -c \"import json,sys; json.dump({run(5.0)!r}, open(sys.argv[1],'w'))\" {{out}}"
+            self.assertEqual(read_json(out)["repeat"]["runs"], 3)
+            writer = f"{sys.executable} -c \"import json,sys; open(sys.argv[1],'w').write(json.dumps({run(5.0)!r}))\" {{out}}"
             self.assertEqual(bench_repeat.main(["--runs", "2", "--out", out, "--cmd", writer]), 0)
-            self.assertEqual(json.load(open(out))["repeat"]["runs"], 2)
+            self.assertEqual(read_json(out)["repeat"]["runs"], 2)
             self.assertEqual(bench_repeat.main(["--runs", "2", "--out", out, "--cmd", "false"]), 2)
             self.assertEqual(bench_repeat.main(["--out", out, "--inputs", os.path.join(tmp, "nope.json")]), 2)
 

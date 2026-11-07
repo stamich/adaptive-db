@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_gate  # noqa: E402
 import bench_lib  # noqa: E402
 
@@ -83,8 +84,8 @@ class GateTest(unittest.TestCase):
     def test_command_line_exit_status_is_the_worst_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             good, slow = os.path.join(tmp, "good.json"), os.path.join(tmp, "slow.json")
-            json.dump(document(), open(good, "w"))
-            json.dump(document(governor="powersave"), open(slow, "w"))
+            write_json(good, document())
+            write_json(slow, document(governor="powersave"))
             self.assertEqual(bench_gate.main([good]), 0)
             self.assertEqual(bench_gate.main([good, slow]), 4)
             self.assertEqual(bench_gate.main([]), 2)

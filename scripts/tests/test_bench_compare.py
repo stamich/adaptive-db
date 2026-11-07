@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_compare  # noqa: E402
 import bench_lib  # noqa: E402
 import bench_report  # noqa: E402
@@ -47,7 +48,7 @@ class CompareTest(unittest.TestCase):
             paths = []
             for name, doc in (("a", with_ms(10)), ("b", with_ms(10)), ("c", with_ms(10, governor="powersave"))):
                 path = os.path.join(tmp, name + ".json")
-                json.dump(doc, open(path, "w"))
+                write_json(path, doc)
                 paths.append(path)
             self.assertEqual(bench_compare.main([paths[0], paths[1]]), 0)
             self.assertEqual(bench_compare.main([paths[0], paths[2]]), 4)
@@ -68,9 +69,9 @@ class ReportTest(unittest.TestCase):
     def test_command_line_writes_a_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, out = os.path.join(tmp, "r.json"), os.path.join(tmp, "r.md")
-            json.dump(with_ms(1.0), open(src, "w"))
+            write_json(src, with_ms(1.0))
             self.assertEqual(bench_report.main([src, "--out", out]), 0)
-            self.assertIn("## ", open(out).read())
+            self.assertIn("## ", read_text(out))
             self.assertEqual(bench_report.main([os.path.join(tmp, "none.json")]), 2)
 
 

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_lib  # noqa: E402
 import bench_run  # noqa: E402
 from test_bench_gate import document  # noqa: E402
@@ -20,7 +21,7 @@ class Replay:
     def __call__(self, argv, check=False):
         out = argv[-1]
         if self.returncode == 0:
-            json.dump(self.documents[min(self.calls, len(self.documents) - 1)], open(out, "w"))
+            write_json(out, self.documents[min(self.calls, len(self.documents) - 1)])
         self.calls += 1
         return type("Done", (), {"returncode": self.returncode})()
 
@@ -30,7 +31,7 @@ class RunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "r.json")
             code = bench_run.main(["--out", out, "--cmd", "fake {out}", "--retries", str(retries)], run=replay)
-            gate = json.load(open(out + ".gate.json")) if os.path.exists(out + ".gate.json") else None
+            gate = read_json(out + ".gate.json") if os.path.exists(out + ".gate.json") else None
             return code, gate
 
     def test_a_good_run_is_not_repeated(self):
@@ -56,6 +57,14 @@ class RunTest(unittest.TestCase):
         replay = Replay([document(filesystem="tmpfs")])
         self.assertEqual(self.go(replay)[0], 1)
         self.assertEqual(replay.calls, 1)
+
+    def test_the_reason_of_a_failed_gate_is_printed(self):
+        import contextlib
+        import io
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.go(Replay([document(filesystem="tmpfs")]))
+        self.assertIn("storage: fail:", buffer.getvalue())
 
     def test_a_failing_command_is_a_usage_level_error(self):
         self.assertEqual(self.go(Replay([document()], returncode=3))[0], 2)

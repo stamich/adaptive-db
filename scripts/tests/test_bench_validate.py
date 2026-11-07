@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_validate  # noqa: E402
 
 TIMING = {
@@ -61,11 +62,11 @@ class ValidateTest(unittest.TestCase):
     def test_command_line_exit_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             good, legacy, bad = (os.path.join(tmp, n) for n in ("good.json", "legacy.json", "bad.json"))
-            json.dump(good_document(), open(good, "w"))
-            json.dump({"milestone": "2.5.4"}, open(legacy, "w"))
+            write_json(good, good_document())
+            write_json(legacy, {"milestone": "2.5.4"})
             broken = good_document()
             del broken["plan"]
-            json.dump(broken, open(bad, "w"))
+            write_json(bad, broken)
             self.assertEqual(bench_validate.main([good, legacy]), 0)
             self.assertEqual(bench_validate.main([good, legacy, "--require-schema"]), 1)
             self.assertEqual(bench_validate.main([bad]), 1)

@@ -44,7 +44,8 @@ class CheckTest(unittest.TestCase):
                 for name in files:
                     if name.endswith(".scala"):
                         path = os.path.join(directory, name)
-                        text = open(path, encoding="utf-8").read()
+                        with open(path, encoding="utf-8") as handle:
+                            text = handle.read()
                         self.assertEqual(list(module.undocumented(text)), [], path)
 
 

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from util import read_json, read_text, write_json  # noqa: E402
 import bench_ab  # noqa: E402
 import bench_lib  # noqa: E402
 
@@ -84,9 +85,9 @@ class WorkspaceTest(unittest.TestCase):
             work = os.path.join(tmp, "work")
             os.makedirs(work)
             tree = bench_ab.build_baseline(repo, "base", work, run=lambda a, **k: subprocess.run(a, env=env, **k))
-            self.assertEqual(open(os.path.join(tree, "examples/rust-benchmark/old.rs")).read(), "new harness")
+            self.assertEqual(read_text(os.path.join(tree, "examples/rust-benchmark/old.rs")), "new harness")
             self.assertTrue(os.path.exists(os.path.join(tree, "crates/adb-bench/lib.rs")))
-            self.assertIn('"crates/adb-bench"', open(os.path.join(tree, "Cargo.toml")).read())
+            self.assertIn('"crates/adb-bench"', read_text(os.path.join(tree, "Cargo.toml")))
 
 
 if __name__ == "__main__":
