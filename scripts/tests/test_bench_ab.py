@@ -87,6 +87,13 @@ class WorkspaceTest(unittest.TestCase):
             tree = bench_ab.build_baseline(repo, "base", work, run=lambda a, **k: subprocess.run(a, env=env, **k))
             self.assertEqual(read_text(os.path.join(tree, "examples/rust-benchmark/old.rs")), "new harness")
             self.assertTrue(os.path.exists(os.path.join(tree, "crates/adb-bench/lib.rs")))
+            numbered = os.path.join(tmp, "work2")
+            os.makedirs(numbered)
+            subprocess.run(["git", "-C", repo, "tag", "v9.9"], check=True, env=env)
+            bench_ab.build_baseline(repo, "9.9", numbered, run=lambda a, **k: subprocess.run(a, env=env, **k))
+            with self.assertRaises(ValueError) as missing:
+                bench_ab.resolve_ref(repo, "8.8", run=lambda a, **k: subprocess.run(a, env=env, **k))
+            self.assertIn("git fetch --tags", str(missing.exception))
             self.assertIn('"crates/adb-bench"', read_text(os.path.join(tree, "Cargo.toml")))
 
 

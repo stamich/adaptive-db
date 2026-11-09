@@ -109,10 +109,24 @@ def compare(a_docs, b_docs, c_docs, limit=DEFAULT_LIMIT_PERCENT):
             "rounds": len(a_docs), "cases": cases, "problems": problems}, bench_lib.worst(statuses)
 
 
+def resolve_ref(repo: str, ref: str, run=subprocess.run) -> str:
+    """The commit of ``ref``, also accepting a release number without its ``v`` (``2.5.4`` for the
+    tag ``v2.5.4``). Raises ``ValueError`` with what to do when neither exists."""
+    for candidate in (ref, f"v{ref}"):
+        done = run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"],
+                   capture_output=True, text=True, check=False)
+        if done.returncode == 0:
+            return done.stdout.strip()
+    raise ValueError(
+        f"no commit or tag `{ref}` (nor `v{ref}`) in {repo}. Fetch tags with `git fetch --tags`, or create "
+        f"the baseline tag, e.g. `git tag v2.5.4 c42f358 && git push origin v2.5.4` (the merge of PR #117)")
+
+
 def build_baseline(repo: str, ref: str, workdir: str, run=subprocess.run) -> str:
     """Creates the worktree of ``ref`` in ``workdir`` and overlays the current harness; returns its path."""
     tree = os.path.join(workdir, "baseline")
-    run(["git", "-C", repo, "worktree", "add", "--detach", tree, ref], check=True)
+    commit = resolve_ref(repo, ref, run)
+    run(["git", "-C", repo, "worktree", "add", "--detach", tree, commit], check=True)
     for relative in OVERLAY:
         target = os.path.join(tree, relative)
         shutil.rmtree(target, ignore_errors=True)
