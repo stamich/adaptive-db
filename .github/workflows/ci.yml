@@ -79,7 +79,7 @@ jobs:
         run: ./gradlew --no-daemon clean test
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: jvm-test-reports
           path: jvm/**/build/reports/tests/
@@ -124,7 +124,7 @@ jobs:
         run: python3 scripts/check-benchmarks.py "$RUNNER_TEMP/2.5.4.1-database.json" "$RUNNER_TEMP/2.5.4.1-ffi.json"
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: ${{ runner.temp }}/2.5.4.1-*.json
