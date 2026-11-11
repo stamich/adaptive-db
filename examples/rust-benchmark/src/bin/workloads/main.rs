@@ -1,5 +1,11 @@
-//! Milestone 2.5.4 workload benchmark (workloads A–H of 2.4.0 plus I–O, the commit order, change
+//! Milestone 2.5.4.1 workload benchmark (workloads A–H of 2.4.0 plus I–O, the commit order, change
 //! log and projection runtime, in [`consistency`]).
+//!
+//! Since 2.5.4.1 the timed sections run on the `adb-bench` harness ([`harness`]): CPU-bound cases use
+//! the release plan, loads, commits and recovery the durable plan, and the report is schema 3 with
+//! every earlier key kept. `--iters` and `--warmup-ms` are accepted for old command lines; the plan
+//! decides how often a case runs. `--data-dir` (or `ADB_BENCH_DATA_DIR`) is where durable cases
+//! write, and `ADB_BENCH_QUICK=1` selects the quick plans.
 //!
 //! Two modes:
 //!
@@ -21,26 +27,26 @@
 
 mod consistency;
 mod dataset;
+mod durable;
+mod harness;
 mod schema;
 
-use std::{
-    env,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{env, path::PathBuf};
 
-use adb_core::{CommitTs, Direction, Row, RowId, Value};
-use adb_engine::{AnalyzeOptions, Database, IndexColumn, IndexSpec};
+use adb_bench::report::{plan_json, rate_per_second};
+use adb_bench::{measure, measure_with_setup, Report, SampleStats};
+use adb_core::{CommitTs, Row, RowId, Value};
+use adb_engine::{AnalyzeOptions, Database};
 use adb_execution::{
     AggregateFunction, AggregateSpec, BinaryOp, ColumnVector, Expr, JoinKey, JoinType,
     PhysicalPlan, ScanColumn, SlotId, SortKey,
 };
 use adb_index::{IndexBounds, ScanDirection, ValueBound};
+use harness::{case, durable_plan, heavy_plan, invocations, tempdir};
 use serde_json::json;
-use tempfile::tempdir;
 
 /// Result type of the benchmark (any error aborts it).
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Shorthand for a scan column mapping.
 fn col(field_id: u32, slot: u32) -> ScanColumn {
@@ -110,7 +116,7 @@ fn workload_b() -> PhysicalPlan {
 }
 
 /// Entity id of `ix_account`.
-fn ix_account() -> u64 {
+pub fn ix_account() -> u64 {
     dataset::by_name("ix_account").entity
 }
 
@@ -224,109 +230,103 @@ fn run(db: &Database, plan: &PhysicalPlan) -> Result<Run> {
     run_at(db, plan, None)
 }
 
-/// Rounds the samples of one measurement are split into for `round_medians` (their spread
-/// shows run-to-run stability, which one median hides).
-const ROUNDS: usize = 7;
-
-/// Summary statistics of millisecond samples: percentiles, mean, min, max, standard deviation
-/// and the medians of [`ROUNDS`] consecutive rounds.
-fn summary(samples: &[f64]) -> serde_json::Map<String, serde_json::Value> {
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let percentile = |p: f64| sorted[((sorted.len() - 1) as f64 * p).round() as usize];
-    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
-    let variance =
-        samples.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / samples.len().max(2) as f64;
-    let rounds: Vec<f64> = samples
-        .chunks(samples.len().div_ceil(ROUNDS))
-        .map(|round| {
-            let mut round = round.to_vec();
-            round.sort_by(f64::total_cmp);
-            round[round.len() / 2]
-        })
-        .collect();
-    let mut map = serde_json::Map::new();
-    for (key, value) in [
-        ("p50_ms", json!(percentile(0.5))),
-        ("p95_ms", json!(percentile(0.95))),
-        ("p99_ms", json!(percentile(0.99))),
-        ("mean_ms", json!(mean)),
-        ("min_ms", json!(sorted[0])),
-        ("max_ms", json!(sorted[sorted.len() - 1])),
-        ("stddev_ms", json!(variance.sqrt())),
-        ("round_medians_ms", json!(rounds)),
-    ] {
-        map.insert(key.into(), value);
-    }
-    map
-}
-
-/// Warms up for at least `warmup` (and 10 runs), then times `iters` executions at `snapshot`:
-/// the [`summary`] statistics, input rows per second at the median, rows, checksum and peak
-/// memory.
+/// Times `plan` at `snapshot` with the CPU-bound measurement plan and returns its case: the
+/// timing keys, input rows per second at the median, rows, checksum and peak memory.
 fn measure_at(
     db: &Database,
     plan: &PhysicalPlan,
     snapshot: Option<CommitTs>,
-    settings: (usize, Duration),
     input_rows: u64,
 ) -> Result<serde_json::Value> {
-    let (iters, warmup) = settings;
-    let start = Instant::now();
-    let mut warm = 0;
-    while warm < 10 || start.elapsed() < warmup {
-        run_at(db, plan, snapshot)?;
-        warm += 1;
-    }
-    let mut samples = Vec::with_capacity(iters);
-    let mut last = run_at(db, plan, snapshot)?;
-    for _ in 0..iters {
-        let start = Instant::now();
-        last = run_at(db, plan, snapshot)?;
-        samples.push(start.elapsed().as_secs_f64() * 1e3);
-    }
-    let mut report = summary(&samples);
-    let median = report["p50_ms"].as_f64().unwrap_or(f64::NAN);
-    for (key, value) in [
-        ("iterations", json!(iters)),
-        ("warmup_runs", json!(warm)),
-        ("input_rows", json!(input_rows)),
-        (
-            "input_rows_per_s",
-            json!(input_rows as f64 / (median / 1e3)),
-        ),
-        ("rows_out", json!(last.rows)),
-        ("checksum", json!(last.checksum)),
-        ("peak_memory_bytes", json!(last.peak_memory_bytes)),
-    ] {
-        report.insert(key.into(), value);
-    }
-    Ok(serde_json::Value::Object(report))
+    let measurement_plan = harness::cpu_plan();
+    let measured = measure(&measurement_plan, || {
+        run_at(db, plan, snapshot).expect("the workload executes")
+    });
+    let stats = SampleStats::from_measured(&measured);
+    let last = measured.last;
+    Ok(case(
+        &stats,
+        vec![
+            ("iterations", json!(invocations(&stats, &measurement_plan))),
+            ("warmup_runs", json!(measurement_plan.warmup_invocations)),
+            ("input_rows", json!(input_rows)),
+            (
+                "input_rows_per_s",
+                json!(rate_per_second(&stats, input_rows as f64)),
+            ),
+            ("rows_out", json!(last.rows)),
+            ("checksum", json!(last.checksum)),
+            ("peak_memory_bytes", json!(last.peak_memory_bytes)),
+        ],
+    ))
 }
 
 /// [`measure_at`] at the latest snapshot.
-fn measure(
+fn measure_latest(
     db: &Database,
     plan: &PhysicalPlan,
-    iters: usize,
-    warmup: Duration,
     input_rows: u64,
 ) -> Result<serde_json::Value> {
-    measure_at(db, plan, None, (iters, warmup), input_rows)
+    measure_at(db, plan, None, input_rows)
 }
 
-/// Builds every index of [`dataset::INDEXES`] over the loaded rows: build time, entries
-/// (counted by a full index scan, which must equal the table's rows) and the id of each.
+/// `ANALYZE` of every table, one case each (`rows`, `ms`, `exact` and timing), plus a `total`.
+/// `ANALYZE` can be repeated, so it is measured like any CPU-bound case.
+fn analyze_tables(
+    db: &Database,
+    loaded: u64,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let plan = harness::cpu_plan();
+    let mut report = serde_json::Map::new();
+    let mut total_ms = 0.0;
+    for table in &dataset::TABLES {
+        let measured = measure(&plan, || {
+            db.analyze(table.entity, &AnalyzeOptions::default())
+                .expect("analyze")
+        });
+        let stats = SampleStats::from_measured(&measured);
+        let ms = stats.median_ns / 1e6;
+        total_ms += ms;
+        report.insert(
+            table.name.into(),
+            case(
+                &stats,
+                vec![
+                    ("rows", json!(measured.last.row_count)),
+                    ("ms", json!(ms)),
+                    ("exact", json!(measured.last.exact)),
+                ],
+            ),
+        );
+    }
+    report.insert(
+        "total".into(),
+        json!({"rows": loaded, "ms": total_ms, "rows_per_s": loaded as f64 / (total_ms / 1e3)}),
+    );
+    Ok(report)
+}
+
+/// Builds every index of [`dataset::INDEXES`] over the loaded rows: build time (a case, measured
+/// with the plan's setup/run split: dropping the index beforehand is not timed), entries (counted by
+/// a full index scan, which must equal the table's rows) and the id of each. The last build stays.
 fn build_indexes(
     db: &Database,
     scale: u64,
 ) -> Result<(serde_json::Value, Vec<(&'static str, u64)>)> {
+    let plan = harness::cpu_plan();
     let mut report = serde_json::Map::new();
     let mut ids = Vec::new();
     for index in &dataset::INDEXES {
-        let start = Instant::now();
-        let definition = db.create_index(index.spec())?;
-        let ms = start.elapsed().as_secs_f64() * 1e3;
+        let measured = measure_with_setup(
+            &plan,
+            || {
+                let _ = db.drop_index(index.name);
+            },
+            |()| db.create_index(index.spec()).expect("index builds"),
+        );
+        let stats = SampleStats::from_measured(&measured);
+        let definition = measured.last;
+        let ms = stats.median_ns / 1e6;
         let full = PhysicalPlan::IndexScan {
             index_id: definition.id.0,
             bounds: IndexBounds::all(),
@@ -338,90 +338,25 @@ fn build_indexes(
         let rows = dataset::rows(index.table, scale);
         report.insert(
             index.name.into(),
-            json!({"sql": index.sql, "ms": ms, "entries": entries, "table_rows": rows,
-                   "rows_per_s": rows as f64 / (ms / 1e3)}),
+            case(
+                &stats,
+                vec![
+                    ("sql", json!(index.sql)),
+                    ("ms", json!(ms)),
+                    ("entries", json!(entries)),
+                    ("table_rows", json!(rows)),
+                    ("rows_per_s", json!(rate_per_second(&stats, rows as f64))),
+                ],
+            ),
         );
         ids.push((index.name, definition.id.0));
     }
     Ok((serde_json::Value::Object(report), ids))
 }
 
-/// Rows inserted per write-overhead measurement.
-const WRITE_ROWS: u64 = 20_000;
-/// Rows per commit in the write-overhead measurement.
-const WRITE_BATCH: u64 = 100;
-
-/// Inserts [`WRITE_ROWS`] `ix_account`-shaped rows (100 per commit) into fresh databases with
-/// 0, 1 and 3 indexes; reports rows per second and the overhead relative to no index.
-fn write_overhead() -> Result<serde_json::Value> {
-    let entity = ix_account();
-    let index = |name: &str, fields: &[u32], include: &[u32]| IndexSpec {
-        name: name.into(),
-        entity_id: entity,
-        columns: fields
-            .iter()
-            .map(|field| IndexColumn {
-                field_id: *field,
-                direction: Direction::Asc,
-            })
-            .collect(),
-        include: include.to_vec(),
-    };
-    let sets: [(&str, Vec<IndexSpec>); 3] = [
-        ("0_indexes", vec![]),
-        ("1_index", vec![index("w_balance", &[3], &[])]),
-        (
-            "3_indexes",
-            vec![
-                index("w_balance", &[3], &[]),
-                index("w_owner", &[4], &[3]),
-                index("w_region_balance", &[2, 3], &[]),
-            ],
-        ),
-    ];
-    let mut report = serde_json::Map::new();
-    let mut baseline = None;
-    for (name, specs) in sets {
-        let dir = tempdir()?;
-        let db = Database::open(dir.path())?;
-        for spec in specs {
-            db.create_index(spec)?;
-        }
-        let table = dataset::by_name("ix_account");
-        let start = Instant::now();
-        let mut first = 1;
-        while first <= WRITE_ROWS {
-            let mut tx = db.begin();
-            for id in first..first + WRITE_BATCH {
-                tx.put(
-                    RowId::from_primary_key(entity, id as i64),
-                    dataset::row(table, id, 1),
-                );
-            }
-            db.commit(tx)?;
-            first += WRITE_BATCH;
-        }
-        let seconds = start.elapsed().as_secs_f64();
-        let rate = WRITE_ROWS as f64 / seconds;
-        let base = *baseline.get_or_insert(rate);
-        report.insert(
-            name.into(),
-            json!({"rows": WRITE_ROWS, "rows_per_commit": WRITE_BATCH, "seconds": seconds,
-                   "rows_per_s": rate, "slowdown_vs_no_index": base / rate}),
-        );
-        db.close()?;
-    }
-    Ok(serde_json::Value::Object(report))
-}
-
 /// Workload D at the latest snapshot and at the snapshot before 1% of the balances changed
 /// (`AS OF`): the index serves both, older entries are kept until `VACUUM`.
-fn as_of_read(
-    db: &Database,
-    balance_index: u64,
-    scale: u64,
-    settings: (usize, Duration),
-) -> Result<serde_json::Value> {
+fn as_of_read(db: &Database, balance_index: u64, scale: u64) -> Result<serde_json::Value> {
     let before = db.latest_committed_ts();
     let table = dataset::by_name("ix_account");
     let rows = table.rows(scale);
@@ -435,42 +370,45 @@ fn as_of_read(
     let plan = workload_d(balance_index);
     Ok(json!({
         "changed_rows": rows.div_ceil(100),
-        "latest": measure_at(db, &plan, None, settings, 100)?,
-        "as_of_before_change": measure_at(db, &plan, Some(before), settings, 100)?,
+        "latest": measure_at(db, &plan, None, 100)?,
+        "as_of_before_change": measure_at(db, &plan, Some(before), 100)?,
     }))
 }
 
 /// Command-line options.
 struct Args {
-    /// Timed executions per workload.
-    iters: usize,
     /// Scale factor of the dataset.
     scale: u64,
-    /// Minimum warm-up time per workload.
-    warmup: Duration,
     /// Report path (measure mode).
     output: Option<PathBuf>,
     /// Directory to prepare (prepare mode).
     prepare: Option<PathBuf>,
+    /// Directory the durable cases write to.
+    data_dir: Option<PathBuf>,
 }
 
-/// Parses `--iters N`, `--scale N`, `--warmup-ms N`, `--output PATH` and `--prepare DIR`.
+/// Parses `--scale N`, `--output PATH`, `--prepare DIR` and `--data-dir DIR`. `--iters N` and
+/// `--warmup-ms N` are validated and ignored: the measurement plan decides.
 fn parse_args() -> Result<Args> {
     let mut args = Args {
-        iters: 100,
         scale: 1,
-        warmup: Duration::from_millis(200),
         output: None,
         prepare: None,
+        data_dir: None,
     };
     let raw: Vec<String> = env::args().skip(1).collect();
     for pair in raw.chunks(2) {
         match (pair[0].as_str(), pair.get(1)) {
-            ("--iters", Some(value)) => args.iters = value.parse::<usize>()?.max(1),
+            ("--iters", Some(value)) => {
+                value.parse::<usize>()?;
+            }
+            ("--warmup-ms", Some(value)) => {
+                value.parse::<u64>()?;
+            }
             ("--scale", Some(value)) => args.scale = value.parse::<u64>()?.clamp(1, 1_000),
-            ("--warmup-ms", Some(value)) => args.warmup = Duration::from_millis(value.parse()?),
             ("--output", Some(value)) => args.output = Some(PathBuf::from(value)),
             ("--prepare", Some(value)) => args.prepare = Some(PathBuf::from(value)),
+            ("--data-dir", Some(value)) => args.data_dir = Some(PathBuf::from(value)),
             (other, _) => return Err(format!("unknown or incomplete argument {other}").into()),
         }
     }
@@ -510,32 +448,50 @@ fn prepare(dir: &PathBuf, scale: u64) -> Result<()> {
 /// Loads, analyzes, measures and reports (or prepares a directory).
 fn main() -> Result<()> {
     let args = parse_args()?;
+    let context = harness::init(args.data_dir.clone());
     if let Some(dir) = &args.prepare {
         return prepare(dir, args.scale);
     }
-    let dir = tempdir()?;
-    let db = Database::open(dir.path())?;
-    let (loaded, load_seconds) = dataset::load(&db, args.scale)?;
+    let cpu = harness::cpu_plan();
+    let mut document = Report::new("workloads", "2.5.4.1", &cpu, &context.environment);
+    document.set("plan_durable", plan_json(&durable_plan()));
+    document.set("plan_heavy", plan_json(&heavy_plan()));
+    document.set("storage", context.storage().to_json());
+    let probe_dir = tempdir()?;
+    let probe_before = context.probe(probe_dir.path());
 
-    let mut analyze = serde_json::Map::new();
-    let start = Instant::now();
-    for table in &dataset::TABLES {
-        let one = Instant::now();
-        let statistics = db.analyze(table.entity, &AnalyzeOptions::default())?;
-        analyze.insert(
-            table.name.into(),
-            json!({
-                "rows": statistics.row_count,
-                "ms": one.elapsed().as_secs_f64() * 1e3,
-                "exact": statistics.exact,
-            }),
-        );
-    }
-    let analyze_seconds = start.elapsed().as_secs_f64();
-    analyze.insert(
-        "total".into(),
-        json!({"rows": loaded, "ms": analyze_seconds * 1e3, "rows_per_s": loaded as f64 / analyze_seconds}),
+    // Loading is durable work: measured with the durable plan, a fresh database each time
+    // (creating it is not timed). The last loaded database serves every later section.
+    eprintln!("workloads: loading the dataset");
+    let load = measure_with_setup(
+        &heavy_plan(),
+        || {
+            let dir = tempdir().expect("data directory");
+            let db = Database::open(dir.path()).expect("open");
+            (dir, db)
+        },
+        |(dir, db)| {
+            let (rows, _) = dataset::load(&db, args.scale).expect("load");
+            (dir, db, rows)
+        },
     );
+    let load_stats = SampleStats::from_measured(&load);
+    let (_dir, db, loaded) = load.last;
+    let load_seconds = load_stats.median_ns / 1e9;
+    let load_case = case(
+        &load_stats,
+        vec![
+            ("rows", json!(loaded)),
+            ("seconds", json!(load_seconds)),
+            (
+                "rows_per_s",
+                json!(rate_per_second(&load_stats, loaded as f64)),
+            ),
+        ],
+    );
+
+    eprintln!("workloads: ANALYZE");
+    let mut analyze = analyze_tables(&db, loaded)?;
     // HyperLogLog check: sk_events ids are unique, so the distinct count should equal the rows.
     let events = dataset::by_name("sk_events");
     let ids = db
@@ -546,6 +502,7 @@ fn main() -> Result<()> {
         json!({"estimated": ids, "actual": events.rows(args.scale)}),
     );
 
+    eprintln!("workloads: index builds");
     let (index_build, index_ids) = build_indexes(&db, args.scale)?;
     let index_id = |name: &str| {
         index_ids
@@ -558,44 +515,73 @@ fn main() -> Result<()> {
     let accounts = dataset::rows("ix_account", args.scale);
     let join_rows =
         dataset::rows("bench_customer", args.scale) + dataset::rows("bench_orders", args.scale);
-    let settings = (args.iters, args.warmup);
+    eprintln!("workloads: A-E");
     let workloads = json!({
-        "A_hash_join_topk": measure(&db, &workload_a(), args.iters, args.warmup, join_rows)?,
-        "B_hash_join_aggregate_topk": measure(&db, &workload_b(), args.iters, args.warmup, join_rows)?,
-        "C_covering_index_eq": measure(&db, &workload_c(owner_index), args.iters, args.warmup, accounts / dataset::OWNERS)?,
-        "D_index_range_order_limit": measure(&db, &workload_d(balance_index), args.iters, args.warmup, 100)?,
-        "E_seq_scan_region_eq": measure(&db, &workload_e(), args.iters, args.warmup, accounts)?,
+        "A_hash_join_topk": measure_latest(&db, &workload_a(), join_rows)?,
+        "B_hash_join_aggregate_topk": measure_latest(&db, &workload_b(), join_rows)?,
+        "C_covering_index_eq": measure_latest(&db, &workload_c(owner_index), accounts / dataset::OWNERS)?,
+        "D_index_range_order_limit": measure_latest(&db, &workload_d(balance_index), 100)?,
+        "E_seq_scan_region_eq": measure_latest(&db, &workload_e(), accounts)?,
     });
     // Changes balances: runs after every other measurement of ix_account.
-    let as_of = as_of_read(&db, balance_index, args.scale, settings)?;
-    let report = json!({
-        "milestone": "2.5.4",
-        "path": "rust_native",
-        "host": {
+    eprintln!("workloads: AS OF index read");
+    let as_of = as_of_read(&db, balance_index, args.scale)?;
+    let write_overhead = durable::write_overhead()?;
+    eprintln!("workloads: schema evolution F-H");
+    let schema_evolution = schema::report(args.scale)?;
+    eprintln!("workloads: consistency I-O");
+    let consistency = consistency::report(args.scale)?;
+
+    let probe_after = context.probe(probe_dir.path());
+    if let (Some(before), Some(after)) = (&probe_before, &probe_after) {
+        document.set(
+            "durable_write",
+            durable::summary(before, after, &write_overhead, &consistency),
+        );
+    }
+
+    document.set("path", json!("rust_native"));
+    document.set(
+        "host",
+        json!({
             "os": env::consts::OS,
             "arch": env::consts::ARCH,
             "cpu": cpu_model(),
             "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
             "build": if cfg!(debug_assertions) { "debug" } else { "release" },
-        },
-        "setup": {
+        }),
+    );
+    document.set(
+        "setup",
+        json!({
             "scale": args.scale,
             "bench_customer": dataset::rows("bench_customer", args.scale),
             "bench_orders": dataset::rows("bench_orders", args.scale),
             "ix_account": accounts,
-            "iterations": args.iters,
-            "warmup_ms": args.warmup.as_millis() as u64,
-        },
-        "load": {"rows": loaded, "seconds": load_seconds, "rows_per_s": loaded as f64 / load_seconds},
-        "analyze": analyze,
-        "index_build": index_build,
-        "workloads": workloads,
-        "as_of_index_read": as_of,
-        "write_overhead": write_overhead()?,
-        "schema_evolution": schema::report(args.scale, args.iters, args.warmup)?,
-        "consistency": consistency::report(args.scale, args.iters.min(200))?,
-    });
-    let text = serde_json::to_string_pretty(&report)?;
+            "iterations": cpu.total_samples(),
+            "warmup_ms": cpu.min_sample.as_millis() as u64,
+        }),
+    );
+    document.set("load", load_case);
+    document.set("analyze", json!(analyze));
+    document.set("index_build", index_build);
+    document.set("workloads", workloads);
+    document.set("as_of_index_read", as_of);
+    document.set("write_overhead", write_overhead);
+    document.set("schema_evolution", schema_evolution);
+    document.set("consistency", consistency);
+    if let (Some(before), Some(after)) = (&probe_before, &probe_after) {
+        document.set(
+            "fsync_probe",
+            json!({"before": before.to_json(), "after": after.to_json(), "drift_percent": before.drift_percent(after)}),
+        );
+    }
+    let document = document.finish();
+    let problems = adb_bench::report::validate(&document);
+    if !problems.is_empty() {
+        return Err(format!("the report breaks its own schema: {problems:?}").into());
+    }
+    let text = serde_json::to_string_pretty(&document)?;
     println!("{text}");
     if let Some(path) = args.output {
         std::fs::write(path, text + "\n")?;

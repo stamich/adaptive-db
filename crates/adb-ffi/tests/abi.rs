@@ -28,5 +28,5 @@ fn abi_is_v9_and_status_codes_are_stable() {
     let mut len = 0;
     let ptr = adb_engine_version(&mut len);
     let version = unsafe { std::slice::from_raw_parts(ptr, len) };
-    assert_eq!(version, b"2.5.4");
+    assert_eq!(version, b"2.5.4.1");
 }

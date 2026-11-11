@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Milestone 2.5.4 validation.
+# Milestone 2.5.4.1 validation.
 #
 # Rust (cargo) and the Java FFM smoke test need only cargo + JDK 22. The Scala/JVM part uses the
 # Gradle wrapper in jvm/ (or a Gradle 9 on PATH) and needs access to Maven Central; it is skipped
@@ -18,12 +18,24 @@ cargo clippy --workspace --all-targets -- -D warnings -W missing_docs -W clippy:
 cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+export ADB_BENCH_DATA_DIR="${ADB_BENCH_DATA_DIR:-$PWD/target/bench-data}"  # not /tmp: a RAM disk fails the storage gate
+mkdir -p "$ADB_BENCH_DATA_DIR"
 echo "== Rust: release build, relational demo, migration tool, data-plane benchmark, workload benchmark (rust_native)"
-cargo build --release -p adb-ffi -p adb-migrate
+cargo build --release -p adb-ffi -p adb-migrate -p adb-benchmark-rust
 cargo run --release -p adb-rust-demo
-cargo run --release -p adb-benchmark-rust -- --rows 5000 --iters 1000 --groups 100 \
-  --nested-rows 1000 --relational-iters 5 --output examples/results/2.5.4-rust-local.json
-./scripts/benchmark-db.sh
+# Benchmark gates: exit 3 (unstable) and 4 (diagnostic, e.g. the governor is not `performance`) say how
+# far the numbers can be trusted; they are not build failures. Only 1 (fail) and 2 (tool error) are.
+bench() { "$@" || { code=$?; if [[ $code -eq 3 || $code -eq 4 ]]; then echo "note: gate status $code (see docs/BENCHMARKS.md)"; else exit "$code"; fi; }; }
+echo "== Benchmark tools: unit tests and the report validator on the committed reports"
+python3 -m unittest discover -s scripts/tests
+# gate verdicts are not reports; remove those an older bench_run.py wrote as *.gate.json
+rm -f examples/results/*.gate.json examples/results/*/*.gate.json
+python3 scripts/bench_validate.py examples/results/*.json
+bench python3 scripts/bench_run.py --out examples/results/2.5.4.1-rust-local.json \
+  --cmd "target/release/adb-benchmark-rust --output {out}"
+bench ./scripts/benchmark-db.sh
+bench ./scripts/benchmark.sh memory --out examples/results/2.5.4.1
+bench ./scripts/benchmark.sh scaling --out examples/results/2.5.4.1
 
 echo "== Java FFM -> C ABI v9 -> engine smoke test (incl. ANALYZE, statistics, indexes, schemas, commit order, change-log cursors and projections)"
 ./examples/jvm-cdc-smoke/run.sh
@@ -47,12 +59,14 @@ if [[ -x jvm/gradlew ]]; then GRADLE=(./gradlew); elif command -v gradle >/dev/n
 if (( ${#GRADLE[@]} )); then
   echo "== Scala/JVM tests, planner benchmark, workload benchmark (FFI paths) and demo"
   (cd jvm && "${GRADLE[@]}" clean test)
-  (cd jvm && "${GRADLE[@]}" :adb-benchmark:run --args='--iterations 1000')
-  ./scripts/benchmark-ffi.sh
-  python3 scripts/check-benchmarks.py examples/results/2.5.4-database.json examples/results/2.5.4-ffi.json
+  for family in sql-path telemetry actuator ffi; do
+    bench ./scripts/benchmark.sh "$family" --out examples/results/2.5.4.1
+  done
+  bench ./scripts/benchmark-ffi.sh
+  python3 scripts/check-benchmarks.py examples/results/2.5.4.1-database.json examples/results/2.5.4.1-ffi.json
   ./demo/run-demo.sh
 else
   echo "== SKIPPED Scala/JVM tests, FFI benchmark and demo: neither jvm/gradlew nor gradle found"
 fi
 
-echo "Milestone 2.5.4 validation completed."
+echo "Milestone 2.5.4.1 validation completed."

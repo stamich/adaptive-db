@@ -1,51 +1,35 @@
 #!/usr/bin/env bash
-# Milestone 2.5.4 workload benchmark, JVM paths: the Rust binary prepares the dataset (the only
-# definition of the data), then the JVM creates the indexes through SQL and measures
-# planning_only, ffi_prepared_plan and scala_cbo_ffi_rust for workloads A-E, the selectivity sweep
-# (index versus sequential plan and the cost-mode choice), join order (chain and star) in cost and
-# rule mode, estimation quality (skew, correlation, stale statistics), planning time for 2-12
-# relations and the cost calibration.
+# Milestone 2.5.4.1 workload benchmark, JVM paths: the Rust binary prepares the dataset (the only
+# definition of the data), then one JVM creates the indexes through SQL and measures
+# planning_only, ffi_prepared_plan and scala_cbo_ffi_rust for workloads A-E, the selectivity sweep,
+# join order, estimation quality, planning time for 2-12 relations and the cost calibration.
+# It is the `workloads` JVM run of scripts/bench-jvm-family.sh; the report is gated and measured
+# again while unstable.
 #
 # Environment:
-#   ADB_BENCH_SCALE       scale factor (default 1)
-#   ADB_BENCH_ITERATIONS  timed iterations per path (default 100)
-#   ADB_BENCH_WARMUP_MS   minimum warm-up per timed path, for the JIT (default 2000)
-#   ADB_BENCH_OUT         report (default examples/results/2.5.4-ffi[-sfN].json)
-#   ADB_BENCH_DATA        working directory, must not exist (default: a fresh temporary directory)
-#   ADB_NATIVE_LIBRARY    native library (default: the release build of adb-ffi)
+#   ADB_BENCH_SCALE     scale factor (default 1)
+#   ADB_BENCH_OUT       report (default examples/results/2.5.4.1-ffi[-sfN].json)
+#   ADB_NATIVE_LIBRARY  native library (default: the release build of adb-ffi)
+#   ADB_BENCH_RETRIES   re-runs while unstable (default 1)
+#   ADB_BENCH_QUICK     1 selects the quick plans (a smoke run, not release grade)
+# `ADB_BENCH_ITERATIONS`, `ADB_BENCH_WARMUP_MS` and `ADB_BENCH_DATA` are ignored: the measurement
+# plan decides and every run gets a fresh data directory (docs/BENCHMARKS.md).
 #
-# Before you run it on Linux: set the CPU governor to performance
-# (`sudo cpupower frequency-set -g performance`). With the default governor the write and commit
-# rates measured on the reference machine were 2 to 8 times lower for identical code
-# (examples/results/README.md). The script warns when the governor is not `performance`.
+# Set the CPU governor to performance first (`sudo cpupower frequency-set -g performance`); the
+# gate reports `diagnostic` (exit 4) otherwise.
 set -euo pipefail
-
-# Warn (never fail) when the CPU governor would distort the write and commit rates.
-GOV_FILE=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-if [ -r "$GOV_FILE" ] && [ "$(cat "$GOV_FILE")" != "performance" ]; then
-  echo "WARNING: CPU governor is '$(cat "$GOV_FILE")', not 'performance'; write and commit rates will be" \
-       "too low. Run: sudo cpupower frequency-set -g performance" >&2
-fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Durable benchmarks must not run on a RAM disk (/tmp is one on many systems): the storage gate fails
+# them. Default to a directory under the repository, i.e. on the disk the repository lives on.
+export ADB_BENCH_DATA_DIR="${ADB_BENCH_DATA_DIR:-$ROOT/target/bench-data}"
+mkdir -p "$ADB_BENCH_DATA_DIR"
 SCALE="${ADB_BENCH_SCALE:-1}"
-ITERATIONS="${ADB_BENCH_ITERATIONS:-100}"
-WARMUP_MS="${ADB_BENCH_WARMUP_MS:-2000}"
 SUFFIX=""; [[ "$SCALE" == "1" ]] || SUFFIX="-sf$SCALE"
-OUT="${ADB_BENCH_OUT:-$ROOT/examples/results/2.5.4-ffi$SUFFIX.json}"
-DATA="${ADB_BENCH_DATA:-$(mktemp -d)/adb-bench}"
-case "$(uname -s)" in
-  Linux)  DEFAULT_LIB="$ROOT/target/release/libadb_ffi.so" ;;
-  Darwin) DEFAULT_LIB="$ROOT/target/release/libadb_ffi.dylib" ;;
-  *) echo "ERROR: unsupported OS" >&2; exit 1 ;;
-esac
-LIB="${ADB_NATIVE_LIBRARY:-$DEFAULT_LIB}"
-
-if [[ -x "$ROOT/jvm/gradlew" ]]; then GRADLE=(./gradlew); elif command -v gradle >/dev/null; then GRADLE=(gradle); else
-  echo "ERROR: jvm/gradlew or gradle is required" >&2; exit 1
-fi
-
-(cd "$ROOT" && cargo build --release -p adb-ffi)
-(cd "$ROOT" && cargo run --release -p adb-benchmark-rust --bin workloads -- --prepare "$DATA/rust" --scale "$SCALE")
-(cd "$ROOT/jvm" && "${GRADLE[@]}" -q :adb-benchmark:run \
-  --args="--workloads --scale $SCALE --iterations $ITERATIONS --warmup-ms $WARMUP_MS --data $DATA --native-lib $LIB --out $OUT")
+OUT="${ADB_BENCH_OUT:-$ROOT/examples/results/2.5.4.1-ffi$SUFFIX.json}"
+cd "$ROOT"
+cargo build --release -q -p adb-ffi -p adb-benchmark-rust
+status=0
+python3 scripts/bench_run.py --retries "${ADB_BENCH_RETRIES:-1}" --out "$OUT" \
+  --cmd "$ROOT/scripts/bench-jvm-family.sh workloads {out} $SCALE" || status=$?
 echo "JVM/FFI results: $OUT"
+exit "$status"

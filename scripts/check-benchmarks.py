@@ -32,6 +32,10 @@ import json
 import sys
 
 
+import bench_gate  # noqa: E402
+import bench_lib  # noqa: E402
+
+
 def check_consistency(native: dict, check) -> None:
     """Checks the 2.5.0 consistency section of the native report with `check(ok, message)`."""
     section = native.get("consistency")
@@ -212,6 +216,15 @@ def main(database_path: str, ffi_path: str) -> int:
     check(estimation["stale_statistics"].get("stale_warning") is True, "stale statistics were not reported")
     check((estimation["after_analyze"].get("q_error") or 99) <= 1.5, "ANALYZE did not repair the stale estimate")
     check((estimation["zipf_most_common"].get("q_error") or 99) <= 1.5, "most common value badly estimated")
+
+    # Since 2.5.4.1 the reports also pass the machine and measurement gates. Only a `fail` gate (a broken
+    # schema, a RAM disk under a durable family) fails the check; `unstable` and `diagnostic` are
+    # reported but never fail it, because timings do not gate CI.
+    for label, document in (("database", native), ("ffi", ffi)):
+        verdict = bench_gate.evaluate(document)
+        check(verdict["status"] != bench_lib.FAIL, f"{label} report gate failed: {verdict['gates']}")
+        if verdict["status"] in (bench_lib.UNSTABLE, bench_lib.DIAGNOSTIC):
+            print(f"note: {label} report is {verdict['status']} (informational)")
 
     for failure in failures:
         print(f"FAIL {failure}")

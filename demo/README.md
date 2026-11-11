@@ -1,6 +1,6 @@
-# Adaptive DB 2.5.4 Demo
+# Adaptive DB 2.5.4.1 Demo
 
-This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.5.4**.
+This demo is a chronological feature tour of the engine lineage from **1.0.1** through **2.5.4**. Milestone 2.5.4.1 changes no engine behaviour, so it adds no phase.
 It runs one current binary and labels each phase with the milestone where the demonstrated capability first became part of the project.
 
 ## Run

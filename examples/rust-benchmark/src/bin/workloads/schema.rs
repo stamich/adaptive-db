@@ -17,18 +17,17 @@
 //! * **write_validation** — insert throughput into a table with a schema (stamping, defaults,
 //!   type checks) against one without.
 
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Instant};
 
+use crate::harness::tempdir;
 use adb_core::{Row, RowId, SchemaEpoch, Value, ValueType};
 use adb_engine::{Database, EntitySpec, NewField, SchemaChange};
 use adb_execution::{AggregateFunction, AggregateSpec, BinaryOp, Expr, PhysicalPlan, SlotId};
 use serde_json::json;
-use tempfile::tempdir;
 
-use crate::{col, measure, Result};
+use crate::harness::{case, cpu_plan, invocations};
+use crate::{col, measure_latest, Result};
+use adb_bench::SampleStats;
 
 /// Rows of each `sc_account` table at scale factor 1.
 const BASE_ROWS: u64 = 50_000;
@@ -174,45 +173,43 @@ fn currency_of(db: &Database, plan: &PhysicalPlan) -> Result<String> {
     })
 }
 
-/// Times `iters` stale and accepted `execute_planned` calls of a point lookup (workload H).
-fn stale_epoch(
-    db: &Database,
-    entity: u64,
-    settings: (usize, Duration),
-) -> Result<serde_json::Value> {
-    let (iters, warmup) = settings;
+/// Times stale and accepted `execute_planned` calls of a point lookup (workload H), with the
+/// CPU-bound plan. A stale plan is refused before it reads anything.
+fn stale_epoch(db: &Database, entity: u64) -> Result<serde_json::Value> {
     let plan = point_read(entity, 1);
     let current = db.schema_epoch();
     let stale = SchemaEpoch(current.0 - 1);
-    let time = |epoch: SchemaEpoch| -> Result<(Vec<f64>, usize)> {
-        let start = Instant::now();
-        while start.elapsed() < warmup {
-            let _ = db.execute_planned(plan.clone(), epoch, None);
-        }
-        let (mut samples, mut refused) = (Vec::with_capacity(iters), 0);
-        for _ in 0..iters {
-            let start = Instant::now();
+    let measurement_plan = cpu_plan();
+    let time = |epoch: SchemaEpoch| -> serde_json::Value {
+        let measured = adb_bench::measure(&measurement_plan, || {
             match db.execute_planned(plan.clone(), epoch, None) {
-                Ok(mut cursor) => while cursor.next_batch()?.is_some() {},
-                Err(_) => refused += 1,
+                Ok(mut cursor) => {
+                    while cursor.next_batch().expect("batch").is_some() {}
+                    0u64
+                }
+                Err(_) => 1,
             }
-            samples.push(start.elapsed().as_secs_f64() * 1e3);
-        }
-        Ok((samples, refused))
+        });
+        let stats = SampleStats::from_measured(&measured);
+        let iterations = invocations(&stats, &measurement_plan);
+        // Refusals are counted in a separate, untimed pass of as many calls as were timed, so
+        // `refused == iterations` means every stale call was refused (and `0` that none was).
+        let refused = (0..iterations)
+            .filter(|_| db.execute_planned(plan.clone(), epoch, None).is_err())
+            .count();
+        case(
+            &stats,
+            vec![
+                ("iterations", json!(iterations)),
+                ("refused", json!(refused)),
+            ],
+        )
     };
-    let (stale_samples, stale_refused) = time(stale)?;
-    let (fresh_samples, fresh_refused) = time(current)?;
-    let mut rejected = crate::summary(&stale_samples);
-    rejected.insert("iterations".into(), json!(iters));
-    rejected.insert("refused".into(), json!(stale_refused));
-    let mut accepted = crate::summary(&fresh_samples);
-    accepted.insert("iterations".into(), json!(iters));
-    accepted.insert("refused".into(), json!(fresh_refused));
     Ok(json!({
         "plan_epoch": stale.0,
         "catalog_epoch": current.0,
-        "rejected": rejected,
-        "accepted_same_plan": accepted,
+        "rejected": time(stale),
+        "accepted_same_plan": time(current),
     }))
 }
 
@@ -255,7 +252,7 @@ fn write_validation() -> Result<serde_json::Value> {
 }
 
 /// Loads the `sc_account` tables at scale factor `scale` and measures every 2.4.0 workload.
-pub fn report(scale: u64, iters: usize, warmup: Duration) -> Result<serde_json::Value> {
+pub fn report(scale: u64) -> Result<serde_json::Value> {
     let dir = tempdir()?;
     let db = Database::open(dir.path())?;
     let rows = BASE_ROWS * scale;
@@ -295,21 +292,21 @@ pub fn report(scale: u64, iters: usize, warmup: Duration) -> Result<serde_json::
     for (entity, mix, _) in MIXES {
         scans.insert(
             format!("{mix}_percent_migrated"),
-            measure(&db, &adapted_scan(entity), iters, warmup, rows)?,
+            measure_latest(&db, &adapted_scan(entity), rows)?,
         );
     }
     scans.insert(
         "unversioned_control".into(),
-        measure(&db, &adapted_scan(PLAIN), iters, warmup, rows)?,
+        measure_latest(&db, &adapted_scan(PLAIN), rows)?,
     );
     let (old, migrated) = (point_read(MIXES[0].0, 1), point_read(MIXES[2].0, 1));
     let point = json!({
-        "old_row": measure(&db, &old, iters, warmup, 1)?,
+        "old_row": measure_latest(&db, &old, 1)?,
         "old_row_currency": currency_of(&db, &old)?,
-        "migrated_row": measure(&db, &migrated, iters, warmup, 1)?,
+        "migrated_row": measure_latest(&db, &migrated, 1)?,
         "migrated_row_currency": currency_of(&db, &migrated)?,
     });
-    let stale = stale_epoch(&db, MIXES[0].0, (iters, warmup))?;
+    let stale = stale_epoch(&db, MIXES[0].0)?;
     let checks = json!({
         "schema_versions": MIXES.iter().map(|(entity, _, _)| db.schema(*entity).map(|s| s.version.0)).collect::<Vec<_>>(),
     });

@@ -3,9 +3,18 @@
 version = 4
 
 [[package]]
+name = "adb-bench"
+version = "2.5.4"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "adb-benchmark-rust"
 version = "2.5.4"
 dependencies = [
+ "adb-bench",
  "adb-change-log",
  "adb-core",
  "adb-engine",
